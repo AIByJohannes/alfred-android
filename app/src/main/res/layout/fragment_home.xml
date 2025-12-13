@@ -6,6 +6,19 @@
     android:layout_height="match_parent"
     tools:context=".ui.home.HomeFragment">
 
+    <!-- AI Orb Background -->
+    <ImageView
+        android:id="@+id/ai_orb_background"
+        android:layout_width="300dp"
+        android:layout_height="300dp"
+        android:src="@drawable/ic_blue_orb"
+        android:alpha="0.3"
+        android:contentDescription="@null"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
     <!-- API Key Warning Banner -->
     <com.google.android.material.card.MaterialCardView
         android:id="@+id/api_key_warning"

@@ -1,5 +1,8 @@
 package com.aibyjohannes.alfred.ui.home
 
+import android.animation.ObjectAnimator
+import android.animation.PropertyValuesHolder
+import android.view.animation.AccelerateDecelerateInterpolator
 import android.app.AlertDialog
 import android.os.Bundle
 import android.view.LayoutInflater
@@ -43,6 +46,7 @@ class HomeFragment : Fragment() {
         setupInputHandling()
         setupObservers()
         setupMenu()
+        setupBackgroundAnimation()
 
         // Initialize ViewModel with dependencies
         val apiKeyStore = ApiKeyStore(requireContext())
@@ -50,6 +54,20 @@ class HomeFragment : Fragment() {
         homeViewModel.initialize(apiKeyStore, repository)
 
         return root
+    }
+
+    private fun setupBackgroundAnimation() {
+        val scaleX = PropertyValuesHolder.ofFloat(View.SCALE_X, 1.0f, 1.2f)
+        val scaleY = PropertyValuesHolder.ofFloat(View.SCALE_Y, 1.0f, 1.2f)
+        val alpha = PropertyValuesHolder.ofFloat(View.ALPHA, 0.3f, 0.5f)
+
+        ObjectAnimator.ofPropertyValuesHolder(binding.aiOrbBackground, scaleX, scaleY, alpha).apply {
+            duration = 3000
+            repeatCount = ObjectAnimator.INFINITE
+            repeatMode = ObjectAnimator.REVERSE
+            interpolator = AccelerateDecelerateInterpolator()
+            start()
+        }
     }
 
     private fun setupMenu() {
