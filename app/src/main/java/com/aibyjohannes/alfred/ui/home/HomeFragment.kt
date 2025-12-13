@@ -1,14 +1,22 @@
 package com.aibyjohannes.alfred.ui.home
 
+import android.app.AlertDialog
 import android.os.Bundle
 import android.view.LayoutInflater
+import android.view.Menu
+import android.view.MenuInflater
+import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
+import androidx.core.view.MenuHost
+import androidx.core.view.MenuProvider
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.aibyjohannes.alfred.R
 import com.aibyjohannes.alfred.data.ApiKeyStore
 import com.aibyjohannes.alfred.data.ChatRepository
 import com.aibyjohannes.alfred.databinding.FragmentHomeBinding
@@ -34,6 +42,7 @@ class HomeFragment : Fragment() {
         setupRecyclerView()
         setupInputHandling()
         setupObservers()
+        setupMenu()
 
         // Initialize ViewModel with dependencies
         val apiKeyStore = ApiKeyStore(requireContext())
@@ -41,6 +50,36 @@ class HomeFragment : Fragment() {
         homeViewModel.initialize(apiKeyStore, repository)
 
         return root
+    }
+
+    private fun setupMenu() {
+        val menuHost: MenuHost = requireActivity()
+        menuHost.addMenuProvider(object : MenuProvider {
+            override fun onCreateMenu(menu: Menu, menuInflater: MenuInflater) {
+                menuInflater.inflate(R.menu.home_menu, menu)
+            }
+
+            override fun onMenuItemSelected(menuItem: MenuItem): Boolean {
+                return when (menuItem.itemId) {
+                    R.id.action_clear_chat -> {
+                        showClearChatConfirmation()
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }, viewLifecycleOwner, Lifecycle.State.RESUMED)
+    }
+
+    private fun showClearChatConfirmation() {
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.clear_chat)
+            .setMessage(R.string.clear_chat_confirmation)
+            .setPositiveButton(R.string.clear) { _, _ ->
+                homeViewModel.clearChat()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     private fun setupRecyclerView() {

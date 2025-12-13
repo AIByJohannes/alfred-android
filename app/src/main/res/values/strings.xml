@@ -17,6 +17,9 @@
     <string name="send">Send</string>
     <string name="api_key_warning">API key not configured. Go to Settings to add your OpenRouter API key.</string>
     <string name="clear_chat">Clear Chat</string>
+    <string name="clear_chat_confirmation">Are you sure you want to clear the conversation history?</string>
+    <string name="clear">Clear</string>
+    <string name="cancel">Cancel</string>
 
     <!-- Settings -->
     <string name="settings_title">Settings</string>
