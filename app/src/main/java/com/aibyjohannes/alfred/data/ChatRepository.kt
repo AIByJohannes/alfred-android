@@ -66,6 +66,20 @@ class ChatRepository(private val apiKeyStore: ApiKeyStore) {
                 ?: return Result.failure(Exception("No response from AI"))
 
             Result.success(assistantMessage)
+        } catch (e: retrofit2.HttpException) {
+            val errorBody = e.response()?.errorBody()?.string()
+            val errorMessage = try {
+                if (errorBody != null) {
+                    val adapter = moshi.adapter(com.aibyjohannes.alfred.data.api.OpenRouterError::class.java)
+                    val errorResponse = adapter.fromJson(errorBody)
+                    errorResponse?.error?.message ?: "Error: ${e.code()} ${e.message()}"
+                } else {
+                    "Error: ${e.code()} ${e.message()}"
+                }
+            } catch (parseError: Exception) {
+                "Error: ${e.code()} ${e.message()}"
+            }
+            Result.failure(Exception(errorMessage))
         } catch (e: Exception) {
             Result.failure(e)
         }
