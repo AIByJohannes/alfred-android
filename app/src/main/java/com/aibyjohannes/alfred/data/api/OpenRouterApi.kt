@@ -11,8 +11,8 @@ interface OpenRouterApi {
     companion object {
         const val BASE_URL = "https://openrouter.ai/api/v1/"
 
-        // Using a free-tier model - Llama 3.2 3B Instruct (free)
-        const val DEFAULT_MODEL = "meta-llama/llama-3.2-3b-instruct:free"
+        // Using IBM Granite model
+        const val DEFAULT_MODEL = "ibm-granite/granite-4.0-h-micro"
     }
 }
 
