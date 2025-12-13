@@ -2,12 +2,32 @@
     <string name="app_name">Alfred</string>
     <string name="navigation_drawer_open">Open navigation drawer</string>
     <string name="navigation_drawer_close">Close navigation drawer</string>
-    <string name="nav_header_title">Android Studio</string>
-    <string name="nav_header_subtitle">android.studio@android.com</string>
+    <string name="nav_header_title">A.L.F.R.E.D.</string>
+    <string name="nav_header_subtitle">Your AI Assistant</string>
     <string name="nav_header_desc">Navigation header</string>
     <string name="action_settings">Settings</string>
 
-    <string name="menu_home">Home</string>
+    <string name="menu_home">Chat</string>
     <string name="menu_gallery">Gallery</string>
     <string name="menu_slideshow">Slideshow</string>
+    <string name="menu_settings">Settings</string>
+
+    <!-- Chat UI -->
+    <string name="message_hint">Type a message…</string>
+    <string name="send">Send</string>
+    <string name="api_key_warning">API key not configured. Go to Settings to add your OpenRouter API key.</string>
+    <string name="clear_chat">Clear Chat</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="api_key_label">OpenRouter API Key</string>
+    <string name="api_key_hint">Paste your OpenRouter API key here</string>
+    <string name="save_api_key">Save API Key</string>
+    <string name="api_key_saved">API key saved successfully</string>
+    <string name="api_key_cleared">API key cleared</string>
+    <string name="clear_api_key">Clear API Key</string>
+    <string name="get_api_key">Get an API key at openrouter.ai</string>
+    <string name="api_key_configured">✓ API key is configured</string>
+    <string name="api_key_not_configured">✗ No API key configured</string>
+    <string name="api_key_empty_error">Please enter an API key</string>
 </resources>

@@ -5,4 +5,12 @@
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
     <color name="one_dark_blue">#61AFEF</color>
+
+    <!-- Chat message colors -->
+    <color name="user_message_bg">#2196F3</color>
+    <color name="user_message_text">#FFFFFF</color>
+    <color name="assistant_message_bg">#E0E0E0</color>
+    <color name="assistant_message_text">#212121</color>
+    <color name="error_message_bg">#FFCDD2</color>
+    <color name="error_message_text">#B71C1C</color>
 </resources>
