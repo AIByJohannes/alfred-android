@@ -67,6 +67,7 @@ class ChatRepository(private val apiKeyStore: ApiKeyStore) {
 
             Result.success(assistantMessage)
         } catch (e: retrofit2.HttpException) {
+            e.printStackTrace()
             val errorBody = e.response()?.errorBody()?.string()
             val errorMessage = try {
                 if (errorBody != null) {
@@ -77,12 +78,13 @@ class ChatRepository(private val apiKeyStore: ApiKeyStore) {
                     "Error: ${e.code()} ${e.message()}"
                 }
             } catch (parseError: Exception) {
+                parseError.printStackTrace()
                 "Error: ${e.code()} ${e.message()}"
             }
             Result.failure(Exception(errorMessage))
         } catch (e: Exception) {
+            e.printStackTrace()
             Result.failure(e)
         }
     }
 }
-
