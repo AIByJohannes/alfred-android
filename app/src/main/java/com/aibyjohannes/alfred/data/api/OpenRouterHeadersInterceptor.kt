@@ -18,7 +18,7 @@ class OpenRouterHeadersInterceptor(
 
         val newRequest = originalRequest.newBuilder()
             .header("Authorization", "Bearer $apiKey")
-            .header("Referer", "https://github.com/AIByJohannes/alfred-android")
+            .header("HTTP-Referer", "https://github.com/AIByJohannes/alfred-android")
             .header("X-Title", "Alfred Android")
             .build()
 
