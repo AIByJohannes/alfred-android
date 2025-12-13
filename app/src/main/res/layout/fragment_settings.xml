@@ -25,6 +25,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="24dp"
         android:hint="@string/api_key_label"
+        app:placeholderText="@string/api_key_hint"
         style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
         app:layout_constraintTop_toBottomOf="@id/settings_description"
         app:layout_constraintStart_toStartOf="parent"
@@ -35,8 +36,7 @@
             android:id="@+id/api_key_input"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:inputType="textPassword"
-            android:hint="@string/api_key_hint" />
+            android:inputType="textPassword" />
 
     </com.google.android.material.textfield.TextInputLayout>
 
