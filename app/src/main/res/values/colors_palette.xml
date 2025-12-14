@@ -13,4 +13,5 @@
     <!-- Semantic roles -->
     <color name="palette_foreground">#383a42</color>
     <color name="palette_background">#fafafa</color>
+    <color name="palette_surface">#f0f0f0</color>
 </resources>

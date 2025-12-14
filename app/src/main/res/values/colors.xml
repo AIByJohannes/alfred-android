@@ -13,15 +13,9 @@
     <color name="user_message_bg">@color/palette_blue</color>
     <color name="user_message_text">#FFFFFF</color> <!-- Keep white text on blue for contrast in both modes -->
     
-    <!-- Assistant: Green -->
-    <color name="assistant_message_bg">@color/palette_green</color>
-    <color name="assistant_message_text">@color/palette_background</color> <!-- Dark text on Green (light mode) / Dark text on Light Green (dark mode)? Check contrast -->
-    <!-- Re-evaluating text color for assistant. 
-         Light Mode: Bg=#50a14f (Green), Text should be Light? Or Dark? #50a14f is fairly dark green. White text is better.
-         Dark Mode: Bg=#98c379 (Light Green), Text should be Dark.
-         This is tricky. Let's strictly follow the plan:
-         Plan said: "Verify User Bubble is Blue (#0184bc). Verify Assistant Bubble is Green (#50a14f)."
-    -->
+    <!-- Assistant: Secondary/Surface -->
+    <color name="assistant_message_bg">@color/palette_surface</color>
+    <color name="assistant_message_text">@color/palette_foreground</color>
     
     <!-- Let's define specific text colors for message bubbles to ensure contrast -->
     <color name="user_bubble_text">#FFFFFF</color>
