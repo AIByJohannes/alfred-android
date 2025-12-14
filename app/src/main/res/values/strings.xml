@@ -7,11 +7,11 @@
     <string name="nav_header_desc">Navigation header</string>
     <string name="action_settings">Settings</string>
 
-    <string name="menu_home">Chat</string>
+    <string name="menu_home">A.L.F.R.E.D.</string>
     <string name="menu_settings">Settings</string>
 
     <!-- Chat UI -->
-    <string name="greeting_message">Hello! I\'m Alfred, your AI assistant. How can I help you today?</string>
+    <string name="greeting_message">Hello! I\'m Alfred. How can I help you today?</string>
     <string name="message_hint">Type a message…</string>
     <string name="send">Send</string>
     <string name="api_key_warning">API key not configured. Go to Settings to add your OpenRouter API key.</string>
