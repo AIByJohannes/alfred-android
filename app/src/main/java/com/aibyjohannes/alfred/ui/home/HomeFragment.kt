@@ -56,18 +56,62 @@ class HomeFragment : Fragment() {
         return root
     }
 
+    private var backgroundAnimator: ObjectAnimator? = null
+    private var isOrbAtTop = false
+
     private fun setupBackgroundAnimation() {
+        startIdleAnimation()
+    }
+
+    private fun startIdleAnimation() {
+        backgroundAnimator?.cancel()
+        
         val scaleX = PropertyValuesHolder.ofFloat(View.SCALE_X, 1.0f, 1.2f)
         val scaleY = PropertyValuesHolder.ofFloat(View.SCALE_Y, 1.0f, 1.2f)
         val alpha = PropertyValuesHolder.ofFloat(View.ALPHA, 0.3f, 0.5f)
 
-        ObjectAnimator.ofPropertyValuesHolder(binding.aiOrbBackground, scaleX, scaleY, alpha).apply {
+        backgroundAnimator = ObjectAnimator.ofPropertyValuesHolder(binding.aiOrbBackground, scaleX, scaleY, alpha).apply {
             duration = 3000
             repeatCount = ObjectAnimator.INFINITE
             repeatMode = ObjectAnimator.REVERSE
             interpolator = AccelerateDecelerateInterpolator()
             start()
         }
+    }
+
+    private fun animateOrbToTop() {
+        backgroundAnimator?.cancel()
+        
+        // Calculate translation to top (negative Y)
+        // Move up by 35% of screen height or a fixed dp amount
+        val translationY = PropertyValuesHolder.ofFloat(View.TRANSLATION_Y, -binding.root.height * 0.35f)
+        val scaleX = PropertyValuesHolder.ofFloat(View.SCALE_X, 0.6f)
+        val scaleY = PropertyValuesHolder.ofFloat(View.SCALE_Y, 0.6f)
+        val alpha = PropertyValuesHolder.ofFloat(View.ALPHA, 0.2f)
+
+        backgroundAnimator = ObjectAnimator.ofPropertyValuesHolder(binding.aiOrbBackground, translationY, scaleX, scaleY, alpha).apply {
+            duration = 1000
+            interpolator = AccelerateDecelerateInterpolator()
+            start()
+        }
+        isOrbAtTop = true
+    }
+
+    private fun resetOrbPosition() {
+        backgroundAnimator?.cancel()
+
+        val translationY = PropertyValuesHolder.ofFloat(View.TRANSLATION_Y, 0f)
+        val scaleX = PropertyValuesHolder.ofFloat(View.SCALE_X, 1.0f)
+        val scaleY = PropertyValuesHolder.ofFloat(View.SCALE_Y, 1.0f)
+        val alpha = PropertyValuesHolder.ofFloat(View.ALPHA, 0.3f)
+
+        backgroundAnimator = ObjectAnimator.ofPropertyValuesHolder(binding.aiOrbBackground, translationY, scaleX, scaleY, alpha).apply {
+            duration = 800
+            interpolator = AccelerateDecelerateInterpolator()
+            start()
+        }
+        // After reset, restart idle animation
+        isOrbAtTop = false
     }
 
     private fun setupMenu() {
@@ -135,6 +179,15 @@ class HomeFragment : Fragment() {
 
     private fun setupObservers() {
         homeViewModel.messages.observe(viewLifecycleOwner) { messages ->
+            // Animate orb logic
+            if (messages.isNotEmpty() && !isOrbAtTop) {
+                animateOrbToTop()
+            } else if (messages.isEmpty() && isOrbAtTop) {
+                resetOrbPosition()
+                // Restart idle animation after reset (delayed slightly or handled in reset)
+                binding.root.postDelayed({ startIdleAnimation() }, 800)
+            }
+
             chatAdapter.submitList(messages) {
                 // Scroll to bottom when new message is added
                 if (messages.isNotEmpty()) {
