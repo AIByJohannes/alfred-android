@@ -9,16 +9,34 @@ import org.junit.runner.RunWith
 import org.junit.Assert.*
 
 /**
- * Instrumented test, which will execute on an Android device.
- *
- * See [testing documentation](http://d.android.com/tools/testing).
+ * Instrumented tests for the Alfred app.
+ * These tests run on an Android device or emulator.
  */
 @RunWith(AndroidJUnit4::class)
-class ExampleInstrumentedTest {
+class AlfredInstrumentedTest {
+
     @Test
-    fun useAppContext() {
-        // Context of the app under test.
+    fun appPackage_isCorrect() {
         val appContext = InstrumentationRegistry.getInstrumentation().targetContext
         assertEquals("com.aibyjohannes.alfred", appContext.packageName)
+    }
+
+    @Test
+    fun appContext_isNotNull() {
+        val appContext = InstrumentationRegistry.getInstrumentation().targetContext
+        assertNotNull(appContext)
+    }
+
+    @Test
+    fun appName_matchesExpected() {
+        val appContext = InstrumentationRegistry.getInstrumentation().targetContext
+        val appName = appContext.getString(appContext.applicationInfo.labelRes)
+        // The app name should be A.L.F.R.E.D. or Alfred
+        assertTrue(
+            "App name should be related to Alfred",
+            appName.contains("Alfred", ignoreCase = true) || 
+            appName.contains("A.L.F.R.E.D", ignoreCase = true) ||
+            appName.contains("ALFRED", ignoreCase = true)
+        )
     }
 }
