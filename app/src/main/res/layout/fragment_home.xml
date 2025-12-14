@@ -100,8 +100,16 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="bottom"
-            android:text="@string/send"
-            app:icon="@android:drawable/ic_menu_send" />
+            android:contentDescription="@string/send"
+            android:insetLeft="0dp"
+            android:insetTop="0dp"
+            android:insetRight="0dp"
+            android:insetBottom="0dp"
+            android:minWidth="0dp"
+            android:padding="12dp"
+            app:iconPadding="0dp"
+            app:icon="@android:drawable/ic_menu_send"
+            app:iconGravity="textStart" />
 
     </LinearLayout>
 
