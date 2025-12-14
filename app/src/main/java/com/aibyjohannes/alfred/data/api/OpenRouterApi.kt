@@ -5,14 +5,14 @@ import retrofit2.http.POST
 
 interface OpenRouterApi {
 
-    @POST("chat/completions")
-    suspend fun chatCompletions(@Body request: ChatCompletionRequest): ChatCompletionResponse
-
     companion object {
         const val BASE_URL = "https://openrouter.ai/api/v1/"
 
-        // Using IBM Granite model
-        const val DEFAULT_MODEL = "ibm-granite/granite-4.0-h-micro"
+        // Using Gemini Flash 2.5 Lite as primary agent (supports tool calling)
+        const val DEFAULT_MODEL = "google/gemini-2.5-flash-lite"
+
+        // Perplexity Sonar for web search sub-agent
+        const val PERPLEXITY_MODEL = "perplexity/sonar"
     }
 }
 
