@@ -7,12 +7,12 @@
 
     <!-- Central Ring -->
     <path
-        android:fillColor="#00E5FF"
+        android:fillColor="#56b6c2"
         android:pathData="M54,29 C40.19,29 29,40.19 29,54 C29,67.81 40.19,79 54,79 C67.81,79 79,67.81 79,54 C79,40.19 67.81,29 54,29 Z M54,74 C42.95,74 34,65.05 34,54 C34,42.95 42.95,34 54,34 C65.05,34 74,42.95 74,54 C74,65.05 65.05,74 54,74 Z" />
 
     <!-- Inner Core -->
     <path
-        android:fillColor="#FFFFFF"
+        android:fillColor="#61afef"
         android:pathData="M54,44 C48.48,44 44,48.48 44,54 C44,59.52 48.48,64 54,64 C59.52,64 64,59.52 64,54 C64,48.48 59.52,44 54,44 Z" />
 
 
