@@ -1,18 +1,22 @@
-<resources xmlns:tools="http://schemas.android.com/tools">
+<resources>
     <!-- Base application theme. -->
     <style name="Theme.Alfred" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
         <!-- Primary brand color. -->
-        <item name="colorPrimary">@color/one_dark_blue</item>
-        <item name="colorPrimaryVariant">@color/one_dark_blue</item>
-        <item name="colorOnPrimary">@color/white</item>
+        <item name="colorPrimary">@color/palette_blue</item>
+        <item name="colorPrimaryVariant">@color/palette_blue</item>
+        <item name="colorOnPrimary">@color/palette_white</item>
         <!-- Secondary brand color. -->
-        <item name="colorSecondary">@color/teal_200</item>
-        <item name="colorSecondaryVariant">@color/teal_700</item>
-        <item name="colorOnSecondary">@color/black</item>
+        <item name="colorSecondary">@color/palette_cyan</item>
+        <item name="colorSecondaryVariant">@color/palette_cyan</item>
+        <item name="colorOnSecondary">@color/palette_white</item>
         <!-- Status bar color. -->
         <item name="android:statusBarColor">?attr/colorPrimaryVariant</item>
         <!-- Customize your theme here. -->
-        <item name="android:navigationBarColor">@color/one_dark_blue</item>
+        <item name="android:navigationBarColor">@color/palette_blue</item>
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="colorSurface">@color/palette_background</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+        <item name="android:textColor">@color/text_primary</item>
     </style>
 
     <style name="Theme.Alfred.NoActionBar">

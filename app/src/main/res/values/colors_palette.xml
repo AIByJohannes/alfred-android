@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- One Light Palette -->
+    <color name="palette_black">#383a42</color>
+    <color name="palette_red">#e45649</color>
+    <color name="palette_green">#50a14f</color>
+    <color name="palette_yellow">#c18401</color>
+    <color name="palette_blue">#0184bc</color>
+    <color name="palette_magenta_purple">#a626a4</color>
+    <color name="palette_cyan">#0997b3</color>
+    <color name="palette_white">#fafafa</color>
+
+    <!-- Semantic roles -->
+    <color name="palette_foreground">#383a42</color>
+    <color name="palette_background">#fafafa</color>
+</resources>

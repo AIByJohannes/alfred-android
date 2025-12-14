@@ -1,16 +1,46 @@
-<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="teal_200">#FF03DAC5</color>
-    <color name="teal_700">#FF018786</color>
-    <color name="black">#FF000000</color>
-    <color name="white">#FFFFFFFF</color>
-    <color name="one_dark_blue">#61AFEF</color>
+    <!-- Standard Android Colors -->
+    <color name="teal_700">#56b6c2</color> <!-- One Dark Cyan -->
+
+    <!-- Mapped Palette Colors - Do not use directly if possible, use semantic names below or in themes -->
+    
+    <!-- App-wide semantic colors -->
+    <color name="text_primary">@color/palette_foreground</color>
+    <color name="window_background">@color/palette_background</color>
 
     <!-- Chat message colors -->
-    <color name="user_message_bg">#2196F3</color>
-    <color name="user_message_text">#FFFFFF</color>
-    <color name="assistant_message_bg">#E0E0E0</color>
-    <color name="assistant_message_text">#212121</color>
-    <color name="error_message_bg">#FFCDD2</color>
-    <color name="error_message_text">#B71C1C</color>
+    <!-- User: Blue -->
+    <color name="user_message_bg">@color/palette_blue</color>
+    <color name="user_message_text">#FFFFFF</color> <!-- Keep white text on blue for contrast in both modes -->
+    
+    <!-- Assistant: Green -->
+    <color name="assistant_message_bg">@color/palette_green</color>
+    <color name="assistant_message_text">@color/palette_background</color> <!-- Dark text on Green (light mode) / Dark text on Light Green (dark mode)? Check contrast -->
+    <!-- Re-evaluating text color for assistant. 
+         Light Mode: Bg=#50a14f (Green), Text should be Light? Or Dark? #50a14f is fairly dark green. White text is better.
+         Dark Mode: Bg=#98c379 (Light Green), Text should be Dark.
+         This is tricky. Let's strictly follow the plan:
+         Plan said: "Verify User Bubble is Blue (#0184bc). Verify Assistant Bubble is Green (#50a14f)."
+    -->
+    
+    <!-- Let's define specific text colors for message bubbles to ensure contrast -->
+    <color name="user_bubble_text">#FFFFFF</color>
+    
+    <!-- Assistant Bubble Text: 
+         Light(Green #50a14f): Dark text might be better? #50a14f is rgb(80,161,79). Perceived brightness is medium. White text is likely okay. 
+         Dark (Green #98c379): Light green. Dark text (#282c34) is better.
+         
+         Since I can't easily split these without another qualify file, I will use palette_background for assistant text which swaps.
+         Light Mode: Bg=Green(#50a14f), Text=Bg(#fafafa - Whiteish). Contrast: 50a14f vs fafafa -> 3.5:1. Borderline.
+         Dark Mode: Bg=Green(#98c379), Text=Bg(#282c34 - Dark). Contrast: 98c379 vs 282c34 -> 10:1. Good.
+         
+         Maybe I should just force Black/White for bubble text to be safe.
+         Let's stick to safe high contrast.
+    -->
+    
+    <color name="assistant_bubble_text_light">#FFFFFF</color> 
+    <color name="assistant_bubble_text_dark">#282c34</color>
+
+    <color name="error_message_bg">@color/palette_red</color>
+    <color name="error_message_text">@color/palette_white</color>
 </resources>
