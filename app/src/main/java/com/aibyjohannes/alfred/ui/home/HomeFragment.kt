@@ -23,6 +23,10 @@ import com.aibyjohannes.alfred.R
 import com.aibyjohannes.alfred.data.ApiKeyStore
 import com.aibyjohannes.alfred.data.ChatRepository
 import com.aibyjohannes.alfred.databinding.FragmentHomeBinding
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import androidx.lifecycle.lifecycleScope
 
 class HomeFragment : Fragment() {
 
@@ -31,6 +35,7 @@ class HomeFragment : Fragment() {
 
     private lateinit var homeViewModel: HomeViewModel
     private lateinit var chatAdapter: ChatAdapter
+    private var typingJob: Job? = null
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -52,6 +57,8 @@ class HomeFragment : Fragment() {
         val apiKeyStore = ApiKeyStore(requireContext())
         val repository = ChatRepository(apiKeyStore)
         homeViewModel.initialize(apiKeyStore, repository, getString(R.string.greeting_message))
+
+        animateGreetingText()
 
         return root
     }
@@ -112,6 +119,22 @@ class HomeFragment : Fragment() {
         }
         // After reset, restart idle animation
         isOrbAtTop = false
+    }
+
+
+    private fun animateGreetingText() {
+        val greeting = getString(R.string.greeting_message)
+        binding.greetingMessage.text = ""
+        binding.greetingMessage.visibility = View.VISIBLE
+        binding.greetingMessage.alpha = 0.8f
+
+        typingJob?.cancel()
+        typingJob = viewLifecycleOwner.lifecycleScope.launch {
+            greeting.forEach { char ->
+                binding.greetingMessage.append(char.toString())
+                delay(30)
+            }
+        }
     }
 
     private fun setupMenu() {
@@ -181,6 +204,7 @@ class HomeFragment : Fragment() {
         homeViewModel.messages.observe(viewLifecycleOwner) { messages ->
             // Animate orb logic
             if (messages.isNotEmpty() && !isOrbAtTop) {
+                typingJob?.cancel()
                 animateOrbToTop()
                 // Hide greeting message with fade out animation
                 binding.greetingMessage.animate()
@@ -192,12 +216,8 @@ class HomeFragment : Fragment() {
                     .start()
             } else if (messages.isEmpty() && isOrbAtTop) {
                 resetOrbPosition()
-                // Show greeting message again with fade in animation
-                binding.greetingMessage.visibility = View.VISIBLE
-                binding.greetingMessage.animate()
-                    .alpha(0.8f)
-                    .setDuration(500)
-                    .start()
+                // Show greeting message again with animation
+                animateGreetingText()
                 // Restart idle animation after reset (delayed slightly or handled in reset)
                 binding.root.postDelayed({ startIdleAnimation() }, 800)
             }
