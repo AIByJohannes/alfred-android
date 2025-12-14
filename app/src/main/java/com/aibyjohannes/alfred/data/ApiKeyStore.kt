@@ -2,29 +2,45 @@ package com.aibyjohannes.alfred.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
 class ApiKeyStore(context: Context) {
 
-    private val masterKey = MasterKey.Builder(context)
-        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-        .build()
+    private val prefs: SharedPreferences = try {
+        val masterKey = MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
 
-    private val prefs: SharedPreferences = EncryptedSharedPreferences.create(
-        context,
-        PREFS_FILE_NAME,
-        masterKey,
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-    )
+        EncryptedSharedPreferences.create(
+            context,
+            PREFS_FILE_NAME,
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+    } catch (e: Exception) {
+        Log.e(TAG, "Error creating EncryptedSharedPreferences, falling back to regular SharedPreferences", e)
+        // Fallback to regular SharedPreferences if EncryptedSharedPreferences fails
+        context.getSharedPreferences(PREFS_FILE_NAME, Context.MODE_PRIVATE)
+    }
 
     fun saveOpenRouterKey(key: String) {
-        prefs.edit().putString(KEY_OPENROUTER_API_KEY, key.trim()).apply()
+        try {
+            prefs.edit().putString(KEY_OPENROUTER_API_KEY, key.trim()).apply()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving API key", e)
+        }
     }
 
     fun loadOpenRouterKey(): String? {
-        return prefs.getString(KEY_OPENROUTER_API_KEY, null)
+        return try {
+            prefs.getString(KEY_OPENROUTER_API_KEY, null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading API key", e)
+            null
+        }
     }
 
     fun hasApiKey(): Boolean {
@@ -32,10 +48,15 @@ class ApiKeyStore(context: Context) {
     }
 
     fun clearApiKey() {
-        prefs.edit().remove(KEY_OPENROUTER_API_KEY).apply()
+        try {
+            prefs.edit().remove(KEY_OPENROUTER_API_KEY).apply()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error clearing API key", e)
+        }
     }
 
     companion object {
+        private const val TAG = "ApiKeyStore"
         private const val PREFS_FILE_NAME = "alfred_secret_prefs"
         private const val KEY_OPENROUTER_API_KEY = "openrouter_api_key"
     }
