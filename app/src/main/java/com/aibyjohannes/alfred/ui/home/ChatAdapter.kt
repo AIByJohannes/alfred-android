@@ -1,6 +1,8 @@
 package com.aibyjohannes.alfred.ui.home
 
+import android.content.Intent
 import android.view.LayoutInflater
+import android.view.View
 import android.view.ViewGroup
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.content.ContextCompat
@@ -59,6 +61,8 @@ class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(Me
                 binding.messageText.setTextColor(
                     ContextCompat.getColor(context, R.color.user_message_text)
                 )
+                // Hide share button for user messages
+                binding.shareButton.visibility = View.GONE
             } else if (message.isError) {
                 // Error message: align left, red background
                 params.horizontalBias = 0f
@@ -68,6 +72,8 @@ class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(Me
                 binding.messageText.setTextColor(
                     ContextCompat.getColor(context, R.color.error_message_text)
                 )
+                // Hide share button for error messages
+                binding.shareButton.visibility = View.GONE
             } else {
                 // Assistant message: align left, gray background
                 params.horizontalBias = 0f
@@ -77,8 +83,22 @@ class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(Me
                 binding.messageText.setTextColor(
                     ContextCompat.getColor(context, R.color.assistant_message_text)
                 )
+                // Show share button for assistant messages
+                binding.shareButton.visibility = View.VISIBLE
+                binding.shareButton.setOnClickListener {
+                    shareMessage(context, message.content)
+                }
             }
             binding.messageCard.layoutParams = params
+        }
+
+        private fun shareMessage(context: android.content.Context, content: String) {
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, content)
+                putExtra(Intent.EXTRA_SUBJECT, "Shared from A.L.F.R.E.D.")
+            }
+            context.startActivity(Intent.createChooser(shareIntent, "Share via"))
         }
     }
 
