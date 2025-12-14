@@ -1,8 +1,5 @@
 package com.aibyjohannes.alfred.data.api
 
-import retrofit2.http.Body
-import retrofit2.http.POST
-
 interface OpenRouterApi {
 
     companion object {
