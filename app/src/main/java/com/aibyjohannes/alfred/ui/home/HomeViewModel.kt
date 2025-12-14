@@ -36,6 +36,14 @@ class HomeViewModel : ViewModel() {
         this.apiKeyStore = apiKeyStore
         this.repository = repository
         checkApiKey()
+        
+        // Initialize conversation with greeting message
+        if (conversationHistory.isEmpty()) {
+            conversationHistory.add(ChatMessage(
+                role = "assistant",
+                content = "Hello! I'm Alfred, your AI assistant. How can I help you today?"
+            ))
+        }
     }
 
     fun checkApiKey() {

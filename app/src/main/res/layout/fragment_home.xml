@@ -19,6 +19,23 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
+    <!-- Greeting Message -->
+    <TextView
+        android:id="@+id/greeting_message"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="@string/greeting_message"
+        android:textAlignment="center"
+        android:textSize="18sp"
+        android:textColor="?attr/colorOnSurface"
+        android:padding="24dp"
+        android:alpha="0.8"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintWidth_percent="0.8" />
+
     <!-- API Key Warning Banner -->
     <com.google.android.material.card.MaterialCardView
         android:id="@+id/api_key_warning"

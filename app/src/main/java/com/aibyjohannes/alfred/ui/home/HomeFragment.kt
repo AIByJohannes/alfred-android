@@ -182,8 +182,22 @@ class HomeFragment : Fragment() {
             // Animate orb logic
             if (messages.isNotEmpty() && !isOrbAtTop) {
                 animateOrbToTop()
+                // Hide greeting message with fade out animation
+                binding.greetingMessage.animate()
+                    .alpha(0f)
+                    .setDuration(500)
+                    .withEndAction {
+                        binding.greetingMessage.visibility = View.GONE
+                    }
+                    .start()
             } else if (messages.isEmpty() && isOrbAtTop) {
                 resetOrbPosition()
+                // Show greeting message again with fade in animation
+                binding.greetingMessage.visibility = View.VISIBLE
+                binding.greetingMessage.animate()
+                    .alpha(0.8f)
+                    .setDuration(500)
+                    .start()
                 // Restart idle animation after reset (delayed slightly or handled in reset)
                 binding.root.postDelayed({ startIdleAnimation() }, 800)
             }
