@@ -32,7 +32,7 @@ class HomeViewModel : ViewModel() {
     // Keep track of conversation history for context
     private val conversationHistory = mutableListOf<ChatMessage>()
 
-    fun initialize(apiKeyStore: ApiKeyStore, repository: ChatRepository) {
+    fun initialize(apiKeyStore: ApiKeyStore, repository: ChatRepository, greetingMessage: String) {
         this.apiKeyStore = apiKeyStore
         this.repository = repository
         checkApiKey()
@@ -40,8 +40,8 @@ class HomeViewModel : ViewModel() {
         // Initialize conversation with greeting message
         if (conversationHistory.isEmpty()) {
             conversationHistory.add(ChatMessage(
-                role = "assistant",
-                content = "Hello! I'm Alfred, your AI assistant. How can I help you today?"
+                role = ChatMessage.ROLE_ASSISTANT,
+                content = greetingMessage
             ))
         }
     }
@@ -67,8 +67,8 @@ class HomeViewModel : ViewModel() {
 
             result.onSuccess { response ->
                 // Add to conversation history
-                conversationHistory.add(ChatMessage(role = "user", content = userInput))
-                conversationHistory.add(ChatMessage(role = "assistant", content = response))
+                conversationHistory.add(ChatMessage(role = ChatMessage.ROLE_USER, content = userInput))
+                conversationHistory.add(ChatMessage(role = ChatMessage.ROLE_ASSISTANT, content = response))
 
                 // Add assistant message to UI
                 val updatedMessages = _messages.value.orEmpty().toMutableList()

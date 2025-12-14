@@ -51,7 +51,7 @@ class HomeFragment : Fragment() {
         // Initialize ViewModel with dependencies
         val apiKeyStore = ApiKeyStore(requireContext())
         val repository = ChatRepository(apiKeyStore)
-        homeViewModel.initialize(apiKeyStore, repository)
+        homeViewModel.initialize(apiKeyStore, repository, getString(R.string.greeting_message))
 
         return root
     }

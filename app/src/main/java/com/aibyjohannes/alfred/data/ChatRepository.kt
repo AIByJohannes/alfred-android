@@ -47,11 +47,11 @@ class ChatRepository(private val apiKeyStore: ApiKeyStore) {
 
             val messages = buildList {
                 add(ChatMessage(
-                    role = "system",
-                    content = "You are A.L.F.R.E.D., a helpful AI assistant created and trained by Johannes. Be concise, friendly, and helpful. You currently have no available tools and no internet access."
+                    role = ChatMessage.ROLE_SYSTEM,
+                    content = Prompts.SYSTEM_PROMPT
                 ))
                 addAll(conversationHistory)
-                add(ChatMessage(role = "user", content = userMessage))
+                add(ChatMessage(role = ChatMessage.ROLE_USER, content = userMessage))
             }
 
             val request = ChatCompletionRequest(
