@@ -64,6 +64,12 @@ dependencies {
     // Security for encrypted storage
     implementation(libs.security.crypto)
 
+    // Markdown
+    implementation(libs.markwon.core)
+    implementation(libs.markwon.linkify)
+    implementation(libs.markwon.ext.tables)
+    implementation(libs.markwon.ext.strikethrough)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

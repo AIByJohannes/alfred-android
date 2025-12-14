@@ -9,6 +9,10 @@ import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.aibyjohannes.alfred.R
 import com.aibyjohannes.alfred.databinding.ItemChatMessageBinding
+import io.noties.markwon.Markwon
+import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
+import io.noties.markwon.ext.tables.TablePlugin
+import io.noties.markwon.linkify.LinkifyPlugin
 
 class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(MessageDiffCallback()) {
 
@@ -18,6 +22,10 @@ class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(Me
             parent,
             false
         )
+        // Initialize Markwon instance if not already done, or pass it.
+        // For simplicity and performance, creating one here (or better, in the Adapter constructor or DI)
+        // Since we don't have DI setup visible here easily, let's create it in the ViewHolder or pass context.
+        // Actually, Markwon needs context.
         return MessageViewHolder(binding)
     }
 
@@ -29,8 +37,15 @@ class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(Me
         private val binding: ItemChatMessageBinding
     ) : RecyclerView.ViewHolder(binding.root) {
 
+        private val markwon: Markwon = Markwon.builder(binding.root.context)
+            .usePlugin(LinkifyPlugin.create())
+            .usePlugin(TablePlugin.create(binding.root.context))
+            .usePlugin(StrikethroughPlugin.create())
+            .build()
+
         fun bind(message: UiChatMessage) {
-            binding.messageText.text = message.content
+            // Apply Markdown rendering
+            markwon.setMarkdown(binding.messageText, message.content)
 
             val context = binding.root.context
             val params = binding.messageCard.layoutParams as ConstraintLayout.LayoutParams
