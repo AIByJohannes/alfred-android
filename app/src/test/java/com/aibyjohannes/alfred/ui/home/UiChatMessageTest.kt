@@ -17,8 +17,10 @@ class UiChatMessageTest {
         )
         
         assertEquals("Test message", message.content)
+        assertEquals(0L, message.id)
         assertTrue(message.isUser)
         assertFalse(message.isError) // Default should be false
+        assertFalse(message.isStreaming) // Default should be false
     }
 
     @Test

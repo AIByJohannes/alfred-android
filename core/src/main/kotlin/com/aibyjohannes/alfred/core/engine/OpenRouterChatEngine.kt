@@ -1,6 +1,7 @@
 package com.aibyjohannes.alfred.core.engine
 
 import com.aibyjohannes.alfred.core.SystemPrompts
+import com.aibyjohannes.alfred.core.model.ChatStreamEvent
 import com.aibyjohannes.alfred.core.model.ChatTurnResult
 import com.aibyjohannes.alfred.core.model.CoreChatMessage
 import com.aibyjohannes.alfred.core.model.ToolCallTrace
@@ -9,15 +10,20 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.openai.client.OpenAIClient
 import com.openai.client.okhttp.OpenAIOkHttpClient
 import com.openai.core.JsonValue
+import com.openai.helpers.ChatCompletionAccumulator
 import com.openai.models.FunctionDefinition
 import com.openai.models.FunctionParameters
 import com.openai.models.chat.completions.ChatCompletionAssistantMessageParam
 import com.openai.models.chat.completions.ChatCompletionCreateParams
+import com.openai.models.chat.completions.ChatCompletionMessage
 import com.openai.models.chat.completions.ChatCompletionMessageParam
 import com.openai.models.chat.completions.ChatCompletionSystemMessageParam
 import com.openai.models.chat.completions.ChatCompletionToolMessageParam
 import com.openai.models.chat.completions.ChatCompletionUserMessageParam
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
 
 class OpenRouterChatEngine(
@@ -27,6 +33,11 @@ class OpenRouterChatEngine(
     private val webSearchClient: WebSearchClient
 ) : ChatEngine {
     private val objectMapper = ObjectMapper()
+
+    private data class StreamPassResult(
+        val assistantMessage: ChatCompletionMessage,
+        val content: String
+    )
 
     private fun buildClient(): OpenAIClient {
         return OpenAIOkHttpClient.builder()
@@ -40,69 +51,49 @@ class OpenRouterChatEngine(
         conversationHistory: List<CoreChatMessage>
     ): Result<ChatTurnResult> {
         return try {
-            val client = buildClient()
-
-            val messages = mutableListOf<ChatCompletionMessageParam>()
-            messages.add(
-                ChatCompletionMessageParam.ofSystem(
-                    ChatCompletionSystemMessageParam.builder()
-                        .content(prompt)
-                        .build()
-                )
-            )
-
-            for (msg in conversationHistory) {
-                when (msg.role) {
-                    "user" -> messages.add(
-                        ChatCompletionMessageParam.ofUser(
-                            ChatCompletionUserMessageParam.builder()
-                                .content(msg.content)
-                                .build()
-                        )
-                    )
-                    "assistant" -> messages.add(
-                        ChatCompletionMessageParam.ofAssistant(
-                            ChatCompletionAssistantMessageParam.builder()
-                                .content(msg.content)
-                                .build()
-                        )
-                    )
+            var completed: ChatTurnResult? = null
+            streamMessage(userMessage, conversationHistory).collect { event ->
+                if (event is ChatStreamEvent.Completed) {
+                    completed = event.result
                 }
             }
+            completed?.let { Result.success(it) }
+                ?: Result.failure(Exception("No final response from AI"))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 
-            messages.add(
-                ChatCompletionMessageParam.ofUser(
-                    ChatCompletionUserMessageParam.builder()
-                        .content(userMessage)
-                        .build()
-                )
-            )
+    override fun streamMessage(
+        userMessage: String,
+        conversationHistory: List<CoreChatMessage>
+    ): Flow<ChatStreamEvent> = channelFlow {
+        val finalResult = withContext(Dispatchers.IO) {
+            val client = buildClient()
+            val messages = buildConversationMessages(userMessage, conversationHistory)
+            val traces = mutableListOf<ToolCallTrace>()
 
-            val params = ChatCompletionCreateParams.builder()
+            val initialParams = ChatCompletionCreateParams.builder()
                 .model(model)
                 .messages(messages)
                 .addFunctionTool(buildWebSearchFunctionDefinition())
                 .build()
 
-            val response = withContext(Dispatchers.IO) {
-                client.chat().completions().create(params)
+            val initialPass = streamSingleCompletion(client, initialParams) { delta ->
+                if (delta.isNotEmpty()) {
+                    trySend(ChatStreamEvent.Delta(delta))
+                }
             }
 
-            val choice = response.choices().firstOrNull()
-                ?: return Result.failure(Exception("No response from AI"))
-
-            val assistantMessage = choice.message()
-            val toolCalls = assistantMessage.toolCalls()
-            val traces = mutableListOf<ToolCallTrace>()
-
-            if (toolCalls.isPresent && toolCalls.get().isNotEmpty()) {
+            val toolCalls = initialPass.assistantMessage.toolCalls().orElse(emptyList())
+            if (toolCalls.isNotEmpty()) {
                 val followUpBuilder = ChatCompletionCreateParams.builder()
                     .model(model)
                     .messages(messages)
 
-                followUpBuilder.addMessage(assistantMessage)
+                followUpBuilder.addMessage(initialPass.assistantMessage)
 
-                for (toolCall in toolCalls.get()) {
+                for (toolCall in toolCalls) {
                     val functionToolCall = toolCall.asFunction()
                     val function = functionToolCall.function()
                     val arguments = function.arguments()
@@ -116,6 +107,7 @@ class OpenRouterChatEngine(
                                 searchResult.getOrElse { "Web search failed: ${it.message}" }
                             }
                         }
+
                         else -> {
                             "Unknown tool: ${function.name()}"
                         }
@@ -140,22 +132,101 @@ class OpenRouterChatEngine(
                     )
                 }
 
-                val finalResponse = withContext(Dispatchers.IO) {
-                    client.chat().completions().create(followUpBuilder.build())
+                val finalPass = streamSingleCompletion(client, followUpBuilder.build()) { delta ->
+                    if (delta.isNotEmpty()) {
+                        trySend(ChatStreamEvent.Delta(delta))
+                    }
                 }
 
-                val finalContent = finalResponse.choices().firstOrNull()?.message()?.content()?.orElse(null)
-                    ?: return Result.failure(Exception("No final response from AI"))
+                val finalText = finalPass.content
+                if (finalText.isBlank()) {
+                    throw Exception("No final response content from AI")
+                }
 
-                Result.success(ChatTurnResult(content = finalContent, toolCalls = traces))
+                ChatTurnResult(content = finalText, toolCalls = traces)
             } else {
-                val content = assistantMessage.content().orElse(null)
-                    ?: return Result.failure(Exception("No response content from AI"))
-                Result.success(ChatTurnResult(content = content, toolCalls = traces))
+                val content = initialPass.content
+                if (content.isBlank()) {
+                    throw Exception("No response content from AI")
+                }
+                ChatTurnResult(content = content, toolCalls = traces)
             }
-        } catch (e: Exception) {
-            Result.failure(e)
         }
+
+        trySend(ChatStreamEvent.Completed(finalResult))
+    }
+
+    private fun buildConversationMessages(
+        userMessage: String,
+        conversationHistory: List<CoreChatMessage>
+    ): List<ChatCompletionMessageParam> {
+        val messages = mutableListOf<ChatCompletionMessageParam>()
+        messages.add(
+            ChatCompletionMessageParam.ofSystem(
+                ChatCompletionSystemMessageParam.builder()
+                    .content(prompt)
+                    .build()
+            )
+        )
+
+        for (msg in conversationHistory) {
+            when (msg.role) {
+                "user" -> messages.add(
+                    ChatCompletionMessageParam.ofUser(
+                        ChatCompletionUserMessageParam.builder()
+                            .content(msg.content)
+                            .build()
+                    )
+                )
+
+                "assistant" -> messages.add(
+                    ChatCompletionMessageParam.ofAssistant(
+                        ChatCompletionAssistantMessageParam.builder()
+                            .content(msg.content)
+                            .build()
+                    )
+                )
+            }
+        }
+
+        messages.add(
+            ChatCompletionMessageParam.ofUser(
+                ChatCompletionUserMessageParam.builder()
+                    .content(userMessage)
+                    .build()
+            )
+        )
+
+        return messages
+    }
+
+    private fun streamSingleCompletion(
+        client: OpenAIClient,
+        params: ChatCompletionCreateParams,
+        onDelta: (String) -> Unit
+    ): StreamPassResult {
+        val accumulator = ChatCompletionAccumulator.create()
+
+        client.chat().completions().createStreaming(params).use { streamResponse ->
+            streamResponse.stream().forEach { chunk ->
+                accumulator.accumulate(chunk)
+                chunk.choices().forEach { choice ->
+                    choice.delta().content().ifPresent { contentDelta ->
+                        onDelta(contentDelta)
+                    }
+                }
+            }
+        }
+
+        val completion = accumulator.chatCompletion()
+        val choice = completion.choices().firstOrNull()
+            ?: throw Exception("No response from AI")
+        val assistantMessage = choice.message()
+
+        return StreamPassResult(
+            assistantMessage = assistantMessage,
+            content = assistantMessage.content().orElse("")
+        )
     }
 
     private fun buildWebSearchFunctionDefinition(): FunctionDefinition {

@@ -83,10 +83,14 @@ class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(Me
                 binding.messageText.setTextColor(
                     ContextCompat.getColor(context, R.color.assistant_message_text)
                 )
-                // Show share button for assistant messages
-                binding.shareButton.visibility = View.VISIBLE
-                binding.shareButton.setOnClickListener {
-                    shareMessage(context, message.content)
+                // Hide sharing while streaming partial text.
+                if (message.isStreaming) {
+                    binding.shareButton.visibility = View.GONE
+                } else {
+                    binding.shareButton.visibility = View.VISIBLE
+                    binding.shareButton.setOnClickListener {
+                        shareMessage(context, message.content)
+                    }
                 }
             }
             binding.messageCard.layoutParams = params
@@ -104,7 +108,7 @@ class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(Me
 
     class MessageDiffCallback : DiffUtil.ItemCallback<UiChatMessage>() {
         override fun areItemsTheSame(oldItem: UiChatMessage, newItem: UiChatMessage): Boolean {
-            return oldItem === newItem
+            return oldItem.id == newItem.id
         }
 
         override fun areContentsTheSame(oldItem: UiChatMessage, newItem: UiChatMessage): Boolean {

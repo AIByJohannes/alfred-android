@@ -1,12 +1,15 @@
 package com.aibyjohannes.alfred.data
 
 import com.aibyjohannes.alfred.core.SystemPrompts
+import com.aibyjohannes.alfred.core.engine.ChatEngine
 import com.aibyjohannes.alfred.core.engine.OpenRouterChatEngine
+import com.aibyjohannes.alfred.core.model.ChatStreamEvent
 import com.aibyjohannes.alfred.core.model.CoreChatMessage
 import com.aibyjohannes.alfred.core.search.PerplexitySearchClient
 import com.aibyjohannes.alfred.data.api.ChatMessage
 import com.fasterxml.jackson.annotation.JsonClassDescription
 import com.fasterxml.jackson.annotation.JsonPropertyDescription
+import kotlinx.coroutines.flow.Flow
 
 class ChatRepository(private val apiKeyStore: ApiKeyStore) {
     suspend fun sendMessage(
@@ -16,7 +19,32 @@ class ChatRepository(private val apiKeyStore: ApiKeyStore) {
         val apiKey = apiKeyStore.loadOpenRouterKey()
             ?: return Result.failure(Exception("API key not configured. Please add your OpenRouter API key in Settings."))
 
-        val engine = OpenRouterChatEngine(
+        val engine = createEngine(apiKey)
+
+        return engine.sendMessage(
+            userMessage = userMessage,
+            conversationHistory = conversationHistory.toCoreMessages()
+        ).map { it.content }
+    }
+
+    fun streamMessage(
+        userMessage: String,
+        conversationHistory: List<ChatMessage>
+    ): Flow<ChatStreamEvent> {
+        val apiKey = apiKeyStore.loadOpenRouterKey()
+            ?: throw IllegalStateException("API key not configured. Please add your OpenRouter API key in Settings.")
+        return createEngine(apiKey).streamMessage(
+            userMessage = userMessage,
+            conversationHistory = conversationHistory.toCoreMessages()
+        )
+    }
+
+    private fun List<ChatMessage>.toCoreMessages(): List<CoreChatMessage> = map {
+        CoreChatMessage(role = it.role, content = it.content)
+    }
+
+    private fun createEngine(apiKey: String): ChatEngine {
+        return OpenRouterChatEngine(
             apiKey = apiKey,
             model = DEFAULT_MODEL,
             prompt = SystemPrompts.SYSTEM_PROMPT,
@@ -25,13 +53,6 @@ class ChatRepository(private val apiKeyStore: ApiKeyStore) {
                 model = PERPLEXITY_MODEL
             )
         )
-
-        return engine.sendMessage(
-            userMessage = userMessage,
-            conversationHistory = conversationHistory.map {
-                CoreChatMessage(role = it.role, content = it.content)
-            }
-        ).map { it.content }
     }
 
     // Retained for test compatibility and tool schema intent.

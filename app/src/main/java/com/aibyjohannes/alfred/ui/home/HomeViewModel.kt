@@ -4,15 +4,19 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aibyjohannes.alfred.core.model.ChatStreamEvent
 import com.aibyjohannes.alfred.data.ApiKeyStore
 import com.aibyjohannes.alfred.data.ChatRepository
 import com.aibyjohannes.alfred.data.api.ChatMessage
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 data class UiChatMessage(
+    val id: Long = 0L,
     val content: String,
     val isUser: Boolean,
-    val isError: Boolean = false
+    val isError: Boolean = false,
+    val isStreaming: Boolean = false
 )
 
 class HomeViewModel : ViewModel() {
@@ -31,18 +35,21 @@ class HomeViewModel : ViewModel() {
 
     // Keep track of conversation history for context
     private val conversationHistory = mutableListOf<ChatMessage>()
+    private var nextMessageId = 1L
 
     fun initialize(apiKeyStore: ApiKeyStore, repository: ChatRepository, greetingMessage: String) {
         this.apiKeyStore = apiKeyStore
         this.repository = repository
         checkApiKey()
-        
+
         // Initialize conversation with greeting message
         if (conversationHistory.isEmpty()) {
-            conversationHistory.add(ChatMessage(
-                role = ChatMessage.ROLE_ASSISTANT,
-                content = greetingMessage
-            ))
+            conversationHistory.add(
+                ChatMessage(
+                    role = ChatMessage.ROLE_ASSISTANT,
+                    content = greetingMessage
+                )
+            )
         }
     }
 
@@ -55,33 +62,83 @@ class HomeViewModel : ViewModel() {
 
         val repo = repository ?: return
 
-        // Add user message to UI
-        val currentMessages = _messages.value.orEmpty().toMutableList()
-        currentMessages.add(UiChatMessage(content = userInput, isUser = true))
-        _messages.value = currentMessages
+        val userMessageId = nextId()
+        val assistantMessageId = nextId()
+
+        appendUiMessage(
+            UiChatMessage(
+                id = userMessageId,
+                content = userInput,
+                isUser = true
+            )
+        )
+
+        appendUiMessage(
+            UiChatMessage(
+                id = assistantMessageId,
+                content = "",
+                isUser = false,
+                isStreaming = true
+            )
+        )
 
         _isLoading.value = true
 
         viewModelScope.launch {
-            val result = repo.sendMessage(userInput, conversationHistory)
+            val userHistoryMessage = ChatMessage(role = ChatMessage.ROLE_USER, content = userInput)
+            val streamedAssistantContent = StringBuilder()
 
-            result.onSuccess { response ->
-                // Add to conversation history
-                conversationHistory.add(ChatMessage(role = ChatMessage.ROLE_USER, content = userInput))
-                conversationHistory.add(ChatMessage(role = ChatMessage.ROLE_ASSISTANT, content = response))
+            try {
+                repo.streamMessage(userInput, conversationHistory).collect { event ->
+                    when (event) {
+                        is ChatStreamEvent.Delta -> {
+                            streamedAssistantContent.append(event.textChunk)
+                            updateUiMessage(
+                                messageId = assistantMessageId,
+                                content = streamedAssistantContent.toString(),
+                                isError = false,
+                                isStreaming = true
+                            )
+                        }
 
-                // Add assistant message to UI
-                val updatedMessages = _messages.value.orEmpty().toMutableList()
-                updatedMessages.add(UiChatMessage(content = response, isUser = false))
-                _messages.value = updatedMessages
-            }.onFailure { error ->
-                val updatedMessages = _messages.value.orEmpty().toMutableList()
-                updatedMessages.add(UiChatMessage(
-                    content = error.message ?: "An error occurred",
-                    isUser = false,
-                    isError = true
-                ))
-                _messages.value = updatedMessages
+                        is ChatStreamEvent.Completed -> {
+                            val finalResponse = event.result.content
+                            conversationHistory.add(userHistoryMessage)
+                            conversationHistory.add(
+                                ChatMessage(
+                                    role = ChatMessage.ROLE_ASSISTANT,
+                                    content = finalResponse
+                                )
+                            )
+
+                            updateUiMessage(
+                                messageId = assistantMessageId,
+                                content = finalResponse,
+                                isError = false,
+                                isStreaming = false
+                            )
+                        }
+                    }
+                }
+            } catch (error: Exception) {
+                val errorMessage = error.message ?: "An error occurred"
+                val replaced = updateUiMessage(
+                    messageId = assistantMessageId,
+                    content = errorMessage,
+                    isError = true,
+                    isStreaming = false
+                )
+
+                if (!replaced) {
+                    appendUiMessage(
+                        UiChatMessage(
+                            id = assistantMessageId,
+                            content = errorMessage,
+                            isUser = false,
+                            isError = true
+                        )
+                    )
+                }
             }
 
             _isLoading.value = false
@@ -91,5 +148,36 @@ class HomeViewModel : ViewModel() {
     fun clearChat() {
         _messages.value = emptyList()
         conversationHistory.clear()
+        nextMessageId = 1L
+    }
+
+    private fun nextId(): Long = nextMessageId++
+
+    private fun appendUiMessage(message: UiChatMessage) {
+        val updatedMessages = _messages.value.orEmpty().toMutableList()
+        updatedMessages.add(message)
+        _messages.value = updatedMessages
+    }
+
+    private fun updateUiMessage(
+        messageId: Long,
+        content: String,
+        isError: Boolean,
+        isStreaming: Boolean
+    ): Boolean {
+        val updatedMessages = _messages.value.orEmpty().toMutableList()
+        val index = updatedMessages.indexOfFirst { it.id == messageId }
+        if (index < 0) {
+            return false
+        }
+
+        val existing = updatedMessages[index]
+        updatedMessages[index] = existing.copy(
+            content = content,
+            isError = isError,
+            isStreaming = isStreaming
+        )
+        _messages.value = updatedMessages
+        return true
     }
 }
