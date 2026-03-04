@@ -1,46 +1,29 @@
 package com.aibyjohannes.alfred.data
 
 import com.aibyjohannes.alfred.data.agent.PerplexitySubAgent
-import com.aibyjohannes.alfred.data.api.ChatCompletionRequestWithTools
-import com.aibyjohannes.alfred.data.api.ChatCompletionResponseWithTools
 import com.aibyjohannes.alfred.data.api.ChatMessage
-import com.aibyjohannes.alfred.data.api.ChatMessageWithTools
-import com.aibyjohannes.alfred.data.api.OpenRouterApi
-import com.aibyjohannes.alfred.data.api.OpenRouterHeadersInterceptor
-import com.aibyjohannes.alfred.data.api.Tools
-import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
-import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
-import retrofit2.Retrofit
-import retrofit2.converter.moshi.MoshiConverterFactory
-import retrofit2.http.Body
-import retrofit2.http.POST
-import java.util.concurrent.TimeUnit
+import com.openai.client.OpenAIClient
+import com.openai.client.okhttp.OpenAIOkHttpClient
+import com.openai.models.chat.completions.ChatCompletionAssistantMessageParam
+import com.openai.models.chat.completions.ChatCompletionCreateParams
+import com.openai.models.chat.completions.ChatCompletionMessageParam
+import com.openai.models.chat.completions.ChatCompletionSystemMessageParam
+import com.openai.models.chat.completions.ChatCompletionToolMessageParam
+import com.openai.models.chat.completions.ChatCompletionUserMessageParam
+import com.fasterxml.jackson.annotation.JsonClassDescription
+import com.fasterxml.jackson.annotation.JsonPropertyDescription
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class ChatRepository(private val apiKeyStore: ApiKeyStore) {
 
-    private val moshi = Moshi.Builder()
-        .add(KotlinJsonAdapterFactory())
-        .build()
+    private fun buildClient(): OpenAIClient {
+        return OpenAIOkHttpClient.builder()
+            .apiKey(apiKeyStore.loadOpenRouterKey() ?: "")
+            .baseUrl("https://openrouter.ai/api/v1")
+            .build()
+    }
 
-    private val okHttpClient = OkHttpClient.Builder()
-        .addInterceptor(OpenRouterHeadersInterceptor { apiKeyStore.loadOpenRouterKey() })
-        .addInterceptor(HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
-        })
-        .connectTimeout(60, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
-        .build()
-
-    private val retrofit = Retrofit.Builder()
-        .baseUrl(OpenRouterApi.BASE_URL)
-        .client(okHttpClient)
-        .addConverterFactory(MoshiConverterFactory.create(moshi))
-        .build()
-
-    private val toolApi = retrofit.create(ToolEnabledApi::class.java)
     private val perplexitySubAgent = PerplexitySubAgent(apiKeyStore)
 
     suspend fun sendMessage(
@@ -52,112 +35,124 @@ class ChatRepository(private val apiKeyStore: ApiKeyStore) {
                 return Result.failure(Exception("API key not configured. Please add your OpenRouter API key in Settings."))
             }
 
-            // Build messages with tool support
-            val messages = buildList {
-                add(ChatMessageWithTools(
-                    role = ChatMessageWithTools.ROLE_SYSTEM,
-                    content = Prompts.SYSTEM_PROMPT
-                ))
-                // Add conversation history
-                conversationHistory.forEach { msg ->
-                    add(ChatMessageWithTools(
-                        role = msg.role,
-                        content = msg.content
-                    ))
-                }
-                add(ChatMessageWithTools(role = ChatMessageWithTools.ROLE_USER, content = userMessage))
-            }
+            val client = buildClient()
 
-            // Send request with tools
-            val request = ChatCompletionRequestWithTools(
-                model = OpenRouterApi.DEFAULT_MODEL,
-                messages = messages,
-                tools = Tools.ALL_TOOLS,
-                toolChoice = "auto",
-                stream = false
+            // Build the message list
+            val messages = mutableListOf<ChatCompletionMessageParam>()
+            messages.add(
+                ChatCompletionMessageParam.ofSystem(
+                    ChatCompletionSystemMessageParam.builder()
+                        .content(Prompts.SYSTEM_PROMPT)
+                        .build()
+                )
             )
 
-            val response = toolApi.chatCompletionsWithTools(request)
-            val assistantMessage = response.choices.firstOrNull()?.message
+            // Add conversation history
+            for (msg in conversationHistory) {
+                when (msg.role) {
+                    ChatMessage.ROLE_USER -> messages.add(
+                        ChatCompletionMessageParam.ofUser(
+                            ChatCompletionUserMessageParam.builder()
+                                .content(msg.content)
+                                .build()
+                        )
+                    )
+                    ChatMessage.ROLE_ASSISTANT -> messages.add(
+                        ChatCompletionMessageParam.ofAssistant(
+                            ChatCompletionAssistantMessageParam.builder()
+                                .content(msg.content)
+                                .build()
+                        )
+                    )
+                }
+            }
+
+            // Add the new user message
+            messages.add(
+                ChatCompletionMessageParam.ofUser(
+                    ChatCompletionUserMessageParam.builder()
+                        .content(userMessage)
+                        .build()
+                )
+            )
+
+            // First request - with tool support
+            val params = ChatCompletionCreateParams.builder()
+                .model(DEFAULT_MODEL)
+                .messages(messages)
+                .addTool(WebSearchTool::class.java)
+                .build()
+
+            val response = withContext(Dispatchers.IO) {
+                client.chat().completions().create(params)
+            }
+
+            val choice = response.choices().firstOrNull()
                 ?: return Result.failure(Exception("No response from AI"))
 
-            // Check if the model wants to call a tool
-            val toolCalls = assistantMessage.toolCalls
-            if (!toolCalls.isNullOrEmpty()) {
-                // Process tool calls
-                val toolResults = mutableListOf<ChatMessageWithTools>()
-                
-                // Add the assistant's message with tool calls
-                toolResults.add(assistantMessage)
+            val assistantMessage = choice.message()
+            val toolCalls = assistantMessage.toolCalls()
 
-                for (toolCall in toolCalls) {
-                    val result = when (toolCall.function.name) {
-                        "web_search" -> {
-                            // Parse the arguments
-                            val argsAdapter = moshi.adapter(WebSearchArgs::class.java)
-                            val args = argsAdapter.fromJson(toolCall.function.arguments)
-                            val query = args?.query ?: "search query"
-                            
-                            // Call Perplexity sub-agent
-                            val searchResult = perplexitySubAgent.webSearch(query)
+            if (toolCalls.isPresent && toolCalls.get().isNotEmpty()) {
+                // Process tool calls
+                val followUpBuilder = ChatCompletionCreateParams.builder()
+                    .model(DEFAULT_MODEL)
+                    .messages(messages)
+
+                // Add assistant message (including its tool calls) to conversation
+                followUpBuilder.addMessage(assistantMessage)
+
+                for (toolCall in toolCalls.get()) {
+                    val functionToolCall = toolCall.asFunction()
+                    val function = functionToolCall.function()
+                    val result = when (function.name()) {
+                        "WebSearchTool" -> {
+                            val args = function.arguments(WebSearchTool::class.java)
+                            val searchResult = perplexitySubAgent.webSearch(args.query ?: "")
                             searchResult.getOrElse { "Web search failed: ${it.message}" }
                         }
-                        else -> "Unknown tool: ${toolCall.function.name}"
+                        else -> "Unknown tool: ${function.name()}"
                     }
 
-                    // Add tool result as a message
-                    toolResults.add(ChatMessageWithTools(
-                        role = ChatMessageWithTools.ROLE_TOOL,
-                        content = result,
-                        toolCallId = toolCall.id
-                    ))
+                    followUpBuilder.addMessage(
+                        ChatCompletionToolMessageParam.builder()
+                            .toolCallId(functionToolCall.id())
+                            .contentAsJson(result)
+                            .build()
+                    )
                 }
 
-                // Send follow-up request with tool results
-                val followUpMessages = messages + toolResults
-                val followUpRequest = ChatCompletionRequestWithTools(
-                    model = OpenRouterApi.DEFAULT_MODEL,
-                    messages = followUpMessages,
-                    stream = false
-                )
+                // Follow-up request with tool results
+                val followUpParams = followUpBuilder.build()
 
-                val finalResponse = toolApi.chatCompletionsWithTools(followUpRequest)
-                val finalContent = finalResponse.choices.firstOrNull()?.message?.content
+                val finalResponse = withContext(Dispatchers.IO) {
+                    client.chat().completions().create(followUpParams)
+                }
+
+                val finalContent = finalResponse.choices().firstOrNull()?.message()?.content()?.orElse(null)
                     ?: return Result.failure(Exception("No final response from AI"))
 
                 Result.success(finalContent)
             } else {
                 // No tool calls, return direct response
-                val content = assistantMessage.content
+                val content = assistantMessage.content().orElse(null)
                     ?: return Result.failure(Exception("No response content from AI"))
                 Result.success(content)
             }
-        } catch (e: retrofit2.HttpException) {
-            e.printStackTrace()
-            val errorBody = e.response()?.errorBody()?.string()
-            val errorMessage = try {
-                if (errorBody != null) {
-                    val adapter = moshi.adapter(com.aibyjohannes.alfred.data.api.OpenRouterError::class.java)
-                    val errorResponse = adapter.fromJson(errorBody)
-                    errorResponse?.error?.message ?: "Error: ${e.code()} ${e.message()}"
-                } else {
-                    "Error: ${e.code()} ${e.message()}"
-                }
-            } catch (parseError: Exception) {
-                parseError.printStackTrace()
-                "Error: ${e.code()} ${e.message()}"
-            }
-            Result.failure(Exception(errorMessage))
         } catch (e: Exception) {
             e.printStackTrace()
             Result.failure(e)
         }
     }
 
-    private interface ToolEnabledApi {
-        @POST("chat/completions")
-        suspend fun chatCompletionsWithTools(@Body request: ChatCompletionRequestWithTools): ChatCompletionResponseWithTools
+    @JsonClassDescription("Search the web for current information. Use this when you need up-to-date information about recent events, news, current facts, or anything that requires internet access.")
+    class WebSearchTool {
+        @JsonPropertyDescription("The search query to look up on the web")
+        var query: String? = null
     }
 
-    private data class WebSearchArgs(val query: String?)
+    companion object {
+        const val DEFAULT_MODEL = "google/gemini-2.5-flash-lite"
+        const val PERPLEXITY_MODEL = "perplexity/sonar"
+    }
 }

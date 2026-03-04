@@ -1,7 +1,9 @@
 package com.aibyjohannes.alfred.data.api
 
-import com.squareup.moshi.Json
-
+/**
+ * Simple chat message used for tracking conversation history in the ViewModel.
+ * API communication now uses the official OpenAI Java SDK types.
+ */
 data class ChatMessage(
     val role: String,
     val content: String
@@ -12,31 +14,3 @@ data class ChatMessage(
         const val ROLE_ASSISTANT = "assistant"
     }
 }
-
-data class ChatCompletionRequest(
-    val model: String,
-    val messages: List<ChatMessage>,
-    val stream: Boolean = false
-)
-
-data class ChatCompletionResponse(
-    val id: String?,
-    val choices: List<Choice>
-) {
-    data class Choice(
-        val index: Int,
-        val message: ChatMessage,
-        @Json(name = "finish_reason") val finishReason: String?
-    )
-}
-
-data class OpenRouterError(
-    val error: ErrorDetails?
-) {
-    data class ErrorDetails(
-        val message: String?,
-        val type: String?,
-        val code: String?
-    )
-}
-

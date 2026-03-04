@@ -21,6 +21,7 @@ markwon = "4.6.2"
 mockk = "1.14.7"
 coroutinesTest = "1.10.2"
 archCoreTesting = "2.2.0"
+openaiJava = "4.23.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -50,6 +51,7 @@ markwon-ext-strikethrough = { group = "io.noties.markwon", name = "ext-strikethr
 mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
 coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutinesTest" }
 arch-core-testing = { group = "androidx.arch.core", name = "core-testing", version.ref = "archCoreTesting" }
+openai-java = { group = "com.openai", name = "openai-java", version.ref = "openaiJava" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

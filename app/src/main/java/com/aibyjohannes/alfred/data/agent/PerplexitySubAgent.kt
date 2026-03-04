@@ -1,79 +1,64 @@
 package com.aibyjohannes.alfred.data.agent
 
 import com.aibyjohannes.alfred.data.ApiKeyStore
-import com.aibyjohannes.alfred.data.api.ChatCompletionRequestWithTools
-import com.aibyjohannes.alfred.data.api.ChatMessageWithTools
-import com.aibyjohannes.alfred.data.api.ChatCompletionResponseWithTools
-import com.aibyjohannes.alfred.data.api.OpenRouterApi
-import com.aibyjohannes.alfred.data.api.OpenRouterHeadersInterceptor
-import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
-import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
-import retrofit2.Retrofit
-import retrofit2.converter.moshi.MoshiConverterFactory
-import retrofit2.http.Body
-import retrofit2.http.POST
-import java.util.concurrent.TimeUnit
+import com.aibyjohannes.alfred.data.ChatRepository
+import com.openai.client.OpenAIClient
+import com.openai.client.okhttp.OpenAIOkHttpClient
+import com.openai.models.chat.completions.ChatCompletionCreateParams
+import com.openai.models.chat.completions.ChatCompletionMessageParam
+import com.openai.models.chat.completions.ChatCompletionSystemMessageParam
+import com.openai.models.chat.completions.ChatCompletionUserMessageParam
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Perplexity Sub-Agent for web search capabilities.
- * 
+ *
  * This agent uses Perplexity Sonar via OpenRouter to perform web searches
  * and return current information from the internet.
  */
 class PerplexitySubAgent(private val apiKeyStore: ApiKeyStore) {
 
-    private val moshi = Moshi.Builder()
-        .add(KotlinJsonAdapterFactory())
-        .build()
-
-    private val okHttpClient = OkHttpClient.Builder()
-        .addInterceptor(OpenRouterHeadersInterceptor { apiKeyStore.loadOpenRouterKey() })
-        .addInterceptor(HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
-        })
-        .connectTimeout(90, TimeUnit.SECONDS)
-        .readTimeout(90, TimeUnit.SECONDS)
-        .writeTimeout(90, TimeUnit.SECONDS)
-        .build()
-
-    private val retrofit = Retrofit.Builder()
-        .baseUrl(OpenRouterApi.BASE_URL)
-        .client(okHttpClient)
-        .addConverterFactory(MoshiConverterFactory.create(moshi))
-        .build()
-
-    private val api = retrofit.create(PerplexityApi::class.java)
+    private fun buildClient(): OpenAIClient {
+        return OpenAIOkHttpClient.builder()
+            .apiKey(apiKeyStore.loadOpenRouterKey() ?: "")
+            .baseUrl("https://openrouter.ai/api/v1")
+            .build()
+    }
 
     /**
      * Perform a web search using Perplexity Sonar
-     * 
+     *
      * @param query The search query to look up
      * @return The search results as a formatted string, or an error message
      */
     suspend fun webSearch(query: String): Result<String> {
         return try {
+            val client = buildClient()
+
             val messages = listOf(
-                ChatMessageWithTools(
-                    role = ChatMessageWithTools.ROLE_SYSTEM,
-                    content = "You are a helpful web search assistant. Provide concise, accurate, and up-to-date information based on your web search capabilities. Include relevant sources when available."
+                ChatCompletionMessageParam.ofSystem(
+                    ChatCompletionSystemMessageParam.builder()
+                        .content("You are a helpful web search assistant. Provide concise, accurate, and up-to-date information based on your web search capabilities. Include relevant sources when available.")
+                        .build()
                 ),
-                ChatMessageWithTools(
-                    role = ChatMessageWithTools.ROLE_USER,
-                    content = query
+                ChatCompletionMessageParam.ofUser(
+                    ChatCompletionUserMessageParam.builder()
+                        .content(query)
+                        .build()
                 )
             )
 
-            val request = ChatCompletionRequestWithTools(
-                model = OpenRouterApi.PERPLEXITY_MODEL,
-                messages = messages,
-                stream = false
-            )
+            val params = ChatCompletionCreateParams.builder()
+                .model(ChatRepository.PERPLEXITY_MODEL)
+                .messages(messages)
+                .build()
 
-            val response = api.chatCompletions(request)
+            val response = withContext(Dispatchers.IO) {
+                client.chat().completions().create(params)
+            }
 
-            val content = response.choices.firstOrNull()?.message?.content
+            val content = response.choices().firstOrNull()?.message()?.content()?.orElse(null)
                 ?: return Result.failure(Exception("No response from Perplexity"))
 
             Result.success(content)
@@ -81,10 +66,5 @@ class PerplexitySubAgent(private val apiKeyStore: ApiKeyStore) {
             e.printStackTrace()
             Result.failure(Exception("Web search failed: ${e.message}"))
         }
-    }
-
-    private interface PerplexityApi {
-        @POST("chat/completions")
-        suspend fun chatCompletions(@Body request: ChatCompletionRequestWithTools): ChatCompletionResponseWithTools
     }
 }

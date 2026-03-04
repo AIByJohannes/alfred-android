@@ -68,13 +68,8 @@ dependencies {
     implementation(libs.androidx.navigation.fragment.ktx)
     implementation(libs.androidx.navigation.ui.ktx)
 
-    // Networking
-    implementation(libs.retrofit)
-    implementation(libs.retrofit.moshi)
-    implementation(libs.okhttp)
-    implementation(libs.okhttp.logging)
-    implementation(libs.moshi)
-    implementation(libs.moshi.kotlin)
+    // OpenAI Java SDK (includes OkHttp internally)
+    implementation(libs.openai.java)
 
     // Coroutines
     implementation(libs.coroutines.core)

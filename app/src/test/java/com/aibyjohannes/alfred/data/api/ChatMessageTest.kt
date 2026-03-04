@@ -22,7 +22,7 @@ class ChatMessageTest {
             role = ChatMessage.ROLE_USER,
             content = "Hello, Alfred!"
         )
-        
+
         assertEquals("user", message.role)
         assertEquals("Hello, Alfred!", message.content)
     }
@@ -32,7 +32,7 @@ class ChatMessageTest {
         val message1 = ChatMessage(role = "user", content = "Hello")
         val message2 = ChatMessage(role = "user", content = "Hello")
         val message3 = ChatMessage(role = "assistant", content = "Hello")
-        
+
         assertEquals(message1, message2)
         assertNotEquals(message1, message3)
     }
@@ -41,7 +41,7 @@ class ChatMessageTest {
     fun `ChatMessage copy works correctly`() {
         val original = ChatMessage(role = "user", content = "Original")
         val copied = original.copy(content = "Modified")
-        
+
         assertEquals("user", copied.role)
         assertEquals("Modified", copied.content)
         assertEquals("Original", original.content)
