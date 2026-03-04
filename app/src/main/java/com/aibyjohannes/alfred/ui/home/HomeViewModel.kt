@@ -11,15 +11,26 @@ import com.aibyjohannes.alfred.data.api.ChatMessage
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
+enum class RenderMode {
+    PLAIN,
+    MARKDOWN
+}
+
 data class UiChatMessage(
     val id: Long = 0L,
     val content: String,
     val isUser: Boolean,
     val isError: Boolean = false,
-    val isStreaming: Boolean = false
+    val isStreaming: Boolean = false,
+    val renderMode: RenderMode = RenderMode.MARKDOWN,
+    val showTypingDots: Boolean = false
 )
 
 class HomeViewModel : ViewModel() {
+    companion object {
+        private const val STREAM_FLUSH_INTERVAL_MS = 60L
+        private const val STREAM_FLUSH_CHAR_THRESHOLD = 24
+    }
 
     private var repository: ChatRepository? = null
     private var apiKeyStore: ApiKeyStore? = null
@@ -78,7 +89,9 @@ class HomeViewModel : ViewModel() {
                 id = assistantMessageId,
                 content = "",
                 isUser = false,
-                isStreaming = true
+                isStreaming = true,
+                renderMode = RenderMode.PLAIN,
+                showTypingDots = false
             )
         )
 
@@ -86,23 +99,38 @@ class HomeViewModel : ViewModel() {
 
         viewModelScope.launch {
             val userHistoryMessage = ChatMessage(role = ChatMessage.ROLE_USER, content = userInput)
-            val streamedAssistantContent = StringBuilder()
+            val visibleAssistantContent = StringBuilder()
+            val pendingAssistantContent = StringBuilder()
+            var lastFlushAtMs = 0L
 
             try {
                 repo.streamMessage(userInput, conversationHistory).collect { event ->
                     when (event) {
                         is ChatStreamEvent.Delta -> {
-                            streamedAssistantContent.append(event.textChunk)
-                            updateUiMessage(
-                                messageId = assistantMessageId,
-                                content = streamedAssistantContent.toString(),
-                                isError = false,
-                                isStreaming = true
-                            )
+                            pendingAssistantContent.append(event.textChunk)
+                            val now = System.currentTimeMillis()
+                            val shouldFlush = pendingAssistantContent.length >= STREAM_FLUSH_CHAR_THRESHOLD ||
+                                event.textChunk.contains('\n') ||
+                                (now - lastFlushAtMs) >= STREAM_FLUSH_INTERVAL_MS
+
+                            if (shouldFlush) {
+                                lastFlushAtMs = flushPendingAssistantText(
+                                    messageId = assistantMessageId,
+                                    visibleContent = visibleAssistantContent,
+                                    pendingContent = pendingAssistantContent,
+                                    timestampMs = now
+                                )
+                            }
                         }
 
                         is ChatStreamEvent.Completed -> {
                             val finalResponse = event.result.content
+                            flushPendingAssistantText(
+                                messageId = assistantMessageId,
+                                visibleContent = visibleAssistantContent,
+                                pendingContent = pendingAssistantContent,
+                                timestampMs = System.currentTimeMillis()
+                            )
                             conversationHistory.add(userHistoryMessage)
                             conversationHistory.add(
                                 ChatMessage(
@@ -115,7 +143,9 @@ class HomeViewModel : ViewModel() {
                                 messageId = assistantMessageId,
                                 content = finalResponse,
                                 isError = false,
-                                isStreaming = false
+                                isStreaming = false,
+                                renderMode = RenderMode.MARKDOWN,
+                                showTypingDots = false
                             )
                         }
                     }
@@ -126,7 +156,9 @@ class HomeViewModel : ViewModel() {
                     messageId = assistantMessageId,
                     content = errorMessage,
                     isError = true,
-                    isStreaming = false
+                    isStreaming = false,
+                    renderMode = RenderMode.PLAIN,
+                    showTypingDots = false
                 )
 
                 if (!replaced) {
@@ -135,7 +167,8 @@ class HomeViewModel : ViewModel() {
                             id = assistantMessageId,
                             content = errorMessage,
                             isUser = false,
-                            isError = true
+                            isError = true,
+                            renderMode = RenderMode.PLAIN
                         )
                     )
                 }
@@ -163,7 +196,9 @@ class HomeViewModel : ViewModel() {
         messageId: Long,
         content: String,
         isError: Boolean,
-        isStreaming: Boolean
+        isStreaming: Boolean,
+        renderMode: RenderMode,
+        showTypingDots: Boolean
     ): Boolean {
         val updatedMessages = _messages.value.orEmpty().toMutableList()
         val index = updatedMessages.indexOfFirst { it.id == messageId }
@@ -175,9 +210,34 @@ class HomeViewModel : ViewModel() {
         updatedMessages[index] = existing.copy(
             content = content,
             isError = isError,
-            isStreaming = isStreaming
+            isStreaming = isStreaming,
+            renderMode = renderMode,
+            showTypingDots = showTypingDots
         )
         _messages.value = updatedMessages
         return true
+    }
+
+    private fun flushPendingAssistantText(
+        messageId: Long,
+        visibleContent: StringBuilder,
+        pendingContent: StringBuilder,
+        timestampMs: Long
+    ): Long {
+        if (pendingContent.isEmpty()) {
+            return timestampMs
+        }
+
+        visibleContent.append(pendingContent)
+        pendingContent.clear()
+        updateUiMessage(
+            messageId = messageId,
+            content = visibleContent.toString(),
+            isError = false,
+            isStreaming = true,
+            renderMode = RenderMode.PLAIN,
+            showTypingDots = false
+        )
+        return timestampMs
     }
 }

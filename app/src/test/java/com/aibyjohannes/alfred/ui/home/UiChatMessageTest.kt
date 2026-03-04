@@ -21,6 +21,8 @@ class UiChatMessageTest {
         assertTrue(message.isUser)
         assertFalse(message.isError) // Default should be false
         assertFalse(message.isStreaming) // Default should be false
+        assertEquals(RenderMode.MARKDOWN, message.renderMode)
+        assertFalse(message.showTypingDots)
     }
 
     @Test

@@ -27,6 +27,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.lifecycle.lifecycleScope
+import kotlin.math.max
 
 class HomeFragment : Fragment() {
 
@@ -36,6 +37,7 @@ class HomeFragment : Fragment() {
     private lateinit var homeViewModel: HomeViewModel
     private lateinit var chatAdapter: ChatAdapter
     private var typingJob: Job? = null
+    private var lastMessageCount = 0
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -223,10 +225,12 @@ class HomeFragment : Fragment() {
             }
 
             chatAdapter.submitList(messages) {
-                // Scroll to bottom when new message is added
-                if (messages.isNotEmpty()) {
+                val hasNewItems = messages.size > lastMessageCount
+                val shouldAutoScroll = hasNewItems || isNearBottom()
+                if (messages.isNotEmpty() && shouldAutoScroll) {
                     binding.messagesRecyclerView.scrollToPosition(messages.size - 1)
                 }
+                lastMessageCount = messages.size
             }
         }
 
@@ -249,5 +253,13 @@ class HomeFragment : Fragment() {
     override fun onDestroyView() {
         super.onDestroyView()
         _binding = null
+    }
+
+    private fun isNearBottom(): Boolean {
+        val layoutManager = binding.messagesRecyclerView.layoutManager as? LinearLayoutManager
+            ?: return true
+        val lastVisible = layoutManager.findLastVisibleItemPosition()
+        val thresholdIndex = max(chatAdapter.itemCount - 2, 0)
+        return lastVisible >= thresholdIndex
     }
 }

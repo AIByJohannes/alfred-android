@@ -38,7 +38,6 @@ class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(Me
     class MessageViewHolder(
         private val binding: ItemChatMessageBinding
     ) : RecyclerView.ViewHolder(binding.root) {
-
         private val markwon: Markwon = Markwon.builder(binding.root.context)
             .usePlugin(LinkifyPlugin.create())
             .usePlugin(TablePlugin.create(binding.root.context))
@@ -46,8 +45,11 @@ class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(Me
             .build()
 
         fun bind(message: UiChatMessage) {
-            // Apply Markdown rendering
-            markwon.setMarkdown(binding.messageText, message.content)
+            if (message.renderMode == RenderMode.PLAIN) {
+                binding.messageText.text = message.content
+            } else {
+                markwon.setMarkdown(binding.messageText, message.content)
+            }
 
             val context = binding.root.context
             val params = binding.messageCard.layoutParams as ConstraintLayout.LayoutParams
