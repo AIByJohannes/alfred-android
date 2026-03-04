@@ -36,7 +36,11 @@ class ApiKeyStore(context: Context) {
 
     fun loadOpenRouterKey(): String? {
         return try {
-            prefs.getString(KEY_OPENROUTER_API_KEY, null)
+            val key = prefs.getString(KEY_OPENROUTER_API_KEY, null)
+            if (key.isNullOrBlank() && com.aibyjohannes.alfred.BuildConfig.OPENROUTER_API_KEY.isNotBlank()) {
+                return com.aibyjohannes.alfred.BuildConfig.OPENROUTER_API_KEY
+            }
+            key
         } catch (e: Exception) {
             Log.e(TAG, "Error loading API key", e)
             null
