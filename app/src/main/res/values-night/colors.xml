@@ -1,0 +1,3 @@
+<resources>
+    <color name="top_bar_bg">@color/palette_background</color>
+</resources>

@@ -7,6 +7,7 @@
     <!-- App-wide semantic colors -->
     <color name="text_primary">@color/palette_foreground</color>
     <color name="window_background">@color/palette_background</color>
+    <color name="top_bar_bg">@color/palette_blue</color>
 
     <!-- Chat message colors -->
     <!-- User: Blue -->
