@@ -194,7 +194,7 @@ class ChatRepository(private val apiKeyStore: ApiKeyStore) {
     }
 
     companion object {
-        const val DEFAULT_MODEL = "google/gemini-2.5-flash-lite"
+        const val DEFAULT_MODEL = "google/gemini-3.1-flash-lite-preview"
         const val PERPLEXITY_MODEL = "perplexity/sonar"
     }
 }
