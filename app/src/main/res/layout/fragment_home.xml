@@ -82,11 +82,10 @@
         android:layout_marginBottom="8dp" />
 
     <!-- Input Area -->
-    <LinearLayout
+    <FrameLayout
         android:id="@+id/input_layout"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
         android:padding="8dp"
         android:background="?attr/colorSurface"
         android:elevation="4dp"
@@ -95,10 +94,8 @@
         app:layout_constraintEnd_toEndOf="parent">
 
         <com.google.android.material.textfield.TextInputLayout
-            android:layout_width="0dp"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:layout_marginEnd="8dp"
             app:boxCornerRadiusTopStart="24dp"
             app:boxCornerRadiusTopEnd="24dp"
             app:boxCornerRadiusBottomStart="24dp"
@@ -112,27 +109,30 @@
                 android:hint="@string/message_hint"
                 android:inputType="textMultiLine"
                 android:maxLines="4"
+                android:paddingEnd="56dp"
                 android:imeOptions="actionSend" />
 
         </com.google.android.material.textfield.TextInputLayout>
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/send_button"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="bottom"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_gravity="bottom|end"
+            android:layout_marginEnd="8dp"
+            android:layout_marginBottom="8dp"
             android:contentDescription="@string/send"
             android:insetLeft="0dp"
             android:insetTop="0dp"
             android:insetRight="0dp"
             android:insetBottom="0dp"
             android:minWidth="0dp"
-            android:padding="12dp"
-            app:cornerRadius="24dp"
+            android:padding="8dp"
+            app:cornerRadius="20dp"
             app:iconPadding="0dp"
             app:icon="@android:drawable/ic_menu_send"
             app:iconGravity="textStart" />
 
-    </LinearLayout>
+    </FrameLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
