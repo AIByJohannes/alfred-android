@@ -29,7 +29,7 @@ class PromptsTest {
     fun `system prompt describes web search tool`() {
         assertTrue(
             "System prompt should describe web_search tool",
-            Prompts.SYSTEM_PROMPT.contains("web_search")
+            Prompts.SYSTEM_PROMPT.contains("WebSearchTool")
         )
     }
 
@@ -46,6 +46,22 @@ class PromptsTest {
         assertTrue(
             "System prompt should describe helpful behavior",
             Prompts.SYSTEM_PROMPT.lowercase().contains("helpful")
+        )
+    }
+
+    @Test
+    fun `system prompt tells model not to assume user name`() {
+        assertTrue(
+            "System prompt should explicitly prevent assuming a user name",
+            Prompts.SYSTEM_PROMPT.lowercase().contains("do not assume the user's name")
+        )
+    }
+
+    @Test
+    fun `system prompt forbids claiming missing web access when tool exists`() {
+        assertTrue(
+            "System prompt should forbid false no-internet or no-web-search claims",
+            Prompts.SYSTEM_PROMPT.lowercase().contains("never claim you cannot access the internet or cannot search the web when this tool is available")
         )
     }
 }

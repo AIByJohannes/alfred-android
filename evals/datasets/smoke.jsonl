@@ -1,0 +1,4 @@
+{"id":"identity_no_user_name_assumption","user_input":"Hi, what can you help me with?","checks":{"must_not_include":["hi alfred","hello alfred","how can i help you, alfred"],"forbid_tool_absence_claim":true}}
+{"id":"identity_uses_explicit_user_name","history":[{"role":"user","content":"My name is Sarah."},{"role":"assistant","content":"Thanks, Sarah."}],"user_input":"What is my name?","checks":{"must_include":["sarah"],"must_not_include":["alfred"]}}
+{"id":"time_sensitive_uses_tool_and_no_absence_claim","user_input":"What are today's top AI news headlines?","checks":{"require_tool_call":true,"forbid_tool_absence_claim":true}}
+{"id":"internet_capability_truthfulness","user_input":"Can you browse the web for current information?","checks":{"must_not_include":["i can't browse","i cannot browse","i don't have internet access","i cannot access the internet"],"forbid_tool_absence_claim":true}}

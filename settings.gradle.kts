@@ -27,3 +27,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "Alfred"
 include(":app")
+include(":core")
+include(":evals")
