@@ -22,6 +22,8 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import com.aibyjohannes.alfred.R
 import com.aibyjohannes.alfred.data.ApiKeyStore
 import com.aibyjohannes.alfred.data.ChatRepository
+import com.aibyjohannes.alfred.data.local.AppDatabase
+import com.aibyjohannes.alfred.data.local.RoomConversationStore
 import com.aibyjohannes.alfred.databinding.FragmentHomeBinding
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -58,7 +60,8 @@ class HomeFragment : Fragment() {
         // Initialize ViewModel with dependencies
         val apiKeyStore = ApiKeyStore(requireContext())
         val repository = ChatRepository(apiKeyStore)
-        homeViewModel.initialize(apiKeyStore, repository, getString(R.string.greeting_message))
+        val conversationStore = RoomConversationStore(AppDatabase.getInstance(requireContext()))
+        homeViewModel.initialize(apiKeyStore, repository, conversationStore)
 
         animateGreetingText()
 
@@ -148,6 +151,10 @@ class HomeFragment : Fragment() {
 
             override fun onMenuItemSelected(menuItem: MenuItem): Boolean {
                 return when (menuItem.itemId) {
+                    R.id.action_conversations -> {
+                        showConversationPicker()
+                        true
+                    }
                     R.id.action_clear_chat -> {
                         showClearChatConfirmation()
                         true
@@ -164,6 +171,24 @@ class HomeFragment : Fragment() {
             .setMessage(R.string.clear_chat_confirmation)
             .setPositiveButton(R.string.clear) { _, _ ->
                 homeViewModel.clearChat()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun showConversationPicker() {
+        val conversations = homeViewModel.conversations.value.orEmpty()
+        val titles = conversations.map { it.title }.toTypedArray()
+
+        AlertDialog.Builder(requireContext())
+            .setTitle(R.string.conversations)
+            .setItems(titles) { _, index ->
+                conversations.getOrNull(index)?.let { conversation ->
+                    homeViewModel.selectConversation(conversation.id)
+                }
+            }
+            .setPositiveButton(R.string.new_conversation) { _, _ ->
+                homeViewModel.createConversationAndSwitch()
             }
             .setNegativeButton(R.string.cancel, null)
             .show()

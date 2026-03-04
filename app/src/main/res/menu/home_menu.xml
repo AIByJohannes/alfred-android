@@ -2,6 +2,10 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <item
+        android:id="@+id/action_conversations"
+        android:title="@string/conversations"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/action_clear_chat"
         android:icon="@drawable/ic_delete"
         android:title="@string/clear_chat"

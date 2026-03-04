@@ -8,6 +8,8 @@ import com.aibyjohannes.alfred.core.model.ChatStreamEvent
 import com.aibyjohannes.alfred.data.ApiKeyStore
 import com.aibyjohannes.alfred.data.ChatRepository
 import com.aibyjohannes.alfred.data.api.ChatMessage
+import com.aibyjohannes.alfred.data.local.ConversationStore
+import com.aibyjohannes.alfred.data.local.ConversationSummary
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
@@ -26,6 +28,11 @@ data class UiChatMessage(
     val showTypingDots: Boolean = false
 )
 
+data class UiConversation(
+    val id: Long,
+    val title: String
+)
+
 class HomeViewModel : ViewModel() {
     companion object {
         private const val STREAM_FLUSH_INTERVAL_MS = 60L
@@ -34,9 +41,16 @@ class HomeViewModel : ViewModel() {
 
     private var repository: ChatRepository? = null
     private var apiKeyStore: ApiKeyStore? = null
+    private var conversationStore: ConversationStore? = null
 
     private val _messages = MutableLiveData<List<UiChatMessage>>(emptyList())
     val messages: LiveData<List<UiChatMessage>> = _messages
+
+    private val _conversations = MutableLiveData<List<UiConversation>>(emptyList())
+    val conversations: LiveData<List<UiConversation>> = _conversations
+
+    private val _activeConversationId = MutableLiveData<Long?>(null)
+    val activeConversationId: LiveData<Long?> = _activeConversationId
 
     private val _isLoading = MutableLiveData(false)
     val isLoading: LiveData<Boolean> = _isLoading
@@ -46,22 +60,15 @@ class HomeViewModel : ViewModel() {
 
     // Keep track of conversation history for context
     private val conversationHistory = mutableListOf<ChatMessage>()
+    private var currentConversationId: Long? = null
     private var nextMessageId = 1L
 
-    fun initialize(apiKeyStore: ApiKeyStore, repository: ChatRepository, greetingMessage: String) {
+    fun initialize(apiKeyStore: ApiKeyStore, repository: ChatRepository, conversationStore: ConversationStore) {
         this.apiKeyStore = apiKeyStore
         this.repository = repository
+        this.conversationStore = conversationStore
         checkApiKey()
-
-        // Initialize conversation with greeting message
-        if (conversationHistory.isEmpty()) {
-            conversationHistory.add(
-                ChatMessage(
-                    role = ChatMessage.ROLE_ASSISTANT,
-                    content = greetingMessage
-                )
-            )
-        }
+        loadOrCreateActiveConversation()
     }
 
     fun checkApiKey() {
@@ -72,6 +79,8 @@ class HomeViewModel : ViewModel() {
         if (userInput.isBlank()) return
 
         val repo = repository ?: return
+        val store = conversationStore ?: return
+        val conversationId = currentConversationId ?: return
 
         val userMessageId = nextId()
         val assistantMessageId = nextId()
@@ -104,7 +113,7 @@ class HomeViewModel : ViewModel() {
             var lastFlushAtMs = 0L
 
             try {
-                repo.streamMessage(userInput, conversationHistory).collect { event ->
+                repo.streamMessage(userInput, conversationHistory.toList()).collect { event ->
                     when (event) {
                         is ChatStreamEvent.Delta -> {
                             pendingAssistantContent.append(event.textChunk)
@@ -138,6 +147,17 @@ class HomeViewModel : ViewModel() {
                                     content = finalResponse
                                 )
                             )
+                            store.appendMessage(
+                                conversationId = conversationId,
+                                role = ChatMessage.ROLE_USER,
+                                content = userInput
+                            )
+                            store.appendMessage(
+                                conversationId = conversationId,
+                                role = ChatMessage.ROLE_ASSISTANT,
+                                content = finalResponse
+                            )
+                            refreshConversationList()
 
                             updateUiMessage(
                                 messageId = assistantMessageId,
@@ -179,9 +199,80 @@ class HomeViewModel : ViewModel() {
     }
 
     fun clearChat() {
-        _messages.value = emptyList()
+        val store = conversationStore ?: return
+        val activeId = currentConversationId ?: return
+        viewModelScope.launch {
+            store.deleteConversation(activeId)
+            val newConversation = store.createConversation()
+            loadConversation(newConversation)
+            refreshConversationList()
+        }
+    }
+
+    fun createConversationAndSwitch() {
+        val store = conversationStore ?: return
+        viewModelScope.launch {
+            val newConversation = store.createConversation()
+            loadConversation(newConversation)
+            refreshConversationList()
+        }
+    }
+
+    fun selectConversation(conversationId: Long) {
+        val store = conversationStore ?: return
+        viewModelScope.launch {
+            val selectedConversation = store.switchActiveConversation(conversationId)
+            loadConversation(selectedConversation)
+            refreshConversationList()
+        }
+    }
+
+    private fun loadOrCreateActiveConversation() {
+        val store = conversationStore ?: return
+        viewModelScope.launch {
+            val activeConversation = store.getOrCreateActiveConversation()
+            loadConversation(activeConversation)
+            refreshConversationList()
+        }
+    }
+
+    private suspend fun loadConversation(conversation: ConversationSummary) {
+        val store = conversationStore ?: return
+        currentConversationId = conversation.id
+        _activeConversationId.postValue(conversation.id)
+
+        val storedMessages = store.loadMessages(conversation.id)
+        val uiMessages = storedMessages.map { stored ->
+            UiChatMessage(
+                id = stored.id,
+                content = stored.content,
+                isUser = stored.role == ChatMessage.ROLE_USER
+            )
+        }
+        _messages.postValue(uiMessages)
+
         conversationHistory.clear()
-        nextMessageId = 1L
+        conversationHistory.addAll(
+            storedMessages.map { stored ->
+                ChatMessage(
+                    role = stored.role,
+                    content = stored.content
+                )
+            }
+        )
+
+        nextMessageId = (uiMessages.maxOfOrNull { it.id } ?: 0L) + 1L
+    }
+
+    private suspend fun refreshConversationList() {
+        val store = conversationStore ?: return
+        val list = store.listConversations().map { summary ->
+            UiConversation(
+                id = summary.id,
+                title = summary.title?.takeIf { it.isNotBlank() } ?: "Conversation ${summary.id}"
+            )
+        }
+        _conversations.postValue(list)
     }
 
     private fun nextId(): Long = nextMessageId++
