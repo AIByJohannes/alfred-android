@@ -99,6 +99,10 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:layout_marginEnd="8dp"
+            app:boxCornerRadiusTopStart="24dp"
+            app:boxCornerRadiusTopEnd="24dp"
+            app:boxCornerRadiusBottomStart="24dp"
+            app:boxCornerRadiusBottomEnd="24dp"
             style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox">
 
             <com.google.android.material.textfield.TextInputEditText
@@ -124,6 +128,7 @@
             android:insetBottom="0dp"
             android:minWidth="0dp"
             android:padding="12dp"
+            app:cornerRadius="24dp"
             app:iconPadding="0dp"
             app:icon="@android:drawable/ic_menu_send"
             app:iconGravity="textStart" />
