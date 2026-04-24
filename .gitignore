@@ -10,6 +10,7 @@
 .DS_Store
 /build
 /core/build/
+/core/bin/
 /captures
 .externalNativeBuild
 .cxx
@@ -17,3 +18,4 @@ local.properties
 .idea/
 evals/reports/
 evals/build/
+evals/bin/
