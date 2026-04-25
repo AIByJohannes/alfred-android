@@ -30,7 +30,8 @@ data class UiChatMessage(
 
 data class UiConversation(
     val id: Long,
-    val title: String
+    val title: String,
+    val updatedAtEpochMs: Long
 )
 
 class HomeViewModel : ViewModel() {
@@ -269,7 +270,8 @@ class HomeViewModel : ViewModel() {
         val list = store.listConversations().map { summary ->
             UiConversation(
                 id = summary.id,
-                title = summary.title?.takeIf { it.isNotBlank() } ?: "Conversation ${summary.id}"
+                title = summary.title?.takeIf { it.isNotBlank() } ?: "Conversation ${summary.id}",
+                updatedAtEpochMs = summary.updatedAtEpochMs
             )
         }
         _conversations.postValue(list)

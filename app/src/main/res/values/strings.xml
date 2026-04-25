@@ -18,7 +18,10 @@
     <string name="clear_chat">Clear Chat</string>
     <string name="clear_chat_confirmation">Are you sure you want to clear the conversation history?</string>
     <string name="conversations">Conversations</string>
+    <string name="open_conversations">Open conversations</string>
+    <string name="chats">Chats</string>
     <string name="new_conversation">New Conversation</string>
+    <string name="active_conversation">Active conversation</string>
     <string name="clear">Clear</string>
     <string name="cancel">Cancel</string>
 

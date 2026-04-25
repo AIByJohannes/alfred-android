@@ -14,7 +14,9 @@ import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import androidx.core.view.MenuHost
 import androidx.core.view.MenuProvider
+import androidx.core.view.GravityCompat
 import androidx.core.view.isVisible
+import androidx.drawerlayout.widget.DrawerLayout
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
@@ -38,8 +40,11 @@ class HomeFragment : Fragment() {
 
     private lateinit var homeViewModel: HomeViewModel
     private lateinit var chatAdapter: ChatAdapter
+    private lateinit var inlineConversationAdapter: ConversationAdapter
+    private lateinit var drawerConversationAdapter: ConversationAdapter
     private var typingJob: Job? = null
     private var lastMessageCount = 0
+    private var showInlineConversationPane = false
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -52,6 +57,7 @@ class HomeFragment : Fragment() {
         val root: View = binding.root
 
         setupRecyclerView()
+        setupConversationSidebars()
         setupInputHandling()
         setupObservers()
         setupMenu()
@@ -149,10 +155,14 @@ class HomeFragment : Fragment() {
                 menuInflater.inflate(R.menu.home_menu, menu)
             }
 
+            override fun onPrepareMenu(menu: Menu) {
+                menu.findItem(R.id.action_open_conversations)?.isVisible = !showInlineConversationPane
+            }
+
             override fun onMenuItemSelected(menuItem: MenuItem): Boolean {
                 return when (menuItem.itemId) {
-                    R.id.action_conversations -> {
-                        showConversationPicker()
+                    R.id.action_open_conversations -> {
+                        binding.homeDrawerLayout.openDrawer(GravityCompat.START)
                         true
                     }
                     R.id.action_clear_chat -> {
@@ -176,24 +186,6 @@ class HomeFragment : Fragment() {
             .show()
     }
 
-    private fun showConversationPicker() {
-        val conversations = homeViewModel.conversations.value.orEmpty()
-        val titles = conversations.map { it.title }.toTypedArray()
-
-        AlertDialog.Builder(requireContext())
-            .setTitle(R.string.conversations)
-            .setItems(titles) { _, index ->
-                conversations.getOrNull(index)?.let { conversation ->
-                    homeViewModel.selectConversation(conversation.id)
-                }
-            }
-            .setPositiveButton(R.string.new_conversation) { _, _ ->
-                homeViewModel.createConversationAndSwitch()
-            }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
-    }
-
     private fun setupRecyclerView() {
         chatAdapter = ChatAdapter()
         binding.messagesRecyclerView.apply {
@@ -201,6 +193,46 @@ class HomeFragment : Fragment() {
                 stackFromEnd = true
             }
             adapter = chatAdapter
+        }
+    }
+
+    private fun setupConversationSidebars() {
+        showInlineConversationPane = resources.getBoolean(R.bool.show_inline_conversation_pane)
+        binding.inlineConversationPane.isVisible = showInlineConversationPane
+        binding.inlineConversationDivider.isVisible = showInlineConversationPane
+        binding.drawerConversationPane.isVisible = !showInlineConversationPane
+        binding.homeDrawerLayout.setDrawerLockMode(
+            if (showInlineConversationPane) {
+                DrawerLayout.LOCK_MODE_LOCKED_CLOSED
+            } else {
+                DrawerLayout.LOCK_MODE_UNLOCKED
+            },
+            GravityCompat.START
+        )
+
+        inlineConversationAdapter = ConversationAdapter { conversation ->
+            homeViewModel.selectConversation(conversation.id)
+        }
+        drawerConversationAdapter = ConversationAdapter { conversation ->
+            homeViewModel.selectConversation(conversation.id)
+            closeConversationDrawerIfNeeded()
+        }
+
+        binding.inlineConversationsRecyclerView.apply {
+            layoutManager = LinearLayoutManager(context)
+            adapter = inlineConversationAdapter
+        }
+        binding.drawerConversationsRecyclerView.apply {
+            layoutManager = LinearLayoutManager(context)
+            adapter = drawerConversationAdapter
+        }
+
+        binding.inlineNewConversationButton.setOnClickListener {
+            homeViewModel.createConversationAndSwitch()
+        }
+        binding.drawerNewConversationButton.setOnClickListener {
+            homeViewModel.createConversationAndSwitch()
+            closeConversationDrawerIfNeeded()
         }
     }
 
@@ -228,6 +260,16 @@ class HomeFragment : Fragment() {
     }
 
     private fun setupObservers() {
+        homeViewModel.conversations.observe(viewLifecycleOwner) { conversations ->
+            inlineConversationAdapter.submitList(conversations)
+            drawerConversationAdapter.submitList(conversations)
+        }
+
+        homeViewModel.activeConversationId.observe(viewLifecycleOwner) { activeConversationId ->
+            inlineConversationAdapter.setActiveConversationId(activeConversationId)
+            drawerConversationAdapter.setActiveConversationId(activeConversationId)
+        }
+
         homeViewModel.messages.observe(viewLifecycleOwner) { messages ->
             // Animate orb logic
             if (messages.isNotEmpty() && !isOrbAtTop) {
@@ -286,5 +328,11 @@ class HomeFragment : Fragment() {
         val lastVisible = layoutManager.findLastVisibleItemPosition()
         val thresholdIndex = max(chatAdapter.itemCount - 2, 0)
         return lastVisible >= thresholdIndex
+    }
+
+    private fun closeConversationDrawerIfNeeded() {
+        if (!showInlineConversationPane && binding.homeDrawerLayout.isDrawerOpen(GravityCompat.START)) {
+            binding.homeDrawerLayout.closeDrawer(GravityCompat.START)
+        }
     }
 }

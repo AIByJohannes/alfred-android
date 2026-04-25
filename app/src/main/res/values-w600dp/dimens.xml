@@ -1,3 +1,5 @@
 <resources>
     <dimen name="fab_margin">48dp</dimen>
+    <dimen name="conversation_pane_width">300dp</dimen>
+    <dimen name="conversation_drawer_width">304dp</dimen>
 </resources>
