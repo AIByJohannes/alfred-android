@@ -5,6 +5,10 @@ import com.aibyjohannes.alfred.core.model.ChatStreamEvent
 import com.aibyjohannes.alfred.core.model.ChatTurnResult
 import com.aibyjohannes.alfred.core.model.CoreChatMessage
 import com.aibyjohannes.alfred.core.model.ToolCallTrace
+import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchClient
+import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchRequest
+import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchResult
+import com.aibyjohannes.alfred.core.search.LocalKnowledgeSource
 import com.aibyjohannes.alfred.core.search.WebSearchClient
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.openai.client.OpenAIClient
@@ -30,7 +34,8 @@ class OpenRouterChatEngine(
     private val apiKey: String,
     private val model: String = DEFAULT_MODEL,
     private val prompt: String = SystemPrompts.SYSTEM_PROMPT,
-    private val webSearchClient: WebSearchClient
+    private val webSearchClient: WebSearchClient,
+    private val localKnowledgeSearchClient: LocalKnowledgeSearchClient? = null
 ) : ChatEngine {
     private val objectMapper = ObjectMapper()
 
@@ -77,6 +82,7 @@ class OpenRouterChatEngine(
                 .model(model)
                 .messages(messages)
                 .addFunctionTool(buildWebSearchFunctionDefinition())
+                .addFunctionTool(buildLocalKnowledgeSearchFunctionDefinition())
                 .build()
 
             val initialPass = streamSingleCompletion(client, initialParams) { delta ->
@@ -108,12 +114,31 @@ class OpenRouterChatEngine(
                             }
                         }
 
+                        LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME -> {
+                            val client = localKnowledgeSearchClient
+                            if (client == null) {
+                                "Local knowledge search failed: tool is not configured."
+                            } else {
+                                val request = extractLocalKnowledgeSearchRequest(arguments)
+                                if (request == null) {
+                                    "Local knowledge search failed: missing required 'query' argument."
+                                } else {
+                                    val searchResult = client.search(request)
+                                    searchResult.fold(
+                                        onSuccess = { formatLocalKnowledgeResults(it) },
+                                        onFailure = { "Local knowledge search failed: ${it.message}" }
+                                    )
+                                }
+                            }
+                        }
+
                         else -> {
                             "Unknown tool: ${function.name()}"
                         }
                     }
 
                     val isError = result.startsWith("Web search failed", ignoreCase = true) ||
+                        result.startsWith("Local knowledge search failed", ignoreCase = true) ||
                         result.startsWith("Unknown tool", ignoreCase = true)
                     traces.add(
                         ToolCallTrace(
@@ -251,6 +276,37 @@ class OpenRouterChatEngine(
             .build()
     }
 
+    private fun buildLocalKnowledgeSearchFunctionDefinition(): FunctionDefinition {
+        val properties = mapOf(
+            "query" to mapOf(
+                "type" to "string",
+                "description" to "Search query for prior local sessions and memories"
+            ),
+            "limit" to mapOf(
+                "type" to "integer",
+                "description" to "Maximum number of local results to return. Defaults to 5 and is capped at 10."
+            ),
+            "source" to mapOf(
+                "type" to "string",
+                "description" to "Which local source to search: all, sessions, or memories",
+                "enum" to listOf("all", "sessions", "memories")
+            )
+        )
+
+        val parameters = FunctionParameters.builder()
+            .putAdditionalProperty("type", JsonValue.from("object"))
+            .putAdditionalProperty("properties", JsonValue.from(properties))
+            .putAdditionalProperty("required", JsonValue.from(listOf("query")))
+            .putAdditionalProperty("additionalProperties", JsonValue.from(false))
+            .build()
+
+        return FunctionDefinition.builder()
+            .name(LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME)
+            .description("Search previous local sessions and memories for user-specific recall.")
+            .parameters(parameters)
+            .build()
+    }
+
     private fun extractWebSearchQuery(argumentsJson: String): String? {
         return try {
             val node = objectMapper.readTree(argumentsJson)
@@ -260,8 +316,54 @@ class OpenRouterChatEngine(
         }
     }
 
+    private fun extractLocalKnowledgeSearchRequest(argumentsJson: String): LocalKnowledgeSearchRequest? {
+        return try {
+            val node = objectMapper.readTree(argumentsJson)
+            val query = node.path("query").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+                ?: return null
+            val limit = if (node.has("limit")) node.path("limit").asInt(5) else 5
+            val source = when (node.path("source").asText("all").lowercase()) {
+                "sessions" -> LocalKnowledgeSource.SESSIONS
+                "memories" -> LocalKnowledgeSource.MEMORIES
+                else -> LocalKnowledgeSource.ALL
+            }
+            LocalKnowledgeSearchRequest(
+                query = query,
+                limit = limit.coerceIn(1, 10),
+                source = source
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun formatLocalKnowledgeResults(results: List<LocalKnowledgeSearchResult>): String {
+        if (results.isEmpty()) {
+            return "No local sessions or memories matched the query."
+        }
+
+        return buildString {
+            appendLine("Local knowledge search results:")
+            results.forEachIndexed { index, result ->
+                append(index + 1)
+                append(". [")
+                append(result.source.name.lowercase())
+                append("] ")
+                append(result.title)
+                append(" (timestampEpochMs=")
+                append(result.timestampEpochMs)
+                result.conversationId?.let { append(", conversationId=$it") }
+                result.messageId?.let { append(", messageId=$it") }
+                result.memoryId?.let { append(", memoryId=$it") }
+                appendLine(")")
+                appendLine(result.snippet)
+            }
+        }.trim()
+    }
+
     companion object {
         const val DEFAULT_MODEL = "google/gemini-3.1-flash-lite-preview"
         const val WEB_SEARCH_FUNCTION_NAME = "WebSearchTool"
+        const val LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME = "SearchLocalKnowledgeTool"
     }
 }

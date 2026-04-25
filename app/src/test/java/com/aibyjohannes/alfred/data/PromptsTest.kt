@@ -34,6 +34,14 @@ class PromptsTest {
     }
 
     @Test
+    fun `system prompt describes local knowledge search tool`() {
+        assertTrue(
+            "System prompt should describe local knowledge search tool",
+            Prompts.SYSTEM_PROMPT.contains("SearchLocalKnowledgeTool")
+        )
+    }
+
+    @Test
     fun `system prompt is not empty`() {
         assertTrue(
             "System prompt should not be empty",

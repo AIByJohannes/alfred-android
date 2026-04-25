@@ -23,6 +23,26 @@ class ToolModelsTest {
     }
 
     @Test
+    fun `SearchLocalKnowledgeTool can be instantiated`() {
+        val tool = ChatRepository.SearchLocalKnowledgeTool()
+        assertNull(tool.query)
+        assertNull(tool.limit)
+        assertNull(tool.source)
+    }
+
+    @Test
+    fun `SearchLocalKnowledgeTool fields can be set`() {
+        val tool = ChatRepository.SearchLocalKnowledgeTool()
+        tool.query = "what did I say about Kotlin"
+        tool.limit = 3
+        tool.source = "sessions"
+
+        assertEquals("what did I say about Kotlin", tool.query)
+        assertEquals(3, tool.limit)
+        assertEquals("sessions", tool.source)
+    }
+
+    @Test
     fun `DEFAULT_MODEL constant is non-empty`() {
         assertTrue(ChatRepository.DEFAULT_MODEL.isNotBlank())
     }

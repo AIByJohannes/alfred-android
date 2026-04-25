@@ -24,8 +24,9 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import com.aibyjohannes.alfred.R
 import com.aibyjohannes.alfred.data.ApiKeyStore
 import com.aibyjohannes.alfred.data.ChatRepository
-import com.aibyjohannes.alfred.data.local.AppDatabase
-import com.aibyjohannes.alfred.data.local.RoomConversationStore
+import com.aibyjohannes.alfred.data.local.FileConversationStore
+import com.aibyjohannes.alfred.data.local.FileLocalKnowledgeSearchClient
+import com.aibyjohannes.alfred.data.local.FileMemorySearchSource
 import com.aibyjohannes.alfred.databinding.FragmentHomeBinding
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -65,8 +66,12 @@ class HomeFragment : Fragment() {
 
         // Initialize ViewModel with dependencies
         val apiKeyStore = ApiKeyStore(requireContext())
-        val repository = ChatRepository(apiKeyStore)
-        val conversationStore = RoomConversationStore(AppDatabase.getInstance(requireContext()))
+        val conversationStore = FileConversationStore(requireContext().filesDir)
+        val localKnowledgeSearchClient = FileLocalKnowledgeSearchClient(
+            conversationStore = conversationStore,
+            memorySearchSource = FileMemorySearchSource(requireContext().filesDir.resolve("memories.jsonl"))
+        )
+        val repository = ChatRepository(apiKeyStore, localKnowledgeSearchClient)
         homeViewModel.initialize(apiKeyStore, repository, conversationStore)
 
         animateGreetingText()

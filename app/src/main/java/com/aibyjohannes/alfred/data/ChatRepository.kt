@@ -4,6 +4,7 @@ import com.aibyjohannes.alfred.core.SystemPrompts
 import com.aibyjohannes.alfred.core.engine.ChatEngine
 import com.aibyjohannes.alfred.core.engine.OpenRouterChatEngine
 import com.aibyjohannes.alfred.core.model.ChatStreamEvent
+import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchClient
 import com.aibyjohannes.alfred.core.model.CoreChatMessage
 import com.aibyjohannes.alfred.core.search.PerplexitySearchClient
 import com.aibyjohannes.alfred.data.api.ChatMessage
@@ -11,7 +12,10 @@ import com.fasterxml.jackson.annotation.JsonClassDescription
 import com.fasterxml.jackson.annotation.JsonPropertyDescription
 import kotlinx.coroutines.flow.Flow
 
-class ChatRepository(private val apiKeyStore: ApiKeyStore) {
+class ChatRepository(
+    private val apiKeyStore: ApiKeyStore,
+    private val localKnowledgeSearchClient: LocalKnowledgeSearchClient? = null
+) {
     suspend fun sendMessage(
         userMessage: String,
         conversationHistory: List<ChatMessage>
@@ -51,7 +55,8 @@ class ChatRepository(private val apiKeyStore: ApiKeyStore) {
             webSearchClient = PerplexitySearchClient(
                 apiKey = apiKey,
                 model = PERPLEXITY_MODEL
-            )
+            ),
+            localKnowledgeSearchClient = localKnowledgeSearchClient
         )
     }
 
@@ -60,6 +65,18 @@ class ChatRepository(private val apiKeyStore: ApiKeyStore) {
     class WebSearchTool {
         @JsonPropertyDescription("The search query to look up on the web")
         var query: String? = null
+    }
+
+    @JsonClassDescription("Search previous local sessions and memories.")
+    class SearchLocalKnowledgeTool {
+        @JsonPropertyDescription("The search query to look up in local sessions and memories")
+        var query: String? = null
+
+        @JsonPropertyDescription("Maximum number of results to return. Defaults to 5 and is capped at 10.")
+        var limit: Int? = null
+
+        @JsonPropertyDescription("Which local source to search: all, sessions, or memories")
+        var source: String? = null
     }
 
     companion object {
