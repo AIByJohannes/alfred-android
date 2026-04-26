@@ -11,16 +11,16 @@
 
     <path
         android:fillColor="#61afef"
-        android:fillAlpha="0.24"
-        android:pathData="M0,28 L108,-8 L108,34 L0,70 Z" />
+        android:fillAlpha="0.20"
+        android:pathData="M0,21 L108,0 L108,31 L0,52 Z" />
 
     <path
         android:fillColor="#56b6c2"
-        android:fillAlpha="0.18"
-        android:pathData="M0,78 L108,42 L108,108 L0,108 Z" />
+        android:fillAlpha="0.16"
+        android:pathData="M0,72 L108,39 L108,108 L0,108 Z" />
 
     <path
         android:fillColor="#dcdfe4"
-        android:fillAlpha="0.05"
-        android:pathData="M12,0 H108 V18 L24,46 Z" />
+        android:fillAlpha="0.06"
+        android:pathData="M18,0 H108 V16 L31,39 Z" />
 </vector>
