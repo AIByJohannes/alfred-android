@@ -38,6 +38,8 @@ class OpenRouterChatEngine(
     private val localKnowledgeSearchClient: LocalKnowledgeSearchClient? = null
 ) : ChatEngine {
     private val objectMapper = ObjectMapper()
+    private val effectiveLocalKnowledgeSearchClient: LocalKnowledgeSearchClient =
+        localKnowledgeSearchClient ?: EmptyLocalKnowledgeSearchClient
 
     private data class StreamPassResult(
         val assistantMessage: ChatCompletionMessage,
@@ -115,20 +117,15 @@ class OpenRouterChatEngine(
                         }
 
                         LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME -> {
-                            val client = localKnowledgeSearchClient
-                            if (client == null) {
-                                "Local knowledge search failed: tool is not configured."
+                            val request = extractLocalKnowledgeSearchRequest(arguments)
+                            if (request == null) {
+                                "Local knowledge search failed: missing required 'query' argument."
                             } else {
-                                val request = extractLocalKnowledgeSearchRequest(arguments)
-                                if (request == null) {
-                                    "Local knowledge search failed: missing required 'query' argument."
-                                } else {
-                                    val searchResult = client.search(request)
-                                    searchResult.fold(
-                                        onSuccess = { formatLocalKnowledgeResults(it) },
-                                        onFailure = { "Local knowledge search failed: ${it.message}" }
-                                    )
-                                }
+                                val searchResult = effectiveLocalKnowledgeSearchClient.search(request)
+                                searchResult.fold(
+                                    onSuccess = { formatLocalKnowledgeResults(it) },
+                                    onFailure = { "Local knowledge search failed: ${it.message}" }
+                                )
                             }
                         }
 
@@ -365,5 +362,11 @@ class OpenRouterChatEngine(
         const val DEFAULT_MODEL = "google/gemini-3.1-flash-lite-preview"
         const val WEB_SEARCH_FUNCTION_NAME = "WebSearchTool"
         const val LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME = "SearchLocalKnowledgeTool"
+    }
+}
+
+private object EmptyLocalKnowledgeSearchClient : LocalKnowledgeSearchClient {
+    override suspend fun search(request: LocalKnowledgeSearchRequest): Result<List<LocalKnowledgeSearchResult>> {
+        return Result.success(emptyList())
     }
 }

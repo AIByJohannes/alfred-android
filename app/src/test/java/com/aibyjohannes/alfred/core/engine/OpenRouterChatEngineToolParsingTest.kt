@@ -64,6 +64,23 @@ class OpenRouterChatEngineToolParsingTest {
         assertTrue(output.contains("No local sessions or memories matched"))
     }
 
+    @Test
+    fun `local knowledge tool has empty fallback when client is absent`() = runTest {
+        val engine = OpenRouterChatEngine(
+            apiKey = "test",
+            webSearchClient = object : WebSearchClient {
+                override suspend fun search(query: String): Result<String> = Result.success("")
+            }
+        )
+        val field = OpenRouterChatEngine::class.java.getDeclaredField("effectiveLocalKnowledgeSearchClient")
+        field.isAccessible = true
+        val client = field.get(engine) as LocalKnowledgeSearchClient
+
+        val results = client.search(LocalKnowledgeSearchRequest(query = "anything")).getOrThrow()
+
+        assertTrue(results.isEmpty())
+    }
+
     private fun buildEngine(): OpenRouterChatEngine {
         return OpenRouterChatEngine(
             apiKey = "test",
