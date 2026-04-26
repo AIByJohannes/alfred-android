@@ -65,6 +65,10 @@ class HomeViewModel : ViewModel() {
     private var nextMessageId = 1L
 
     fun initialize(apiKeyStore: ApiKeyStore, repository: ChatRepository, conversationStore: ConversationStore) {
+        if (this.apiKeyStore != null && this.repository != null && this.conversationStore != null) {
+            checkApiKey()
+            return
+        }
         this.apiKeyStore = apiKeyStore
         this.repository = repository
         this.conversationStore = conversationStore
