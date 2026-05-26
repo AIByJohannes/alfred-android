@@ -59,10 +59,29 @@ class ApiKeyStore(context: Context) {
         }
     }
 
+    fun saveModel(model: String) {
+        try {
+            prefs.edit().putString(KEY_MODEL, model.trim()).apply()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving model", e)
+        }
+    }
+
+    fun loadModel(): String {
+        return try {
+            prefs.getString(KEY_MODEL, null) ?: DEFAULT_MODEL_VAL
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading model", e)
+            DEFAULT_MODEL_VAL
+        }
+    }
+
     companion object {
         private const val TAG = "ApiKeyStore"
         private const val PREFS_FILE_NAME = "alfred_secret_prefs"
         private const val KEY_OPENROUTER_API_KEY = "openrouter_api_key"
+        private const val KEY_MODEL = "selected_model"
+        private const val DEFAULT_MODEL_VAL = "google/gemini-3.1-flash-lite-preview"
     }
 }
 

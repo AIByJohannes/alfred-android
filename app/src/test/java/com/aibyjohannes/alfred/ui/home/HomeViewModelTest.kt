@@ -46,6 +46,7 @@ class HomeViewModelTest {
         val newConversation = ConversationSummary(2L, null, System.currentTimeMillis())
 
         every { apiKeyStore.hasApiKey() } returns true
+        every { apiKeyStore.loadModel() } returns "google/gemini-3.1-flash-lite-preview"
         coEvery { conversationStore.getOrCreateActiveConversation() } returns initialConversation
         coEvery { conversationStore.loadMessages(1L) } returns listOf(
             mockk {
@@ -75,6 +76,7 @@ class HomeViewModelTest {
         val initialConversation = ConversationSummary(1L, null, System.currentTimeMillis())
 
         every { apiKeyStore.hasApiKey() } returns true
+        every { apiKeyStore.loadModel() } returns "google/gemini-3.1-flash-lite-preview"
         coEvery { conversationStore.getOrCreateActiveConversation() } returns initialConversation
         coEvery { conversationStore.loadMessages(1L) } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(initialConversation)

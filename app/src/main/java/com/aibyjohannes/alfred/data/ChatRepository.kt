@@ -48,9 +48,10 @@ class ChatRepository(
     }
 
     private fun createEngine(apiKey: String): ChatEngine {
+        val model = apiKeyStore.loadModel()
         return OpenRouterChatEngine(
             apiKey = apiKey,
-            model = DEFAULT_MODEL,
+            model = model,
             prompt = SystemPrompts.SYSTEM_PROMPT,
             webSearchClient = PerplexitySearchClient(
                 apiKey = apiKey,

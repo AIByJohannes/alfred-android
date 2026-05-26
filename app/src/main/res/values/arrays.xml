@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="model_labels">
+        <item>Gemini 3.1 Flash Lite (Default)</item>
+        <item>Gemini 2.5 Flash</item>
+        <item>Gemini 2.5 Pro</item>
+        <item>Claude 3.5 Sonnet</item>
+        <item>GPT-4o</item>
+        <item>DeepSeek V3</item>
+    </string-array>
+    <string-array name="model_values">
+        <item>google/gemini-3.1-flash-lite-preview</item>
+        <item>google/gemini-2.5-flash</item>
+        <item>google/gemini-2.5-pro</item>
+        <item>anthropic/claude-3.5-sonnet</item>
+        <item>openai/gpt-4o</item>
+        <item>deepseek/deepseek-chat</item>
+    </string-array>
+</resources>

@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ArrayAdapter
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import com.aibyjohannes.alfred.R
@@ -29,9 +30,29 @@ class SettingsFragment : Fragment() {
         apiKeyStore = ApiKeyStore(requireContext())
 
         setupButtons()
+        setupModelDropdown()
         updateStatus()
 
         return root
+    }
+
+    private fun setupModelDropdown() {
+        val models = resources.getStringArray(R.array.model_values)
+        val labels = resources.getStringArray(R.array.model_labels)
+        val adapter = ArrayAdapter(requireContext(), android.R.layout.simple_dropdown_item_1line, labels)
+        binding.modelSelectDropdown.setAdapter(adapter)
+
+        val currentModel = apiKeyStore.loadModel()
+        val index = models.indexOf(currentModel)
+        if (index >= 0) {
+            binding.modelSelectDropdown.setText(labels[index], false)
+        }
+
+        binding.modelSelectDropdown.setOnItemClickListener { _, _, position, _ ->
+            val selectedModel = models[position]
+            apiKeyStore.saveModel(selectedModel)
+            Snackbar.make(binding.root, "Model updated to ${labels[position]}", Snackbar.LENGTH_SHORT).show()
+        }
     }
 
     private fun setupButtons() {
