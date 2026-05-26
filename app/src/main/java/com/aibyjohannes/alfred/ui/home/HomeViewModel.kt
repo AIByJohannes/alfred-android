@@ -217,6 +217,14 @@ class HomeViewModel : ViewModel() {
     fun createConversationAndSwitch() {
         val store = conversationStore ?: return
         viewModelScope.launch {
+            val currentId = currentConversationId
+            if (currentId != null) {
+                val uiMessages = _messages.value.orEmpty()
+                if (uiMessages.isEmpty()) {
+                    // Already in an empty conversation, keep using it (idempotent)
+                    return@launch
+                }
+            }
             val newConversation = store.createConversation()
             loadConversation(newConversation)
             refreshConversationList()
