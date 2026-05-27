@@ -18,6 +18,13 @@ import com.aibyjohannes.alfred.data.local.FileLocalKnowledgeSearchClient
 import com.aibyjohannes.alfred.data.local.FileMemorySearchSource
 import com.aibyjohannes.alfred.ui.home.ConversationAdapter
 import com.aibyjohannes.alfred.ui.home.HomeViewModel
+import com.aibyjohannes.alfred.data.SysInfoProvider
+import com.aibyjohannes.alfred.notifications.NotificationScheduler
+import androidx.activity.result.contract.ActivityResultContracts
+import android.Manifest
+import android.os.Build
+
+
 
 class MainActivity : AppCompatActivity() {
 
@@ -34,6 +41,22 @@ class MainActivity : AppCompatActivity() {
 
         homeViewModel = ViewModelProvider(this)[HomeViewModel::class.java]
         initializeHomeViewModel()
+
+        // Request ACCESS_COARSE_LOCATION at startup to enable datetime/location injection
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+            // SysInfoProvider automatically checks and handles permission dynamically.
+        }.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+
+        // Request POST_NOTIFICATIONS permission on Android 13+ and schedule daily reminders
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+                if (isGranted) {
+                    NotificationScheduler.scheduleDailyReminder(this)
+                }
+            }.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            NotificationScheduler.scheduleDailyReminder(this)
+        }
 
         setSupportActionBar(binding.appBarMain.toolbar)
 
@@ -59,7 +82,8 @@ class MainActivity : AppCompatActivity() {
             memorySearchSource = FileMemorySearchSource(filesDir.resolve("memories.jsonl"))
         )
         val repository = ChatRepository(apiKeyStore, localKnowledgeSearchClient)
-        homeViewModel.initialize(apiKeyStore, repository, conversationStore)
+        val sysInfoProvider = SysInfoProvider(this)
+        homeViewModel.initialize(apiKeyStore, repository, conversationStore, sysInfoProvider)
     }
 
     private fun setupDrawer() {

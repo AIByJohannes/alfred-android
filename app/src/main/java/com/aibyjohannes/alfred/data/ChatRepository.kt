@@ -18,12 +18,13 @@ class ChatRepository(
 ) {
     suspend fun sendMessage(
         userMessage: String,
-        conversationHistory: List<ChatMessage>
+        conversationHistory: List<ChatMessage>,
+        sysInfo: String? = null
     ): Result<String> {
         val apiKey = apiKeyStore.loadOpenRouterKey()
             ?: return Result.failure(Exception("API key not configured. Please add your OpenRouter API key in Settings."))
 
-        val engine = createEngine(apiKey)
+        val engine = createEngine(apiKey, sysInfo)
 
         return engine.sendMessage(
             userMessage = userMessage,
@@ -33,11 +34,12 @@ class ChatRepository(
 
     fun streamMessage(
         userMessage: String,
-        conversationHistory: List<ChatMessage>
+        conversationHistory: List<ChatMessage>,
+        sysInfo: String? = null
     ): Flow<ChatStreamEvent> {
         val apiKey = apiKeyStore.loadOpenRouterKey()
             ?: throw IllegalStateException("API key not configured. Please add your OpenRouter API key in Settings.")
-        return createEngine(apiKey).streamMessage(
+        return createEngine(apiKey, sysInfo).streamMessage(
             userMessage = userMessage,
             conversationHistory = conversationHistory.toCoreMessages()
         )
@@ -47,12 +49,12 @@ class ChatRepository(
         CoreChatMessage(role = it.role, content = it.content)
     }
 
-    private fun createEngine(apiKey: String): ChatEngine {
+    private fun createEngine(apiKey: String, sysInfo: String? = null): ChatEngine {
         val model = apiKeyStore.loadModel()
         return OpenRouterChatEngine(
             apiKey = apiKey,
             model = model,
-            prompt = SystemPrompts.SYSTEM_PROMPT,
+            prompt = SystemPrompts.buildSystemPrompt(sysInfo),
             webSearchClient = PerplexitySearchClient(
                 apiKey = apiKey,
                 model = PERPLEXITY_MODEL

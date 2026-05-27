@@ -17,4 +17,13 @@ Use local knowledge search when the user asks about prior conversations, saved m
 Do not guess user-specific facts from memory; search local knowledge when it would help.
 
 Be concise, accurate, and helpful."""
+
+    /**
+     * Builds the full system prompt with an optional sysinfo block (datetime + location)
+     * prepended so the model always knows the current context.
+     */
+    fun buildSystemPrompt(sysInfo: String?): String {
+        if (sysInfo.isNullOrBlank()) return SYSTEM_PROMPT
+        return "System context:\n$sysInfo\n\n$SYSTEM_PROMPT"
+    }
 }

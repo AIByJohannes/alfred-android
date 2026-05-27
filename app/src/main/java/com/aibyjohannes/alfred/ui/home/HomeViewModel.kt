@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.aibyjohannes.alfred.core.model.ChatStreamEvent
 import com.aibyjohannes.alfred.data.ApiKeyStore
 import com.aibyjohannes.alfred.data.ChatRepository
+import com.aibyjohannes.alfred.data.SysInfoProvider
 import com.aibyjohannes.alfred.data.api.ChatMessage
 import com.aibyjohannes.alfred.data.local.ConversationStore
 import com.aibyjohannes.alfred.data.local.ConversationSummary
@@ -43,6 +44,7 @@ class HomeViewModel : ViewModel() {
     private var repository: ChatRepository? = null
     private var apiKeyStore: ApiKeyStore? = null
     private var conversationStore: ConversationStore? = null
+    private var sysInfoProvider: SysInfoProvider? = null
 
     private val _messages = MutableLiveData<List<UiChatMessage>>(emptyList())
     val messages: LiveData<List<UiChatMessage>> = _messages
@@ -64,7 +66,12 @@ class HomeViewModel : ViewModel() {
     private var currentConversationId: Long? = null
     private var nextMessageId = 1L
 
-    fun initialize(apiKeyStore: ApiKeyStore, repository: ChatRepository, conversationStore: ConversationStore) {
+    fun initialize(
+        apiKeyStore: ApiKeyStore,
+        repository: ChatRepository,
+        conversationStore: ConversationStore,
+        sysInfoProvider: SysInfoProvider? = null
+    ) {
         if (this.apiKeyStore != null && this.repository != null && this.conversationStore != null) {
             checkApiKey()
             return
@@ -72,6 +79,7 @@ class HomeViewModel : ViewModel() {
         this.apiKeyStore = apiKeyStore
         this.repository = repository
         this.conversationStore = conversationStore
+        this.sysInfoProvider = sysInfoProvider
         checkApiKey()
         loadOrCreateActiveConversation()
     }
@@ -111,6 +119,8 @@ class HomeViewModel : ViewModel() {
 
         _isLoading.value = true
 
+        val sysInfo = sysInfoProvider?.buildSysInfo()
+
         viewModelScope.launch {
             val userHistoryMessage = ChatMessage(role = ChatMessage.ROLE_USER, content = userInput)
             val visibleAssistantContent = StringBuilder()
@@ -118,7 +128,7 @@ class HomeViewModel : ViewModel() {
             var lastFlushAtMs = 0L
 
             try {
-                repo.streamMessage(userInput, conversationHistory.toList()).collect { event ->
+                repo.streamMessage(userInput, conversationHistory.toList(), sysInfo).collect { event ->
                     when (event) {
                         is ChatStreamEvent.Delta -> {
                             pendingAssistantContent.append(event.textChunk)
