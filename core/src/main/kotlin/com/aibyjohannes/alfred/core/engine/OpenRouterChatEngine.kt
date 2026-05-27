@@ -359,7 +359,7 @@ class OpenRouterChatEngine(
     }
 
     companion object {
-        const val DEFAULT_MODEL = "google/gemini-3.1-flash-lite-preview"
+        const val DEFAULT_MODEL = "google/gemini-3.5-flash"
         const val WEB_SEARCH_FUNCTION_NAME = "WebSearchTool"
         const val LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME = "SearchLocalKnowledgeTool"
     }

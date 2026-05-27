@@ -81,7 +81,7 @@ class ApiKeyStore(context: Context) {
         private const val PREFS_FILE_NAME = "alfred_secret_prefs"
         private const val KEY_OPENROUTER_API_KEY = "openrouter_api_key"
         private const val KEY_MODEL = "selected_model"
-        private const val DEFAULT_MODEL_VAL = "google/gemini-3.1-flash-lite-preview"
+        private const val DEFAULT_MODEL_VAL = "google/gemini-3.5-flash"
     }
 }
 
