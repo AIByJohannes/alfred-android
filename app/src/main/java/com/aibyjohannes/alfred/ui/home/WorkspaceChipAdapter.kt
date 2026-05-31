@@ -7,6 +7,9 @@ import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import androidx.annotation.AttrRes
+import androidx.annotation.ColorInt
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
 import com.aibyjohannes.alfred.R
 import com.google.android.material.chip.Chip
@@ -45,14 +48,14 @@ class WorkspaceChipAdapter(
             
             val isActive = workspace.id == activeWorkspaceId
             if (isActive) {
-                val bgColor = resolveThemeColorByName(context, "colorPrimaryContainer")
-                val textColor = resolveThemeColorByName(context, "colorOnPrimaryContainer")
+                val bgColor = resolveThemeColor(context, androidx.appcompat.R.attr.colorPrimary, Color.GRAY)
+                val textColor = resolveThemeColor(context, com.google.android.material.R.attr.colorOnPrimary, Color.WHITE)
                 holder.chip.chipBackgroundColor = ColorStateList.valueOf(bgColor)
                 holder.chip.setTextColor(textColor)
                 holder.chip.chipStrokeWidth = 0f
             } else {
-                val textColor = resolveThemeColorByName(context, "colorOnSurface")
-                val strokeColor = resolveThemeColorByName(context, "colorOutline")
+                val textColor = resolveThemeColor(context, com.google.android.material.R.attr.colorOnSurface, Color.WHITE)
+                val strokeColor = resolveThemeColor(context, com.google.android.material.R.attr.colorOutline, Color.GRAY)
                 holder.chip.chipBackgroundColor = ColorStateList.valueOf(Color.TRANSPARENT)
                 holder.chip.setTextColor(textColor)
                 holder.chip.chipStrokeColor = ColorStateList.valueOf(strokeColor)
@@ -72,8 +75,8 @@ class WorkspaceChipAdapter(
             holder.chip.text = "+ Add"
             holder.chip.isCheckable = false
             
-            val textColor = resolveThemeColorByName(context, "colorPrimary")
-            val strokeColor = resolveThemeColorByName(context, "colorOutline")
+            val textColor = resolveThemeColor(context, androidx.appcompat.R.attr.colorPrimary, Color.GRAY)
+            val strokeColor = resolveThemeColor(context, com.google.android.material.R.attr.colorOutline, Color.GRAY)
             holder.chip.chipBackgroundColor = ColorStateList.valueOf(Color.TRANSPARENT)
             holder.chip.setTextColor(textColor)
             holder.chip.chipStrokeColor = ColorStateList.valueOf(strokeColor)
@@ -86,13 +89,15 @@ class WorkspaceChipAdapter(
         }
     }
 
-    private fun resolveThemeColorByName(context: Context, attrName: String): Int {
-        val attrId = context.resources.getIdentifier(attrName, "attr", context.packageName)
-        if (attrId == 0) {
-            return Color.GRAY
-        }
+    @ColorInt
+    private fun resolveThemeColor(context: Context, @AttrRes attrId: Int, @ColorInt fallback: Int): Int {
         val typedValue = TypedValue()
-        context.theme.resolveAttribute(attrId, typedValue, true)
+        if (!context.theme.resolveAttribute(attrId, typedValue, true)) {
+            return fallback
+        }
+        if (typedValue.resourceId != 0) {
+            return ContextCompat.getColor(context, typedValue.resourceId)
+        }
         return typedValue.data
     }
 
