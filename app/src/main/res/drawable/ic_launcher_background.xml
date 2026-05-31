@@ -6,7 +6,7 @@
     android:viewportHeight="108">
 
     <path
-        android:fillColor="#282c34"
+        android:fillColor="#161c30"
         android:pathData="M0,0 H108 V108 H0 Z" />
 
     <!-- Subtle One Dark blue glow in the center -->
