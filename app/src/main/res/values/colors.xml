@@ -38,4 +38,9 @@
 
     <color name="error_message_bg">@color/palette_red</color>
     <color name="error_message_text">@color/palette_white</color>
+
+    <color name="status_configured_bg">#1F7A3A</color>
+    <color name="status_configured_text">#FFFFFF</color>
+    <color name="status_not_configured_bg">#B3261E</color>
+    <color name="status_not_configured_text">#FFFFFF</color>
 </resources>

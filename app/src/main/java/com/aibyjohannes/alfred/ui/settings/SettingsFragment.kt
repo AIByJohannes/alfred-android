@@ -1,5 +1,6 @@
 package com.aibyjohannes.alfred.ui.settings
 
+import android.content.res.ColorStateList
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -79,14 +80,20 @@ class SettingsFragment : Fragment() {
     private fun updateStatus() {
         val hasKey = apiKeyStore.hasApiKey()
         if (hasKey) {
-            binding.apiKeyStatus.setText(R.string.api_key_configured)
-            binding.apiKeyStatus.setTextColor(
-                ContextCompat.getColor(requireContext(), R.color.teal_700)
+            binding.apiKeyStatusChip.setText(R.string.api_key_configured)
+            binding.apiKeyStatusChip.chipBackgroundColor = ColorStateList.valueOf(
+                ContextCompat.getColor(requireContext(), R.color.status_configured_bg)
+            )
+            binding.apiKeyStatusChip.setTextColor(
+                ContextCompat.getColor(requireContext(), R.color.status_configured_text)
             )
         } else {
-            binding.apiKeyStatus.setText(R.string.api_key_not_configured)
-            binding.apiKeyStatus.setTextColor(
-                ContextCompat.getColor(requireContext(), com.google.android.material.R.color.design_default_color_error)
+            binding.apiKeyStatusChip.setText(R.string.api_key_not_configured)
+            binding.apiKeyStatusChip.chipBackgroundColor = ColorStateList.valueOf(
+                ContextCompat.getColor(requireContext(), R.color.status_not_configured_bg)
+            )
+            binding.apiKeyStatusChip.setTextColor(
+                ContextCompat.getColor(requireContext(), R.color.status_not_configured_text)
             )
         }
     }

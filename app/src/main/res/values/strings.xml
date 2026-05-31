@@ -20,6 +20,10 @@
 
     <!-- Settings -->
     <string name="settings_title">Settings</string>
+    <string name="api_credentials_title">API Credentials</string>
+    <string name="api_credentials_description">Get an API key at openrouter.ai</string>
+    <string name="language_model_title">Language Model</string>
+    <string name="language_model_description">Choose the AI model Alfred uses to answer your questions.</string>
     <string name="api_key_label">OpenRouter API Key</string>
 
     <string name="api_key_hint">Paste your OpenRouter API key here</string>
