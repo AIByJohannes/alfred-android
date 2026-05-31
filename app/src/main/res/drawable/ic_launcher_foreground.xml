@@ -1,50 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-
-    <path
-        android:fillColor="#dcdfe4"
-        android:pathData="M34,33 L54,85 L74,33 L64,33 L54,61 L44,33 Z" />
-
-    <path
-        android:fillColor="#282c34"
-        android:pathData="M47,39 L54,60 L61,39 L54,48 Z" />
-
-    <path
-        android:fillColor="#61afef"
-        android:pathData="M28,58 L51,45 L51,71 Z" />
-
-    <path
-        android:fillColor="#56b6c2"
-        android:pathData="M80,58 L57,45 L57,71 Z" />
-
-    <path
-        android:fillColor="#dcdfe4"
-        android:pathData="M47,55 L54,48 L61,55 L54,63 Z" />
-
-    <path
-        android:fillColor="#61afef"
-        android:pathData="M54,49 C49.03,49 45,53.03 45,58 C45,62.97 49.03,67 54,67 C58.97,67 63,62.97 63,58 C63,53.03 58.97,49 54,49 Z" />
-
-    <path
-        android:fillColor="#dcdfe4"
-        android:pathData="M54,53 C51.24,53 49,55.24 49,58 C49,60.76 51.24,63 54,63 C56.76,63 59,60.76 59,58 C59,55.24 56.76,53 54,53 Z" />
-
-    <path
-        android:fillColor="#56b6c2"
-        android:pathData="M54,18 C51.24,18 49,20.24 49,23 C49,25.76 51.24,28 54,28 C56.76,28 59,25.76 59,23 C59,20.24 56.76,18 54,18 Z" />
-
-    <path
-        android:strokeColor="#56b6c2"
-        android:strokeWidth="3"
-        android:strokeLineCap="round"
-        android:fillColor="@android:color/transparent"
-        android:pathData="M54,28 L54,41" />
-
-    <path
-        android:fillColor="#dcdfe4"
-        android:pathData="M37,30 L48,30 L54,42 L43,42 Z M60,30 L71,30 L65,42 L54,42 Z" />
-</vector>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Constrain the butler suit PNG to the 72dp adaptive icon safe zone,
+         centered within the 108dp adaptive icon canvas (18dp bleed on each side). -->
+    <item
+        android:width="72dp"
+        android:height="72dp"
+        android:gravity="center">
+        <bitmap
+            android:src="@drawable/ic_launcher_foreground_png"
+            android:gravity="fill" />
+    </item>
+</layer-list>
