@@ -21,6 +21,7 @@
     <!-- Settings -->
     <string name="settings_title">Settings</string>
     <string name="api_key_label">OpenRouter API Key</string>
+
     <string name="api_key_hint">Paste your OpenRouter API key here</string>
     <string name="save_api_key">Save API Key</string>
     <string name="api_key_saved">API key saved successfully</string>
@@ -30,4 +31,20 @@
     <string name="api_key_configured">✓ API key is configured</string>
     <string name="api_key_not_configured">✗ No API key configured</string>
     <string name="api_key_empty_error">Please enter an API key</string>
+
+    <!-- Delete Conversation -->
+    <string name="delete_conversation">Delete conversation</string>
+    <string name="delete_confirm_title">Delete Chat?</string>
+    <string name="delete_confirm_message">Are you sure you want to delete \"%1$s\"?\n\nThis will permanently erase all messages in this chat.</string>
+    <string name="delete">Delete</string>
+    <string name="cancel">Cancel</string>
+
+    <!-- Workspaces -->
+    <string name="new_workspace">New Workspace</string>
+    <string name="workspace_name_hint">Workspace name</string>
+    <string name="rename_workspace">Rename Workspace</string>
+    <string name="delete_workspace">Delete Workspace</string>
+    <string name="delete_workspace_confirm_title">Delete Workspace?</string>
+    <string name="delete_workspace_confirm_message">Are you sure you want to delete \"%1$s\"?\n\nThis will permanently delete this workspace and all its chats.</string>
+    <string name="workspace_name_empty_error">Please enter a workspace name</string>
 </resources>

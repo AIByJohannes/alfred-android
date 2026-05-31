@@ -6,6 +6,11 @@ data class ConversationSummary(
     val updatedAtEpochMs: Long
 )
 
+data class WorkspaceSummary(
+    val id: Long,
+    val name: String
+)
+
 data class StoredChatMessage(
     val id: Long,
     val role: String,
@@ -13,6 +18,15 @@ data class StoredChatMessage(
 )
 
 interface ConversationStore {
+    // Workspace Operations
+    suspend fun listWorkspaces(): List<WorkspaceSummary>
+    suspend fun getOrCreateActiveWorkspace(): WorkspaceSummary
+    suspend fun createWorkspace(name: String): WorkspaceSummary
+    suspend fun switchActiveWorkspace(workspaceId: Long): WorkspaceSummary
+    suspend fun renameWorkspace(workspaceId: Long, newName: String)
+    suspend fun deleteWorkspace(workspaceId: Long)
+
+    // Conversation Operations (scoped to active workspace)
     suspend fun getOrCreateActiveConversation(): ConversationSummary
     suspend fun listConversations(): List<ConversationSummary>
     suspend fun createConversation(): ConversationSummary

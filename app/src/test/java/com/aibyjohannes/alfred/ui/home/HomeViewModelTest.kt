@@ -5,6 +5,7 @@ import com.aibyjohannes.alfred.data.ApiKeyStore
 import com.aibyjohannes.alfred.data.ChatRepository
 import com.aibyjohannes.alfred.data.local.ConversationStore
 import com.aibyjohannes.alfred.data.local.ConversationSummary
+import com.aibyjohannes.alfred.data.local.WorkspaceSummary
 import io.mockk.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -32,6 +33,10 @@ class HomeViewModelTest {
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
         viewModel = HomeViewModel()
+
+        val defaultWorkspace = WorkspaceSummary(1L, "Personal")
+        coEvery { conversationStore.getOrCreateActiveWorkspace() } returns defaultWorkspace
+        coEvery { conversationStore.listWorkspaces() } returns listOf(defaultWorkspace)
     }
 
     @After
@@ -90,5 +95,92 @@ class HomeViewModelTest {
 
         // Assert
         coVerify(exactly = 0) { conversationStore.createConversation() }
+    }
+
+    @Test
+    fun `deleteConversation deletes active conversation and switches to remaining one`() = runTest {
+        // Arrange
+        val initialConversation = ConversationSummary(1L, "First Chat", System.currentTimeMillis())
+        val remainingConversation = ConversationSummary(2L, "Second Chat", System.currentTimeMillis() + 1000)
+
+        every { apiKeyStore.hasApiKey() } returns true
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns initialConversation
+        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.loadMessages(2L) } returns emptyList()
+        coEvery { conversationStore.listConversations() } returnsMany listOf(
+            listOf(initialConversation, remainingConversation),
+            listOf(remainingConversation)
+        )
+        coEvery { conversationStore.switchActiveConversation(2L) } returns remainingConversation
+
+        // Act
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.deleteConversation(1L)
+        testScheduler.advanceUntilIdle()
+
+        // Assert
+        coVerify(exactly = 1) { conversationStore.deleteConversation(1L) }
+        coVerify(exactly = 1) { conversationStore.switchActiveConversation(2L) }
+    }
+
+    @Test
+    fun `switchWorkspace updates active workspace and loads its active conversation`() = runTest {
+        // Arrange
+        val workspace1 = WorkspaceSummary(1L, "Personal")
+        val workspace2 = WorkspaceSummary(2L, "Work")
+        val conversationInW2 = ConversationSummary(3L, "Work Chat", System.currentTimeMillis())
+
+        coEvery { conversationStore.getOrCreateActiveWorkspace() } returns workspace1
+        coEvery { conversationStore.listWorkspaces() } returns listOf(workspace1, workspace2)
+        coEvery { conversationStore.switchActiveWorkspace(2L) } returns workspace2
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns conversationInW2
+        coEvery { conversationStore.loadMessages(3L) } returns emptyList()
+        coEvery { conversationStore.listConversations() } returns listOf(conversationInW2)
+
+        // Act
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.switchWorkspace(2L)
+        testScheduler.advanceUntilIdle()
+
+        // Assert
+        coVerify(exactly = 1) { conversationStore.switchActiveWorkspace(2L) }
+        assert(viewModel.activeWorkspaceId.value == 2L)
+        assert(viewModel.activeConversationId.value == 3L)
+        assert(viewModel.conversations.value?.firstOrNull()?.id == 3L)
+    }
+
+    @Test
+    fun `deleteWorkspace cascades and switches active workspace to remaining one`() = runTest {
+        // Arrange
+        val workspace1 = WorkspaceSummary(1L, "Personal")
+        val workspace2 = WorkspaceSummary(2L, "Work")
+        val conversationInW2 = ConversationSummary(3L, "Work Chat", System.currentTimeMillis())
+
+        coEvery { conversationStore.getOrCreateActiveWorkspace() } returnsMany listOf(workspace1, workspace2, workspace2)
+        coEvery { conversationStore.listWorkspaces() } returnsMany listOf(
+            listOf(workspace1, workspace2), // 1. initialize
+            listOf(workspace1, workspace2), // 2. pre-delete check
+            listOf(workspace2)              // 3. post-delete refresh
+        )
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns conversationInW2
+        coEvery { conversationStore.loadMessages(3L) } returns emptyList()
+        coEvery { conversationStore.listConversations() } returns listOf(conversationInW2)
+
+        // Act
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.deleteWorkspace(1L)
+        testScheduler.advanceUntilIdle()
+
+        // Assert
+        coVerify(exactly = 1) { conversationStore.deleteWorkspace(1L) }
+        coVerify(atLeast = 1) { conversationStore.getOrCreateActiveWorkspace() }
+        assert(viewModel.activeWorkspaceId.value == 2L)
+        assert(viewModel.activeConversationId.value == 3L)
     }
 }

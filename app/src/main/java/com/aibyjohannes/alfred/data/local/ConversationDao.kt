@@ -6,14 +6,14 @@ import androidx.room.Query
 
 @Dao
 interface ConversationDao {
-    @Query("SELECT * FROM conversations ORDER BY updatedAtEpochMs DESC")
-    suspend fun listConversations(): List<ConversationEntity>
+    @Query("SELECT * FROM conversations WHERE workspaceId = :workspaceId ORDER BY updatedAtEpochMs DESC")
+    suspend fun listConversations(workspaceId: Long): List<ConversationEntity>
 
     @Query("SELECT * FROM conversations WHERE id = :conversationId LIMIT 1")
     suspend fun getConversationById(conversationId: Long): ConversationEntity?
 
-    @Query("SELECT * FROM conversations WHERE isActive = 1 LIMIT 1")
-    suspend fun getActiveConversation(): ConversationEntity?
+    @Query("SELECT * FROM conversations WHERE workspaceId = :workspaceId AND isActive = 1 LIMIT 1")
+    suspend fun getActiveConversation(workspaceId: Long): ConversationEntity?
 
     @Insert
     suspend fun insertConversation(conversation: ConversationEntity): Long

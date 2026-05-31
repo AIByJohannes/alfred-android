@@ -35,6 +35,11 @@ data class UiConversation(
     val updatedAtEpochMs: Long
 )
 
+data class UiWorkspace(
+    val id: Long,
+    val name: String
+)
+
 class HomeViewModel : ViewModel() {
     companion object {
         private const val STREAM_FLUSH_INTERVAL_MS = 60L
@@ -54,6 +59,12 @@ class HomeViewModel : ViewModel() {
 
     private val _activeConversationId = MutableLiveData<Long?>(null)
     val activeConversationId: LiveData<Long?> = _activeConversationId
+
+    private val _workspaces = MutableLiveData<List<UiWorkspace>>(emptyList())
+    val workspaces: LiveData<List<UiWorkspace>> = _workspaces
+
+    private val _activeWorkspaceId = MutableLiveData<Long?>(null)
+    val activeWorkspaceId: LiveData<Long?> = _activeWorkspaceId
 
     private val _isLoading = MutableLiveData(false)
     val isLoading: LiveData<Boolean> = _isLoading
@@ -81,7 +92,7 @@ class HomeViewModel : ViewModel() {
         this.conversationStore = conversationStore
         this.sysInfoProvider = sysInfoProvider
         checkApiKey()
-        loadOrCreateActiveConversation()
+        loadWorkspacesAndActiveConversation()
     }
 
     fun checkApiKey() {
@@ -224,6 +235,27 @@ class HomeViewModel : ViewModel() {
         }
     }
 
+    fun deleteConversation(conversationId: Long) {
+        val store = conversationStore ?: return
+        viewModelScope.launch {
+            store.deleteConversation(conversationId)
+
+            if (currentConversationId == conversationId) {
+                val remaining = store.listConversations()
+                if (remaining.isNotEmpty()) {
+                    val nextConversation = remaining.maxByOrNull { it.updatedAtEpochMs }!!
+                    val switched = store.switchActiveConversation(nextConversation.id)
+                    loadConversation(switched)
+                } else {
+                    val newConversation = store.createConversation()
+                    loadConversation(newConversation)
+                }
+            }
+
+            refreshConversationList()
+        }
+    }
+
     fun createConversationAndSwitch() {
         val store = conversationStore ?: return
         viewModelScope.launch {
@@ -246,6 +278,81 @@ class HomeViewModel : ViewModel() {
         viewModelScope.launch {
             val selectedConversation = store.switchActiveConversation(conversationId)
             loadConversation(selectedConversation)
+            refreshConversationList()
+        }
+    }
+
+    fun createWorkspace(name: String) {
+        val store = conversationStore ?: return
+        viewModelScope.launch {
+            val newWs = store.createWorkspace(name)
+            _activeWorkspaceId.value = newWs.id
+            refreshWorkspacesList()
+            
+            val activeConversation = store.getOrCreateActiveConversation()
+            loadConversation(activeConversation)
+            refreshConversationList()
+        }
+    }
+
+    fun switchWorkspace(workspaceId: Long) {
+        val store = conversationStore ?: return
+        viewModelScope.launch {
+            val switchedWs = store.switchActiveWorkspace(workspaceId)
+            _activeWorkspaceId.value = switchedWs.id
+            refreshWorkspacesList()
+
+            val activeConversation = store.getOrCreateActiveConversation()
+            loadConversation(activeConversation)
+            refreshConversationList()
+        }
+    }
+
+    fun renameWorkspace(workspaceId: Long, newName: String) {
+        val store = conversationStore ?: return
+        viewModelScope.launch {
+            store.renameWorkspace(workspaceId, newName)
+            refreshWorkspacesList()
+            val activeWs = store.getOrCreateActiveWorkspace()
+            _activeWorkspaceId.value = activeWs.id
+        }
+    }
+
+    fun deleteWorkspace(workspaceId: Long) {
+        val store = conversationStore ?: return
+        viewModelScope.launch {
+            val currentList = store.listWorkspaces()
+            if (currentList.size <= 1) return@launch
+            
+            store.deleteWorkspace(workspaceId)
+            
+            val activeWs = store.getOrCreateActiveWorkspace()
+            _activeWorkspaceId.value = activeWs.id
+            refreshWorkspacesList()
+
+            val activeConversation = store.getOrCreateActiveConversation()
+            loadConversation(activeConversation)
+            refreshConversationList()
+        }
+    }
+
+    private suspend fun refreshWorkspacesList() {
+        val store = conversationStore ?: return
+        val list = store.listWorkspaces().map { UiWorkspace(it.id, it.name) }
+        _workspaces.postValue(list)
+    }
+
+    private fun loadWorkspacesAndActiveConversation() {
+        val store = conversationStore ?: return
+        viewModelScope.launch {
+            val activeWs = store.getOrCreateActiveWorkspace()
+            _activeWorkspaceId.value = activeWs.id
+            
+            val wsList = store.listWorkspaces().map { UiWorkspace(it.id, it.name) }
+            _workspaces.value = wsList
+
+            val activeConversation = store.getOrCreateActiveConversation()
+            loadConversation(activeConversation)
             refreshConversationList()
         }
     }

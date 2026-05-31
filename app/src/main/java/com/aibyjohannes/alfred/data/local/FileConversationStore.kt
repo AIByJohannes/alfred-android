@@ -14,25 +14,106 @@ class FileConversationStore(
     private val conversationsDir = File(rootDir, "conversations")
     private val metadataFile = File(rootDir, "conversations.json")
 
+    override suspend fun listWorkspaces(): List<WorkspaceSummary> = withStoreLock {
+        readState().workspaces.map { WorkspaceSummary(it.id, it.name) }
+    }
+
+    override suspend fun getOrCreateActiveWorkspace(): WorkspaceSummary = withStoreLock {
+        val state = readState()
+        val activeId = state.activeWorkspaceId ?: 1L
+        val active = state.workspaces.firstOrNull { it.id == activeId }
+            ?: state.workspaces.firstOrNull()
+            ?: throw IllegalStateException("No workspaces found")
+        if (state.activeWorkspaceId != active.id) {
+            state.activeWorkspaceId = active.id
+            writeState(state)
+        }
+        WorkspaceSummary(active.id, active.name)
+    }
+
+    override suspend fun createWorkspace(name: String): WorkspaceSummary = withStoreLock {
+        val state = readState()
+        val newId = state.nextWorkspaceId++
+        val newWs = WorkspaceRecord().apply {
+            id = newId
+            this.name = name
+            createdAtEpochMs = System.currentTimeMillis()
+        }
+        state.workspaces.add(newWs)
+        state.activeWorkspaceId = newId
+        writeState(state)
+        WorkspaceSummary(newId, name)
+    }
+
+    override suspend fun switchActiveWorkspace(workspaceId: Long): WorkspaceSummary = withStoreLock {
+        val state = readState()
+        val target = state.workspaces.firstOrNull { it.id == workspaceId }
+            ?: throw IllegalArgumentException("Workspace not found: $workspaceId")
+        state.activeWorkspaceId = workspaceId
+        writeState(state)
+        WorkspaceSummary(target.id, target.name)
+    }
+
+    override suspend fun renameWorkspace(workspaceId: Long, newName: String): Unit = withStoreLock {
+        val state = readState()
+        val target = state.workspaces.firstOrNull { it.id == workspaceId }
+            ?: throw IllegalArgumentException("Workspace not found: $workspaceId")
+        target.name = newName
+        writeState(state)
+    }
+
+    override suspend fun deleteWorkspace(workspaceId: Long): Unit = withStoreLock {
+        val state = readState()
+        state.workspaces.removeAll { it.id == workspaceId }
+        
+        // Cascade delete conversations in this workspace
+        val conversationsToDelete = state.conversations.filter { it.workspaceId == workspaceId }
+        for (conv in conversationsToDelete) {
+            messageFile(conv.id).delete()
+        }
+        state.conversations.removeAll { it.workspaceId == workspaceId }
+        
+        if (state.activeWorkspaceId == workspaceId) {
+            state.activeWorkspaceId = state.workspaces.firstOrNull()?.id
+        }
+        writeState(state)
+    }
+
     override suspend fun getOrCreateActiveConversation(): ConversationSummary = withStoreLock {
         val state = readState()
-        val active = state.activeConversationId
-            ?.let { id -> state.conversations.firstOrNull { it.id == id } }
+        val activeWsId = state.activeWorkspaceId ?: 1L
+        val active = state.activeConversationId?.let { activeId ->
+            state.conversations.firstOrNull { it.id == activeId && it.workspaceId == activeWsId }
+        }
         if (active != null) {
             active.toSummary()
         } else {
-            createConversationInternal(state)
+            val lastConv = state.conversations
+                .filter { it.workspaceId == activeWsId }
+                .maxByOrNull { it.updatedAtEpochMs }
+            if (lastConv != null) {
+                state.activeConversationId = lastConv.id
+                writeState(state)
+                lastConv.toSummary()
+            } else {
+                createConversationInternal(state, activeWsId)
+            }
         }
     }
 
     override suspend fun listConversations(): List<ConversationSummary> = withStoreLock {
-        readState().conversations
+        val state = readState()
+        val activeWsId = state.activeWorkspaceId ?: 1L
+        state.conversations
+            .filter { it.workspaceId == activeWsId }
             .sortedByDescending { it.updatedAtEpochMs }
             .map { it.toSummary() }
     }
 
     override suspend fun createConversation(): ConversationSummary = withStoreLock {
-        createConversationInternal(readState())
+        val state = readState()
+        val activeWsId = state.activeWorkspaceId ?: 1L
+        createConversationInternal(state, activeWsId)
     }
 
     override suspend fun switchActiveConversation(conversationId: Long): ConversationSummary = withStoreLock {
@@ -128,7 +209,7 @@ class FileConversationStore(
         conversationsDir.mkdirs()
     }
 
-    private fun createConversationInternal(state: StoreState): ConversationSummary {
+    private fun createConversationInternal(state: StoreState, workspaceId: Long = 1L): ConversationSummary {
         val now = System.currentTimeMillis()
         val id = state.nextConversationId++
         val conversation = ConversationRecord().apply {
@@ -136,6 +217,7 @@ class FileConversationStore(
             title = null
             createdAtEpochMs = now
             updatedAtEpochMs = now
+            this.workspaceId = workspaceId
         }
         state.activeConversationId = id
         state.conversations.add(conversation)
@@ -146,9 +228,36 @@ class FileConversationStore(
 
     private fun readState(): StoreState {
         if (!metadataFile.exists() || metadataFile.length() == 0L) {
-            return StoreState()
+            val state = StoreState()
+            ensureDefaultWorkspace(state)
+            return state
         }
-        return objectMapper.readValue(metadataFile, StoreState::class.java)
+        val state = objectMapper.readValue(metadataFile, StoreState::class.java)
+        ensureDefaultWorkspace(state)
+        return state
+    }
+
+    private fun ensureDefaultWorkspace(state: StoreState) {
+        if (state.workspaces.isEmpty()) {
+            val personal = WorkspaceRecord().apply {
+                id = 1L
+                name = "Personal"
+                createdAtEpochMs = System.currentTimeMillis()
+            }
+            state.workspaces.add(personal)
+            if (state.nextWorkspaceId <= 1L) {
+                state.nextWorkspaceId = 2L
+            }
+            if (state.activeWorkspaceId == null) {
+                state.activeWorkspaceId = 1L
+            }
+            for (c in state.conversations) {
+                if (c.workspaceId == 0L) {
+                    c.workspaceId = 1L
+                }
+            }
+            writeState(state)
+        }
     }
 
     private fun writeState(state: StoreState) {
@@ -214,10 +323,19 @@ class FileConversationStore(
     }
 
     private class StoreState {
+        var activeWorkspaceId: Long? = null
+        var nextWorkspaceId: Long = 1L
         var activeConversationId: Long? = null
         var nextConversationId: Long = 1L
         var nextMessageId: Long = 1L
         var conversations: MutableList<ConversationRecord> = mutableListOf()
+        var workspaces: MutableList<WorkspaceRecord> = mutableListOf()
+    }
+
+    private class WorkspaceRecord {
+        var id: Long = 0L
+        var name: String = ""
+        var createdAtEpochMs: Long = 0L
     }
 
     private class ConversationRecord {
@@ -225,6 +343,7 @@ class FileConversationStore(
         var title: String? = null
         var createdAtEpochMs: Long = 0L
         var updatedAtEpochMs: Long = 0L
+        var workspaceId: Long = 1L
     }
 
     private class MessageRecord {

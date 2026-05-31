@@ -11,7 +11,8 @@ import com.aibyjohannes.alfred.R
 import com.aibyjohannes.alfred.databinding.ItemConversationBinding
 
 class ConversationAdapter(
-    private val onConversationSelected: (UiConversation) -> Unit
+    private val onConversationSelected: (UiConversation) -> Unit,
+    private val onConversationDeleted: (UiConversation) -> Unit
 ) : ListAdapter<UiConversation, ConversationAdapter.ConversationViewHolder>(ConversationDiffCallback()) {
 
     private var activeConversationId: Long? = null
@@ -22,7 +23,7 @@ class ConversationAdapter(
             parent,
             false
         )
-        return ConversationViewHolder(binding, onConversationSelected)
+        return ConversationViewHolder(binding, onConversationSelected, onConversationDeleted)
     }
 
     override fun onBindViewHolder(holder: ConversationViewHolder, position: Int) {
@@ -37,7 +38,8 @@ class ConversationAdapter(
 
     class ConversationViewHolder(
         private val binding: ItemConversationBinding,
-        private val onConversationSelected: (UiConversation) -> Unit
+        private val onConversationSelected: (UiConversation) -> Unit,
+        private val onConversationDeleted: (UiConversation) -> Unit
     ) : RecyclerView.ViewHolder(binding.root) {
 
         fun bind(conversation: UiConversation, activeConversationId: Long?) {
@@ -70,6 +72,9 @@ class ConversationAdapter(
             }
             binding.root.setOnClickListener {
                 onConversationSelected(conversation)
+            }
+            binding.conversationDeleteButton.setOnClickListener {
+                onConversationDeleted(conversation)
             }
         }
     }
