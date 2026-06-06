@@ -80,12 +80,7 @@ class OpenRouterChatEngine(
             val messages = buildConversationMessages(userMessage, conversationHistory)
             val traces = mutableListOf<ToolCallTrace>()
 
-            val initialParams = ChatCompletionCreateParams.builder()
-                .model(model)
-                .messages(messages)
-                .addFunctionTool(buildWebSearchFunctionDefinition())
-                .addFunctionTool(buildLocalKnowledgeSearchFunctionDefinition())
-                .build()
+            val initialParams = buildInitialParams(messages)
 
             val initialPass = streamSingleCompletion(client, initialParams) { delta ->
                 if (delta.isNotEmpty()) {
@@ -95,44 +90,25 @@ class OpenRouterChatEngine(
 
             val toolCalls = initialPass.assistantMessage.toolCalls().orElse(emptyList())
             if (toolCalls.isNotEmpty()) {
-                val followUpBuilder = ChatCompletionCreateParams.builder()
-                    .model(model)
-                    .messages(messages)
-
-                followUpBuilder.addMessage(initialPass.assistantMessage)
+                val followUpBuilder = buildToolFollowUpBuilder(messages, initialPass.assistantMessage)
 
                 for (toolCall in toolCalls) {
-                    val functionToolCall = toolCall.asFunction()
+                    val functionToolCall = try {
+                        toolCall.asFunction()
+                    } catch (e: Exception) {
+                        traces.add(
+                            ToolCallTrace(
+                                name = "unknown",
+                                argumentsJson = "",
+                                resultPreview = "Unknown tool call type: ${e.message}",
+                                isError = true
+                            )
+                        )
+                        continue
+                    }
                     val function = functionToolCall.function()
                     val arguments = function.arguments()
-                    val result = when (function.name()) {
-                        WEB_SEARCH_FUNCTION_NAME -> {
-                            val query = extractWebSearchQuery(arguments)
-                            if (query.isNullOrBlank()) {
-                                "Web search failed: missing required 'query' argument."
-                            } else {
-                                val searchResult = webSearchClient.search(query)
-                                searchResult.getOrElse { "Web search failed: ${it.message}" }
-                            }
-                        }
-
-                        LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME -> {
-                            val request = extractLocalKnowledgeSearchRequest(arguments)
-                            if (request == null) {
-                                "Local knowledge search failed: missing required 'query' argument."
-                            } else {
-                                val searchResult = effectiveLocalKnowledgeSearchClient.search(request)
-                                searchResult.fold(
-                                    onSuccess = { formatLocalKnowledgeResults(it) },
-                                    onFailure = { "Local knowledge search failed: ${it.message}" }
-                                )
-                            }
-                        }
-
-                        else -> {
-                            "Unknown tool: ${function.name()}"
-                        }
-                    }
+                    val result = executeToolCall(function.name(), arguments)
 
                     val isError = result.startsWith("Web search failed", ignoreCase = true) ||
                         result.startsWith("Local knowledge search failed", ignoreCase = true) ||
@@ -176,6 +152,65 @@ class OpenRouterChatEngine(
         }
 
         trySend(ChatStreamEvent.Completed(finalResult))
+    }
+
+    private fun buildInitialParams(messages: List<ChatCompletionMessageParam>): ChatCompletionCreateParams {
+        return addAlfredTools(
+            ChatCompletionCreateParams.builder()
+                .model(model)
+                .messages(messages)
+        ).build()
+    }
+
+    private fun buildToolFollowUpBuilder(
+        messages: List<ChatCompletionMessageParam>,
+        assistantMessage: ChatCompletionMessage
+    ): ChatCompletionCreateParams.Builder {
+        return addAlfredTools(
+            ChatCompletionCreateParams.builder()
+                .model(model)
+                .messages(messages)
+                .addMessage(assistantMessage)
+        )
+    }
+
+    private fun addAlfredTools(
+        builder: ChatCompletionCreateParams.Builder
+    ): ChatCompletionCreateParams.Builder {
+        return builder
+            .addFunctionTool(buildWebSearchFunctionDefinition())
+            .addFunctionTool(buildLocalKnowledgeSearchFunctionDefinition())
+    }
+
+    private suspend fun executeToolCall(functionName: String, arguments: String): String {
+        return when (functionName) {
+            WEB_SEARCH_FUNCTION_NAME -> {
+                val query = extractWebSearchQuery(arguments)
+                if (query.isNullOrBlank()) {
+                    "Web search failed: missing required 'query' argument."
+                } else {
+                    val searchResult = webSearchClient.search(query)
+                    searchResult.getOrElse { "Web search failed: ${it.message}" }
+                }
+            }
+
+            LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME -> {
+                val request = extractLocalKnowledgeSearchRequest(arguments)
+                if (request == null) {
+                    "Local knowledge search failed: missing required 'query' argument."
+                } else {
+                    val searchResult = effectiveLocalKnowledgeSearchClient.search(request)
+                    searchResult.fold(
+                        onSuccess = { formatLocalKnowledgeResults(it) },
+                        onFailure = { "Local knowledge search failed: ${it.message}" }
+                    )
+                }
+            }
+
+            else -> {
+                "Unknown tool: $functionName"
+            }
+        }
     }
 
     private fun buildConversationMessages(

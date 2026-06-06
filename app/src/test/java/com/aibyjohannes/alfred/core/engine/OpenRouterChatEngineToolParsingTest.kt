@@ -5,16 +5,66 @@ import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchRequest
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchResult
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSource
 import com.aibyjohannes.alfred.core.search.WebSearchClient
+import com.openai.core.JsonValue
+import com.openai.models.chat.completions.ChatCompletionCreateParams
+import com.openai.models.chat.completions.ChatCompletionMessage
+import com.openai.models.chat.completions.ChatCompletionMessageParam
+import com.openai.models.chat.completions.ChatCompletionUserMessageParam
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Optional
 
 class OpenRouterChatEngineToolParsingTest {
     @Test
     fun `local knowledge tool name is exposed`() {
         assertEquals("SearchLocalKnowledgeTool", OpenRouterChatEngine.LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME)
+    }
+
+    @Test
+    fun `initial request params include both Alfred tools`() {
+        val engine = buildEngine()
+        val method = OpenRouterChatEngine::class.java.getDeclaredMethod(
+            "buildInitialParams",
+            List::class.java
+        )
+        method.isAccessible = true
+
+        val params = method.invoke(engine, buildMessages()) as ChatCompletionCreateParams
+        val toolNames = params.tools().get().map { it.asFunction().function().name() }
+
+        assertEquals(
+            listOf(
+                OpenRouterChatEngine.WEB_SEARCH_FUNCTION_NAME,
+                OpenRouterChatEngine.LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME
+            ),
+            toolNames
+        )
+    }
+
+    @Test
+    fun `tool follow up request builder includes both Alfred tools`() {
+        val engine = buildEngine()
+        val method = OpenRouterChatEngine::class.java.getDeclaredMethod(
+            "buildToolFollowUpBuilder",
+            List::class.java,
+            ChatCompletionMessage::class.java
+        )
+        method.isAccessible = true
+
+        val builder = method.invoke(engine, buildMessages(), buildAssistantMessage()) as ChatCompletionCreateParams.Builder
+        val params = builder.build()
+        val toolNames = params.tools().get().map { it.asFunction().function().name() }
+
+        assertEquals(
+            listOf(
+                OpenRouterChatEngine.WEB_SEARCH_FUNCTION_NAME,
+                OpenRouterChatEngine.LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME
+            ),
+            toolNames
+        )
     }
 
     @Test
@@ -65,6 +115,20 @@ class OpenRouterChatEngineToolParsingTest {
     }
 
     @Test
+    fun `web search argument parsing rejects missing query`() {
+        val engine = buildEngine()
+        val method = OpenRouterChatEngine::class.java.getDeclaredMethod(
+            "extractWebSearchQuery",
+            String::class.java
+        )
+        method.isAccessible = true
+
+        val output = method.invoke(engine, """{"not_query":"latest news"}""")
+
+        assertNull(output)
+    }
+
+    @Test
     fun `local knowledge tool has empty fallback when client is absent`() = runTest {
         val engine = OpenRouterChatEngine(
             apiKey = "test",
@@ -93,5 +157,23 @@ class OpenRouterChatEngineToolParsingTest {
                 }
             }
         )
+    }
+
+    private fun buildMessages(): List<ChatCompletionMessageParam> {
+        return listOf(
+            ChatCompletionMessageParam.ofUser(
+                ChatCompletionUserMessageParam.builder()
+                    .content("Search for current Kotlin news")
+                    .build()
+            )
+        )
+    }
+
+    private fun buildAssistantMessage(): ChatCompletionMessage {
+        return ChatCompletionMessage.builder()
+            .role(JsonValue.from("assistant"))
+            .content("")
+            .refusal(Optional.empty())
+            .build()
     }
 }
