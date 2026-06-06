@@ -5,17 +5,11 @@ import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchRequest
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchResult
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSource
 import com.aibyjohannes.alfred.core.search.WebSearchClient
-import com.openai.core.JsonValue
-import com.openai.models.chat.completions.ChatCompletionCreateParams
-import com.openai.models.chat.completions.ChatCompletionMessage
-import com.openai.models.chat.completions.ChatCompletionMessageParam
-import com.openai.models.chat.completions.ChatCompletionUserMessageParam
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.util.Optional
 
 class OpenRouterChatEngineToolParsingTest {
     @Test
@@ -24,63 +18,42 @@ class OpenRouterChatEngineToolParsingTest {
     }
 
     @Test
-    fun `initial request params include both Alfred tools`() {
-        val engine = buildEngine()
-        val method = OpenRouterChatEngine::class.java.getDeclaredMethod(
-            "buildInitialParams",
-            List::class.java
-        )
+    fun `koog model preserves selected OpenRouter model id`() {
+        val method = OpenRouterChatEngine::class.java.declaredMethods.first { it.name.startsWith("buildKoogModel") }
         method.isAccessible = true
+        val model = method.invoke(buildEngine(), "google/gemini-3.5-flash")
+        val provider = model.javaClass.getMethod("getProvider").invoke(model)
+        val capabilities = model.javaClass.getMethod("getCapabilities").invoke(model) as List<*>
 
-        val params = method.invoke(engine, buildMessages()) as ChatCompletionCreateParams
-        val toolNames = params.tools().get().map { it.asFunction().function().name() }
-
-        assertEquals(
-            listOf(
-                OpenRouterChatEngine.WEB_SEARCH_FUNCTION_NAME,
-                OpenRouterChatEngine.LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME
-            ),
-            toolNames
-        )
+        assertEquals("OpenRouter", provider.javaClass.getMethod("getDisplay").invoke(provider))
+        assertEquals("google/gemini-3.5-flash", model.javaClass.getMethod("getId").invoke(model))
+        assertTrue(capabilities.any { it.toString().contains("Tools") })
+        assertTrue(capabilities.any { it.toString().contains("Completion") })
     }
 
     @Test
-    fun `tool follow up request builder includes both Alfred tools`() {
-        val engine = buildEngine()
-        val method = OpenRouterChatEngine::class.java.getDeclaredMethod(
-            "buildToolFollowUpBuilder",
-            List::class.java,
-            ChatCompletionMessage::class.java
-        )
+    fun `tool descriptors include both Alfred tools`() {
+        val method = OpenRouterChatEngine::class.java.declaredMethods.first { it.name.startsWith("buildAlfredToolDescriptors") }
         method.isAccessible = true
-
-        val builder = method.invoke(engine, buildMessages(), buildAssistantMessage()) as ChatCompletionCreateParams.Builder
-        val params = builder.build()
-        val toolNames = params.tools().get().map { it.asFunction().function().name() }
+        val tools = method.invoke(buildEngine()) as List<*>
 
         assertEquals(
             listOf(
                 OpenRouterChatEngine.WEB_SEARCH_FUNCTION_NAME,
                 OpenRouterChatEngine.LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME
             ),
-            toolNames
+            tools.map { it?.javaClass?.getMethod("getName")?.invoke(it) }
         )
     }
 
     @Test
     fun `local knowledge tool arguments are parsed with defaults and caps`() {
-        val engine = buildEngine()
-        val method = OpenRouterChatEngine::class.java.getDeclaredMethod(
-            "extractLocalKnowledgeSearchRequest",
-            String::class.java
-        )
-        method.isAccessible = true
-
-        val request = method.invoke(
-            engine,
+        val request = extractLocalKnowledgeSearchRequest(
+            buildEngine(),
             """{"query":"Kotlin preference","limit":99,"source":"sessions"}"""
-        ) as LocalKnowledgeSearchRequest
+        )
 
+        requireNotNull(request)
         assertEquals("Kotlin preference", request.query)
         assertEquals(10, request.limit)
         assertEquals(LocalKnowledgeSource.SESSIONS, request.source)
@@ -88,42 +61,29 @@ class OpenRouterChatEngineToolParsingTest {
 
     @Test
     fun `local knowledge tool argument parsing rejects missing query`() {
-        val engine = buildEngine()
-        val method = OpenRouterChatEngine::class.java.getDeclaredMethod(
-            "extractLocalKnowledgeSearchRequest",
-            String::class.java
-        )
-        method.isAccessible = true
-
-        val request = method.invoke(engine, """{"limit":3}""")
+        val request = extractLocalKnowledgeSearchRequest(buildEngine(), """{"limit":3}""")
 
         assertNull(request)
     }
 
     @Test
     fun `local knowledge formatter reports empty matches`() {
-        val engine = buildEngine()
-        val method = OpenRouterChatEngine::class.java.getDeclaredMethod(
-            "formatLocalKnowledgeResults",
-            List::class.java
-        )
+        val method = OpenRouterChatEngine::class.java.declaredMethods.first {
+            it.name.startsWith("formatLocalKnowledgeResults")
+        }
         method.isAccessible = true
-
-        val output = method.invoke(engine, emptyList<LocalKnowledgeSearchResult>()) as String
+        val output = method.invoke(buildEngine(), emptyList<LocalKnowledgeSearchResult>()) as String
 
         assertTrue(output.contains("No local sessions or memories matched"))
     }
 
     @Test
     fun `web search argument parsing rejects missing query`() {
-        val engine = buildEngine()
-        val method = OpenRouterChatEngine::class.java.getDeclaredMethod(
-            "extractWebSearchQuery",
-            String::class.java
-        )
+        val method = OpenRouterChatEngine::class.java.declaredMethods.first {
+            it.name.startsWith("extractWebSearchQuery")
+        }
         method.isAccessible = true
-
-        val output = method.invoke(engine, """{"not_query":"latest news"}""")
+        val output = method.invoke(buildEngine(), """{"not_query":"latest news"}""")
 
         assertNull(output)
     }
@@ -159,21 +119,14 @@ class OpenRouterChatEngineToolParsingTest {
         )
     }
 
-    private fun buildMessages(): List<ChatCompletionMessageParam> {
-        return listOf(
-            ChatCompletionMessageParam.ofUser(
-                ChatCompletionUserMessageParam.builder()
-                    .content("Search for current Kotlin news")
-                    .build()
-            )
-        )
-    }
-
-    private fun buildAssistantMessage(): ChatCompletionMessage {
-        return ChatCompletionMessage.builder()
-            .role(JsonValue.from("assistant"))
-            .content("")
-            .refusal(Optional.empty())
-            .build()
+    private fun extractLocalKnowledgeSearchRequest(
+        engine: OpenRouterChatEngine,
+        argumentsJson: String
+    ): LocalKnowledgeSearchRequest? {
+        val method = OpenRouterChatEngine::class.java.declaredMethods.first {
+            it.name.startsWith("extractLocalKnowledgeSearchRequest")
+        }
+        method.isAccessible = true
+        return method.invoke(engine, argumentsJson) as LocalKnowledgeSearchRequest?
     }
 }

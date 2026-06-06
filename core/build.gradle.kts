@@ -8,5 +8,6 @@ kotlin {
 
 dependencies {
     implementation(libs.openai.java)
+    implementation(libs.koog.openrouter.client.jvm)
     implementation(libs.coroutines.core)
 }

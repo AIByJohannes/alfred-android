@@ -22,6 +22,7 @@ mockk = "1.14.7"
 coroutinesTest = "1.10.2"
 archCoreTesting = "2.2.0"
 openaiJava = "4.23.0"
+koog = "1.0.0"
 room = "2.8.3"
 ksp = "2.2.21-2.0.4"
 
@@ -54,6 +55,7 @@ mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
 coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutinesTest" }
 arch-core-testing = { group = "androidx.arch.core", name = "core-testing", version.ref = "archCoreTesting" }
 openai-java = { group = "com.openai", name = "openai-java", version.ref = "openaiJava" }
+koog-openrouter-client-jvm = { group = "ai.koog", name = "prompt-executor-openrouter-client-jvm", version.ref = "koog" }
 androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }

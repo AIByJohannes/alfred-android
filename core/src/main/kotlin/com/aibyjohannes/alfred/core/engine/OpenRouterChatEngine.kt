@@ -1,5 +1,15 @@
 package com.aibyjohannes.alfred.core.engine
 
+import ai.koog.agents.core.tools.ToolDescriptor
+import ai.koog.agents.core.tools.ToolParameterDescriptor
+import ai.koog.agents.core.tools.ToolParameterType
+import ai.koog.prompt.Prompt
+import ai.koog.prompt.dsl.prompt
+import ai.koog.prompt.executor.clients.openrouter.OpenRouterLLMClient
+import ai.koog.prompt.llm.LLMCapability
+import ai.koog.prompt.llm.LLMProvider
+import ai.koog.prompt.llm.LLModel
+import ai.koog.prompt.streaming.StreamFrame
 import com.aibyjohannes.alfred.core.SystemPrompts
 import com.aibyjohannes.alfred.core.model.ChatStreamEvent
 import com.aibyjohannes.alfred.core.model.ChatTurnResult
@@ -11,19 +21,6 @@ import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchResult
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSource
 import com.aibyjohannes.alfred.core.search.WebSearchClient
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.openai.client.OpenAIClient
-import com.openai.client.okhttp.OpenAIOkHttpClient
-import com.openai.core.JsonValue
-import com.openai.helpers.ChatCompletionAccumulator
-import com.openai.models.FunctionDefinition
-import com.openai.models.FunctionParameters
-import com.openai.models.chat.completions.ChatCompletionAssistantMessageParam
-import com.openai.models.chat.completions.ChatCompletionCreateParams
-import com.openai.models.chat.completions.ChatCompletionMessage
-import com.openai.models.chat.completions.ChatCompletionMessageParam
-import com.openai.models.chat.completions.ChatCompletionSystemMessageParam
-import com.openai.models.chat.completions.ChatCompletionToolMessageParam
-import com.openai.models.chat.completions.ChatCompletionUserMessageParam
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
@@ -41,17 +38,16 @@ class OpenRouterChatEngine(
     private val effectiveLocalKnowledgeSearchClient: LocalKnowledgeSearchClient =
         localKnowledgeSearchClient ?: EmptyLocalKnowledgeSearchClient
 
-    private data class StreamPassResult(
-        val assistantMessage: ChatCompletionMessage,
-        val content: String
+    private data class ToolCall(
+        val id: String?,
+        val name: String,
+        val argumentsJson: String
     )
 
-    private fun buildClient(): OpenAIClient {
-        return OpenAIOkHttpClient.builder()
-            .apiKey(apiKey)
-            .baseUrl("https://openrouter.ai/api/v1")
-            .build()
-    }
+    private data class StreamPassResult(
+        val content: String,
+        val toolCalls: List<ToolCall>
+    )
 
     override suspend fun sendMessage(
         userMessage: String,
@@ -76,113 +72,221 @@ class OpenRouterChatEngine(
         conversationHistory: List<CoreChatMessage>
     ): Flow<ChatStreamEvent> = channelFlow {
         val finalResult = withContext(Dispatchers.IO) {
-            val client = buildClient()
-            val messages = buildConversationMessages(userMessage, conversationHistory)
-            val traces = mutableListOf<ToolCallTrace>()
+            OpenRouterLLMClient(apiKey).use { client ->
+                val koogModel = buildKoogModel(model)
+                val tools = buildAlfredToolDescriptors()
+                val initialPrompt = buildConversationPrompt(userMessage, conversationHistory)
+                val traces = mutableListOf<ToolCallTrace>()
 
-            val initialParams = buildInitialParams(messages)
-
-            val initialPass = streamSingleCompletion(client, initialParams) { delta ->
-                if (delta.isNotEmpty()) {
-                    trySend(ChatStreamEvent.Delta(delta))
-                }
-            }
-
-            val toolCalls = initialPass.assistantMessage.toolCalls().orElse(emptyList())
-            if (toolCalls.isNotEmpty()) {
-                val followUpBuilder = buildToolFollowUpBuilder(messages, initialPass.assistantMessage)
-
-                for (toolCall in toolCalls) {
-                    val functionToolCall = try {
-                        toolCall.asFunction()
-                    } catch (e: Exception) {
-                        traces.add(
-                            ToolCallTrace(
-                                name = "unknown",
-                                argumentsJson = "",
-                                resultPreview = "Unknown tool call type: ${e.message}",
-                                isError = true
-                            )
-                        )
-                        continue
-                    }
-                    val function = functionToolCall.function()
-                    val arguments = function.arguments()
-                    val result = executeToolCall(function.name(), arguments)
-
-                    val isError = result.startsWith("Web search failed", ignoreCase = true) ||
-                        result.startsWith("Local knowledge search failed", ignoreCase = true) ||
-                        result.startsWith("Unknown tool", ignoreCase = true)
-                    traces.add(
-                        ToolCallTrace(
-                            name = function.name(),
-                            argumentsJson = arguments,
-                            resultPreview = result.take(400),
-                            isError = isError
-                        )
-                    )
-
-                    followUpBuilder.addMessage(
-                        ChatCompletionToolMessageParam.builder()
-                            .toolCallId(functionToolCall.id())
-                            .contentAsJson(result)
-                            .build()
-                    )
-                }
-
-                val finalPass = streamSingleCompletion(client, followUpBuilder.build()) { delta ->
+                val initialPass = streamSingleCompletion(
+                    client = client,
+                    model = koogModel,
+                    prompt = initialPrompt,
+                    tools = tools
+                ) { delta ->
                     if (delta.isNotEmpty()) {
                         trySend(ChatStreamEvent.Delta(delta))
                     }
                 }
 
-                val finalText = finalPass.content
-                if (finalText.isBlank()) {
-                    throw Exception("No final response content from AI")
-                }
+                if (initialPass.toolCalls.isEmpty()) {
+                    if (initialPass.content.isBlank()) {
+                        throw Exception("No response content from AI")
+                    }
+                    ChatTurnResult(content = initialPass.content, toolCalls = traces)
+                } else {
+                    val toolResults = initialPass.toolCalls.map { toolCall ->
+                        val result = executeToolCall(toolCall.name, toolCall.argumentsJson)
+                        val isError = result.startsWith("Web search failed", ignoreCase = true) ||
+                            result.startsWith("Local knowledge search failed", ignoreCase = true) ||
+                            result.startsWith("Unknown tool", ignoreCase = true)
+                        traces.add(
+                            ToolCallTrace(
+                                name = toolCall.name,
+                                argumentsJson = toolCall.argumentsJson,
+                                resultPreview = result.take(400),
+                                isError = isError
+                            )
+                        )
+                        ToolResultForPrompt(
+                            toolCall = toolCall,
+                            result = result
+                        )
+                    }
 
-                ChatTurnResult(content = finalText, toolCalls = traces)
-            } else {
-                val content = initialPass.content
-                if (content.isBlank()) {
-                    throw Exception("No response content from AI")
+                    val followUpPrompt = buildConversationPrompt(
+                        userMessage = userMessage,
+                        conversationHistory = conversationHistory,
+                        assistantToolRequest = initialPass.content,
+                        toolResults = toolResults
+                    )
+
+                    val finalPass = streamSingleCompletion(
+                        client = client,
+                        model = koogModel,
+                        prompt = followUpPrompt,
+                        tools = tools
+                    ) { delta ->
+                        if (delta.isNotEmpty()) {
+                            trySend(ChatStreamEvent.Delta(delta))
+                        }
+                    }
+
+                    if (finalPass.content.isBlank()) {
+                        throw Exception("No final response content from AI")
+                    }
+                    ChatTurnResult(content = finalPass.content, toolCalls = traces)
                 }
-                ChatTurnResult(content = content, toolCalls = traces)
             }
         }
 
         trySend(ChatStreamEvent.Completed(finalResult))
     }
 
-    private fun buildInitialParams(messages: List<ChatCompletionMessageParam>): ChatCompletionCreateParams {
-        return addAlfredTools(
-            ChatCompletionCreateParams.builder()
-                .model(model)
-                .messages(messages)
-        ).build()
-    }
-
-    private fun buildToolFollowUpBuilder(
-        messages: List<ChatCompletionMessageParam>,
-        assistantMessage: ChatCompletionMessage
-    ): ChatCompletionCreateParams.Builder {
-        return addAlfredTools(
-            ChatCompletionCreateParams.builder()
-                .model(model)
-                .messages(messages)
-                .addMessage(assistantMessage)
+    internal fun buildKoogModel(modelId: String): LLModel {
+        return LLModel(
+            provider = LLMProvider.OpenRouter,
+            id = modelId,
+            capabilities = listOf(
+                LLMCapability.Completion,
+                LLMCapability.Tools,
+                LLMCapability.ToolChoice,
+                LLMCapability.Temperature
+            )
         )
     }
 
-    private fun addAlfredTools(
-        builder: ChatCompletionCreateParams.Builder
-    ): ChatCompletionCreateParams.Builder {
-        return builder
-            .addFunctionTool(buildWebSearchFunctionDefinition())
-            .addFunctionTool(buildLocalKnowledgeSearchFunctionDefinition())
+    internal fun buildAlfredToolDescriptors(): List<ToolDescriptor> {
+        return listOf(
+            ToolDescriptor(
+                name = WEB_SEARCH_FUNCTION_NAME,
+                description = "Search the web for current information.",
+                requiredParameters = listOf(
+                    ToolParameterDescriptor(
+                        name = "query",
+                        description = "The search query to look up on the web",
+                        type = ToolParameterType.String
+                    )
+                )
+            ),
+            ToolDescriptor(
+                name = LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME,
+                description = "Search previous local sessions and memories for user-specific recall.",
+                requiredParameters = listOf(
+                    ToolParameterDescriptor(
+                        name = "query",
+                        description = "Search query for prior local sessions and memories",
+                        type = ToolParameterType.String
+                    )
+                ),
+                optionalParameters = listOf(
+                    ToolParameterDescriptor(
+                        name = "limit",
+                        description = "Maximum number of local results to return. Defaults to 5 and is capped at 10.",
+                        type = ToolParameterType.Integer
+                    ),
+                    ToolParameterDescriptor(
+                        name = "source",
+                        description = "Which local source to search: all, sessions, or memories",
+                        type = ToolParameterType.Enum(arrayOf("all", "sessions", "memories"))
+                    )
+                )
+            )
+        )
     }
 
-    private suspend fun executeToolCall(functionName: String, arguments: String): String {
+    private data class ToolResultForPrompt(
+        val toolCall: ToolCall,
+        val result: String
+    )
+
+    private fun buildConversationPrompt(
+        userMessage: String,
+        conversationHistory: List<CoreChatMessage>,
+        assistantToolRequest: String? = null,
+        toolResults: List<ToolResultForPrompt> = emptyList()
+    ) = prompt("alfred-openrouter-chat") {
+        system(prompt)
+
+        for (msg in conversationHistory) {
+            when (msg.role) {
+                "user" -> user(msg.content)
+                "assistant" -> assistant(msg.content)
+            }
+        }
+
+        user(userMessage)
+
+        if (toolResults.isNotEmpty()) {
+            if (!assistantToolRequest.isNullOrBlank()) {
+                assistant(assistantToolRequest)
+            }
+            user(formatToolResultsForFollowUp(toolResults))
+        }
+    }
+
+    private fun formatToolResultsForFollowUp(toolResults: List<ToolResultForPrompt>): String {
+        return buildString {
+            appendLine("Tool results are available for the previous assistant tool request.")
+            appendLine("Use these results to answer the user's original message. Do not call tools again unless required.")
+            toolResults.forEachIndexed { index, toolResult ->
+                appendLine()
+                append(index + 1)
+                append(". ")
+                append(toolResult.toolCall.name)
+                toolResult.toolCall.id?.let { append(" (id=$it)") }
+                appendLine()
+                append("Arguments JSON: ")
+                appendLine(toolResult.toolCall.argumentsJson)
+                appendLine("Result:")
+                appendLine(toolResult.result)
+            }
+        }.trim()
+    }
+
+    private suspend fun streamSingleCompletion(
+        client: OpenRouterLLMClient,
+        model: LLModel,
+        prompt: Prompt,
+        tools: List<ToolDescriptor>,
+        onDelta: (String) -> Unit
+    ): StreamPassResult {
+        val content = StringBuilder()
+        val toolCalls = mutableListOf<ToolCall>()
+        var completedText: String? = null
+
+        client.executeStreaming(prompt, model, tools).collect { frame ->
+            when (frame) {
+                is StreamFrame.TextDelta -> {
+                    content.append(frame.text)
+                    onDelta(frame.text)
+                }
+
+                is StreamFrame.TextComplete -> {
+                    completedText = frame.text
+                }
+
+                is StreamFrame.ToolCallComplete -> {
+                    toolCalls.add(
+                        ToolCall(
+                            id = frame.id,
+                            name = frame.name,
+                            argumentsJson = frame.content
+                        )
+                    )
+                }
+
+                else -> Unit
+            }
+        }
+
+        return StreamPassResult(
+            content = completedText ?: content.toString(),
+            toolCalls = toolCalls
+        )
+    }
+
+    internal suspend fun executeToolCall(functionName: String, arguments: String): String {
         return when (functionName) {
             WEB_SEARCH_FUNCTION_NAME -> {
                 val query = extractWebSearchQuery(arguments)
@@ -213,133 +317,7 @@ class OpenRouterChatEngine(
         }
     }
 
-    private fun buildConversationMessages(
-        userMessage: String,
-        conversationHistory: List<CoreChatMessage>
-    ): List<ChatCompletionMessageParam> {
-        val messages = mutableListOf<ChatCompletionMessageParam>()
-        messages.add(
-            ChatCompletionMessageParam.ofSystem(
-                ChatCompletionSystemMessageParam.builder()
-                    .content(prompt)
-                    .build()
-            )
-        )
-
-        for (msg in conversationHistory) {
-            when (msg.role) {
-                "user" -> messages.add(
-                    ChatCompletionMessageParam.ofUser(
-                        ChatCompletionUserMessageParam.builder()
-                            .content(msg.content)
-                            .build()
-                    )
-                )
-
-                "assistant" -> messages.add(
-                    ChatCompletionMessageParam.ofAssistant(
-                        ChatCompletionAssistantMessageParam.builder()
-                            .content(msg.content)
-                            .build()
-                    )
-                )
-            }
-        }
-
-        messages.add(
-            ChatCompletionMessageParam.ofUser(
-                ChatCompletionUserMessageParam.builder()
-                    .content(userMessage)
-                    .build()
-            )
-        )
-
-        return messages
-    }
-
-    private fun streamSingleCompletion(
-        client: OpenAIClient,
-        params: ChatCompletionCreateParams,
-        onDelta: (String) -> Unit
-    ): StreamPassResult {
-        val accumulator = ChatCompletionAccumulator.create()
-
-        client.chat().completions().createStreaming(params).use { streamResponse ->
-            streamResponse.stream().forEach { chunk ->
-                accumulator.accumulate(chunk)
-                chunk.choices().forEach { choice ->
-                    choice.delta().content().ifPresent { contentDelta ->
-                        onDelta(contentDelta)
-                    }
-                }
-            }
-        }
-
-        val completion = accumulator.chatCompletion()
-        val choice = completion.choices().firstOrNull()
-            ?: throw Exception("No response from AI")
-        val assistantMessage = choice.message()
-
-        return StreamPassResult(
-            assistantMessage = assistantMessage,
-            content = assistantMessage.content().orElse("")
-        )
-    }
-
-    private fun buildWebSearchFunctionDefinition(): FunctionDefinition {
-        val properties = mapOf(
-            "query" to mapOf(
-                "type" to "string",
-                "description" to "The search query to look up on the web"
-            )
-        )
-
-        val parameters = FunctionParameters.builder()
-            .putAdditionalProperty("type", JsonValue.from("object"))
-            .putAdditionalProperty("properties", JsonValue.from(properties))
-            .putAdditionalProperty("required", JsonValue.from(listOf("query")))
-            .putAdditionalProperty("additionalProperties", JsonValue.from(false))
-            .build()
-
-        return FunctionDefinition.builder()
-            .name(WEB_SEARCH_FUNCTION_NAME)
-            .description("Search the web for current information.")
-            .parameters(parameters)
-            .build()
-    }
-
-    private fun buildLocalKnowledgeSearchFunctionDefinition(): FunctionDefinition {
-        val properties = mapOf(
-            "query" to mapOf(
-                "type" to "string",
-                "description" to "Search query for prior local sessions and memories"
-            ),
-            "limit" to mapOf(
-                "type" to "integer",
-                "description" to "Maximum number of local results to return. Defaults to 5 and is capped at 10."
-            ),
-            "source" to mapOf(
-                "type" to "string",
-                "description" to "Which local source to search: all, sessions, or memories",
-                "enum" to listOf("all", "sessions", "memories")
-            )
-        )
-
-        val parameters = FunctionParameters.builder()
-            .putAdditionalProperty("type", JsonValue.from("object"))
-            .putAdditionalProperty("properties", JsonValue.from(properties))
-            .putAdditionalProperty("required", JsonValue.from(listOf("query")))
-            .putAdditionalProperty("additionalProperties", JsonValue.from(false))
-            .build()
-
-        return FunctionDefinition.builder()
-            .name(LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME)
-            .description("Search previous local sessions and memories for user-specific recall.")
-            .parameters(parameters)
-            .build()
-    }
-
-    private fun extractWebSearchQuery(argumentsJson: String): String? {
+    internal fun extractWebSearchQuery(argumentsJson: String): String? {
         return try {
             val node = objectMapper.readTree(argumentsJson)
             node.path("query").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
@@ -348,7 +326,7 @@ class OpenRouterChatEngine(
         }
     }
 
-    private fun extractLocalKnowledgeSearchRequest(argumentsJson: String): LocalKnowledgeSearchRequest? {
+    internal fun extractLocalKnowledgeSearchRequest(argumentsJson: String): LocalKnowledgeSearchRequest? {
         return try {
             val node = objectMapper.readTree(argumentsJson)
             val query = node.path("query").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
@@ -369,7 +347,7 @@ class OpenRouterChatEngine(
         }
     }
 
-    private fun formatLocalKnowledgeResults(results: List<LocalKnowledgeSearchResult>): String {
+    internal fun formatLocalKnowledgeResults(results: List<LocalKnowledgeSearchResult>): String {
         if (results.isEmpty()) {
             return "No local sessions or memories matched the query."
         }
