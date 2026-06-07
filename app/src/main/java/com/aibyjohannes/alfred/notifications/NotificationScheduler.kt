@@ -8,44 +8,130 @@ import android.os.Build
 import java.util.Calendar
 
 object NotificationScheduler {
+    const val ACTION_DAILY_REMINDER = "com.aibyjohannes.alfred.notifications.DAILY_REMINDER"
+    const val ACTION_INACTIVITY_REMINDER = "com.aibyjohannes.alfred.notifications.INACTIVITY_REMINDER"
 
     fun scheduleDailyReminder(context: Context) {
+        val preferences = NotificationPreferencesStore(context)
+        if (!preferences.notificationsEnabled) {
+            cancelDailyReminder(context)
+            return
+        }
+
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+        val pendingIntent = reminderPendingIntent(context, ACTION_DAILY_REMINDER, REQUEST_DAILY_REMINDER)
 
-        val intent = Intent(context, AlfredNotificationReceiver::class.java)
-        val pendingIntent = PendingIntent.getBroadcast(
-            context,
-            0,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        // Set calendar to 9:00 AM
         val calendar = Calendar.getInstance().apply {
             timeInMillis = System.currentTimeMillis()
-            set(Calendar.HOUR_OF_DAY, 9)
-            set(Calendar.MINUTE, 0)
+            set(Calendar.HOUR_OF_DAY, preferences.dailyReminderHour)
+            set(Calendar.MINUTE, preferences.dailyReminderMinute)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
 
-        // If 9 AM has already passed today, schedule for tomorrow
         if (calendar.timeInMillis <= System.currentTimeMillis()) {
             calendar.add(Calendar.DAY_OF_YEAR, 1)
         }
 
+        setAlarm(alarmManager, calendar.timeInMillis, pendingIntent)
+    }
+
+    fun scheduleInactivityReminder(context: Context) {
+        val preferences = NotificationPreferencesStore(context)
+        if (!preferences.notificationsEnabled) {
+            cancelInactivityReminder(context)
+            return
+        }
+
+        val lastActivity = preferences.lastChatActivityEpochMs
+        if (lastActivity <= 0L || preferences.lastInactivityNotificationActivityEpochMs == lastActivity) {
+            cancelInactivityReminder(context)
+            return
+        }
+
+        val now = System.currentTimeMillis()
+        val targetTime = (lastActivity + INACTIVITY_DELAY_MS).coerceAtLeast(
+            preferences.lastNotificationEpochMs + NOTIFICATION_COOLDOWN_MS
+        )
+        if (targetTime <= now) {
+            scheduleInactivityAt(context, now + MIN_RESCHEDULE_DELAY_MS)
+        } else {
+            scheduleInactivityAt(context, targetTime)
+        }
+    }
+
+    fun rescheduleAll(context: Context) {
+        val preferences = NotificationPreferencesStore(context)
+        if (preferences.notificationsEnabled) {
+            scheduleDailyReminder(context)
+            scheduleInactivityReminder(context)
+        } else {
+            cancelAll(context)
+        }
+    }
+
+    fun cancelAll(context: Context) {
+        cancelDailyReminder(context)
+        cancelInactivityReminder(context)
+    }
+
+    fun recordChatActivity(context: Context) {
+        NotificationPreferencesStore(context).lastChatActivityEpochMs = System.currentTimeMillis()
+        scheduleInactivityReminder(context)
+    }
+
+    private fun scheduleInactivityAt(context: Context, triggerAtMillis: Long) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+        val pendingIntent = reminderPendingIntent(context, ACTION_INACTIVITY_REMINDER, REQUEST_INACTIVITY_REMINDER)
+        setAlarm(alarmManager, triggerAtMillis, pendingIntent)
+    }
+
+    private fun setAlarm(
+        alarmManager: AlarmManager,
+        triggerAtMillis: Long,
+        pendingIntent: PendingIntent
+    ) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             alarmManager.setAndAllowWhileIdle(
                 AlarmManager.RTC_WAKEUP,
-                calendar.timeInMillis,
+                triggerAtMillis,
                 pendingIntent
             )
         } else {
             alarmManager.set(
                 AlarmManager.RTC_WAKEUP,
-                calendar.timeInMillis,
+                triggerAtMillis,
                 pendingIntent
             )
         }
     }
+
+    private fun cancelDailyReminder(context: Context) {
+        cancel(context, ACTION_DAILY_REMINDER, REQUEST_DAILY_REMINDER)
+    }
+
+    private fun cancelInactivityReminder(context: Context) {
+        cancel(context, ACTION_INACTIVITY_REMINDER, REQUEST_INACTIVITY_REMINDER)
+    }
+
+    private fun cancel(context: Context, action: String, requestCode: Int) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+        alarmManager.cancel(reminderPendingIntent(context, action, requestCode))
+    }
+
+    private fun reminderPendingIntent(context: Context, action: String, requestCode: Int): PendingIntent {
+        val intent = Intent(context, AlfredNotificationReceiver::class.java).setAction(action)
+        return PendingIntent.getBroadcast(
+            context,
+            requestCode,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    const val INACTIVITY_DELAY_MS = 24 * 60 * 60 * 1000L
+    const val NOTIFICATION_COOLDOWN_MS = 6 * 60 * 60 * 1000L
+    private const val MIN_RESCHEDULE_DELAY_MS = 60 * 1000L
+    private const val REQUEST_DAILY_REMINDER = 1001
+    private const val REQUEST_INACTIVITY_REMINDER = 1002
 }

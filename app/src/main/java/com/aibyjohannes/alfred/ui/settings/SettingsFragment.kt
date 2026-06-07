@@ -1,16 +1,24 @@
 package com.aibyjohannes.alfred.ui.settings
 
+import android.Manifest
 import android.content.res.ColorStateList
+import android.os.Build
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import com.aibyjohannes.alfred.R
 import com.aibyjohannes.alfred.data.ApiKeyStore
 import com.aibyjohannes.alfred.databinding.FragmentSettingsBinding
+import com.aibyjohannes.alfred.notifications.NotificationPreferencesStore
+import com.aibyjohannes.alfred.notifications.NotificationScheduler
+import com.google.android.material.timepicker.MaterialTimePicker
+import com.google.android.material.timepicker.TimeFormat
 import com.google.android.material.snackbar.Snackbar
 
 class SettingsFragment : Fragment() {
@@ -19,6 +27,27 @@ class SettingsFragment : Fragment() {
     private val binding get() = _binding!!
 
     private lateinit var apiKeyStore: ApiKeyStore
+    private lateinit var notificationPreferencesStore: NotificationPreferencesStore
+    private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        notificationPermissionLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { isGranted ->
+            if (isGranted) {
+                notificationPreferencesStore.notificationsEnabled = true
+                NotificationScheduler.rescheduleAll(requireContext())
+                updateNotificationControls()
+            } else {
+                notificationPreferencesStore.notificationsEnabled = false
+                updateNotificationControls()
+                _binding?.root?.let { root ->
+                    Snackbar.make(root, R.string.notifications_permission_denied, Snackbar.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -29,10 +58,13 @@ class SettingsFragment : Fragment() {
         val root: View = binding.root
 
         apiKeyStore = ApiKeyStore(requireContext())
+        notificationPreferencesStore = NotificationPreferencesStore(requireContext())
 
         setupButtons()
         setupModelDropdown()
+        setupNotificationControls()
         updateStatus()
+        updateNotificationControls()
 
         return root
     }
@@ -75,6 +107,72 @@ class SettingsFragment : Fragment() {
             Snackbar.make(binding.root, R.string.api_key_cleared, Snackbar.LENGTH_SHORT).show()
             updateStatus()
         }
+    }
+
+    private fun setupNotificationControls() {
+        binding.notificationsEnabledSwitch.setOnCheckedChangeListener { _, isChecked ->
+            if (isChecked == notificationPreferencesStore.notificationsEnabled) {
+                return@setOnCheckedChangeListener
+            }
+
+            if (isChecked) {
+                enableNotifications()
+            } else {
+                notificationPreferencesStore.notificationsEnabled = false
+                NotificationScheduler.cancelAll(requireContext())
+                updateNotificationControls()
+            }
+        }
+
+        binding.notificationTimeButton.setOnClickListener {
+            val picker = MaterialTimePicker.Builder()
+                .setTimeFormat(TimeFormat.CLOCK_24H)
+                .setHour(notificationPreferencesStore.dailyReminderHour)
+                .setMinute(notificationPreferencesStore.dailyReminderMinute)
+                .setTitleText(R.string.notifications_time_picker_title)
+                .build()
+
+            picker.addOnPositiveButtonClickListener {
+                notificationPreferencesStore.dailyReminderHour = picker.hour
+                notificationPreferencesStore.dailyReminderMinute = picker.minute
+                NotificationScheduler.rescheduleAll(requireContext())
+                updateNotificationControls()
+            }
+
+            picker.show(parentFragmentManager, "notification_time_picker")
+        }
+    }
+
+    private fun enableNotifications() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            notificationPreferencesStore.notificationsEnabled = true
+            NotificationScheduler.rescheduleAll(requireContext())
+            updateNotificationControls()
+        }
+    }
+
+    private fun updateNotificationControls() {
+        if (!::notificationPreferencesStore.isInitialized || _binding == null) return
+
+        binding.notificationsEnabledSwitch.setOnCheckedChangeListener(null)
+        binding.notificationsEnabledSwitch.isChecked = notificationPreferencesStore.notificationsEnabled
+        binding.notificationsEnabledSwitch.setOnCheckedChangeListener { _, isChecked ->
+            if (isChecked == notificationPreferencesStore.notificationsEnabled) {
+                return@setOnCheckedChangeListener
+            }
+
+            if (isChecked) {
+                enableNotifications()
+            } else {
+                notificationPreferencesStore.notificationsEnabled = false
+                NotificationScheduler.cancelAll(requireContext())
+                updateNotificationControls()
+            }
+        }
+        binding.notificationTimeButton.text = notificationPreferencesStore.reminderTimeLabel()
+        binding.notificationTimeButton.isEnabled = notificationPreferencesStore.notificationsEnabled
     }
 
     private fun updateStatus() {

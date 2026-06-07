@@ -50,6 +50,7 @@ class HomeViewModel : ViewModel() {
     private var apiKeyStore: ApiKeyStore? = null
     private var conversationStore: ConversationStore? = null
     private var sysInfoProvider: SysInfoProvider? = null
+    private var onChatActivity: (() -> Unit)? = null
 
     private val _messages = MutableLiveData<List<UiChatMessage>>(emptyList())
     val messages: LiveData<List<UiChatMessage>> = _messages
@@ -81,9 +82,12 @@ class HomeViewModel : ViewModel() {
         apiKeyStore: ApiKeyStore,
         repository: ChatRepository,
         conversationStore: ConversationStore,
-        sysInfoProvider: SysInfoProvider? = null
+        sysInfoProvider: SysInfoProvider? = null,
+        onChatActivity: (() -> Unit)? = null
     ) {
         if (this.apiKeyStore != null && this.repository != null && this.conversationStore != null) {
+            this.sysInfoProvider = sysInfoProvider
+            this.onChatActivity = onChatActivity
             checkApiKey()
             return
         }
@@ -91,6 +95,7 @@ class HomeViewModel : ViewModel() {
         this.repository = repository
         this.conversationStore = conversationStore
         this.sysInfoProvider = sysInfoProvider
+        this.onChatActivity = onChatActivity
         checkApiKey()
         loadWorkspacesAndActiveConversation()
     }
@@ -183,6 +188,7 @@ class HomeViewModel : ViewModel() {
                                 role = ChatMessage.ROLE_ASSISTANT,
                                 content = finalResponse
                             )
+                            onChatActivity?.invoke()
                             refreshConversationList()
 
                             updateUiMessage(

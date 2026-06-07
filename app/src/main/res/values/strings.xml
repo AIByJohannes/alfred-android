@@ -37,6 +37,12 @@
     <string name="api_key_not_configured">No API key configured</string>
     <string name="api_key_empty_error">Please enter an API key</string>
     <string name="language_model_helper">Changes apply to new chat requests.</string>
+    <string name="notifications_title">Notifications</string>
+    <string name="notifications_enabled">Enable notifications</string>
+    <string name="notifications_description">Daily and inactivity reminders use recent local chats to suggest what to continue.</string>
+    <string name="notifications_daily_time">Daily reminder time</string>
+    <string name="notifications_time_picker_title">Daily reminder time</string>
+    <string name="notifications_permission_denied">Notification permission was not granted</string>
 
     <!-- Delete Conversation -->
     <string name="delete_conversation">Delete conversation</string>
