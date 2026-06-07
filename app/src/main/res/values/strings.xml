@@ -27,14 +27,16 @@
     <string name="api_key_label">OpenRouter API Key</string>
 
     <string name="api_key_hint">Paste your OpenRouter API key here</string>
+    <string name="api_key_helper">Stored locally and used only for OpenRouter requests.</string>
     <string name="save_api_key">Save API Key</string>
     <string name="api_key_saved">API key saved successfully</string>
     <string name="api_key_cleared">API key cleared</string>
     <string name="clear_api_key">Clear API Key</string>
     <string name="get_api_key">Get an API key at openrouter.ai</string>
-    <string name="api_key_configured">✓ API key is configured</string>
-    <string name="api_key_not_configured">✗ No API key configured</string>
+    <string name="api_key_configured">API key configured</string>
+    <string name="api_key_not_configured">No API key configured</string>
     <string name="api_key_empty_error">Please enter an API key</string>
+    <string name="language_model_helper">Changes apply to new chat requests.</string>
 
     <!-- Delete Conversation -->
     <string name="delete_conversation">Delete conversation</string>

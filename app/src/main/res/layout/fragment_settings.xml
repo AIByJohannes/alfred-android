@@ -17,7 +17,7 @@
             android:id="@+id/card_api_credentials"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="8dp"
+            android:layout_marginBottom="12dp"
             app:cardCornerRadius="12dp"
             app:cardElevation="2dp"
             app:strokeWidth="0dp">
@@ -31,36 +31,45 @@
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:gravity="center_vertical"
+                    android:gravity="top"
                     android:orientation="horizontal">
 
                     <ImageView
                         android:layout_width="24dp"
                         android:layout_height="24dp"
+                        android:layout_marginTop="2dp"
                         android:contentDescription="@null"
                         android:src="@drawable/ic_key"
                         app:tint="?attr/colorPrimary" />
 
-                    <TextView
+                    <LinearLayout
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_marginStart="12dp"
                         android:layout_weight="1"
-                        android:text="@string/api_credentials_title"
-                        android:textAppearance="?attr/textAppearanceSubtitle1"
-                        android:textColor="?attr/colorOnSurface"
-                        android:textStyle="bold" />
+                        android:orientation="vertical">
 
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/api_key_status_chip"
-                        style="@style/Widget.MaterialComponents.Chip.Action"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:checkable="false"
-                        android:clickable="false"
-                        android:focusable="false"
-                        android:textSize="12sp"
-                        app:chipMinHeight="28dp" />
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/api_credentials_title"
+                            android:textAppearance="?attr/textAppearanceSubtitle1"
+                            android:textColor="?attr/colorOnSurface"
+                            android:textStyle="bold" />
+
+                        <com.google.android.material.chip.Chip
+                            android:id="@+id/api_key_status_chip"
+                            style="@style/Widget.MaterialComponents.Chip.Action"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:checkable="false"
+                            android:clickable="false"
+                            android:focusable="false"
+                            android:textSize="12sp"
+                            app:chipMinHeight="28dp" />
+
+                    </LinearLayout>
 
                 </LinearLayout>
 
@@ -84,13 +93,16 @@
                     android:layout_marginTop="16dp"
                     android:hint="@string/api_key_label"
                     app:endIconMode="password_toggle"
+                    app:helperText="@string/api_key_helper"
                     app:placeholderText="@string/api_key_hint">
 
                     <com.google.android.material.textfield.TextInputEditText
                         android:id="@+id/api_key_input"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:inputType="textPassword" />
+                        android:inputType="textPassword"
+                        android:maxLines="1"
+                        android:singleLine="true" />
 
                 </com.google.android.material.textfield.TextInputLayout>
 
@@ -174,13 +186,16 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
-                    android:hint="@string/language_model_title">
+                    android:hint="@string/language_model_title"
+                    app:helperText="@string/language_model_helper">
 
                     <AutoCompleteTextView
                         android:id="@+id/model_select_dropdown"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:inputType="none" />
+                        android:inputType="none"
+                        android:maxLines="1"
+                        android:singleLine="true" />
 
                 </com.google.android.material.textfield.TextInputLayout>
 
