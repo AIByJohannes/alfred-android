@@ -32,6 +32,15 @@ class OpenRouterChatEngineToolParsingTest {
     }
 
     @Test
+    fun `openrouter client is created with explicit koog http factory`() {
+        val method = OpenRouterChatEngine::class.java.declaredMethods.first { it.name.startsWith("createOpenRouterClient") }
+        method.isAccessible = true
+
+        val client = method.invoke(buildEngine()) as AutoCloseable
+        client.close()
+    }
+
+    @Test
     fun `tool descriptors include both Alfred tools`() {
         val method = OpenRouterChatEngine::class.java.declaredMethods.first { it.name.startsWith("buildAlfredToolDescriptors") }
         method.isAccessible = true

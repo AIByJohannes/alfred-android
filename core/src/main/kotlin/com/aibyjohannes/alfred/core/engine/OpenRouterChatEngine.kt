@@ -3,8 +3,10 @@ package com.aibyjohannes.alfred.core.engine
 import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolParameterDescriptor
 import ai.koog.agents.core.tools.ToolParameterType
+import ai.koog.http.client.ktor.KtorKoogHttpClient
 import ai.koog.prompt.Prompt
 import ai.koog.prompt.dsl.prompt
+import ai.koog.prompt.executor.clients.openrouter.OpenRouterClientSettings
 import ai.koog.prompt.executor.clients.openrouter.OpenRouterLLMClient
 import ai.koog.prompt.llm.LLMCapability
 import ai.koog.prompt.llm.LLMProvider
@@ -72,7 +74,7 @@ class OpenRouterChatEngine(
         conversationHistory: List<CoreChatMessage>
     ): Flow<ChatStreamEvent> = channelFlow {
         val finalResult = withContext(Dispatchers.IO) {
-            OpenRouterLLMClient(apiKey).use { client ->
+            createOpenRouterClient().use { client ->
                 val koogModel = buildKoogModel(model)
                 val tools = buildAlfredToolDescriptors()
                 val initialPrompt = buildConversationPrompt(userMessage, conversationHistory)
@@ -141,6 +143,10 @@ class OpenRouterChatEngine(
         }
 
         trySend(ChatStreamEvent.Completed(finalResult))
+    }
+
+    internal fun createOpenRouterClient(): OpenRouterLLMClient {
+        return OpenRouterLLMClient(apiKey, OpenRouterClientSettings(), KtorKoogHttpClient.Factory())
     }
 
     internal fun buildKoogModel(modelId: String): LLModel {
