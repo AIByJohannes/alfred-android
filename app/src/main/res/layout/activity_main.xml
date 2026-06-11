@@ -187,17 +187,6 @@
                     android:singleLine="true" />
             </LinearLayout>
 
-            <ImageButton
-                android:id="@+id/btn_drawer_store"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:contentDescription="@string/settings_title"
-                android:src="@drawable/ic_store"
-                app:tint="#FFFFFF"
-                android:clickable="false"
-                android:focusable="false" />
-
         </LinearLayout>
     </LinearLayout>
 </androidx.drawerlayout.widget.DrawerLayout>
