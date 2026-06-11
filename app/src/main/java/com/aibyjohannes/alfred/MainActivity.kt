@@ -79,6 +79,13 @@ class MainActivity : AppCompatActivity() {
         supportActionBar?.setDisplayShowTitleEnabled(false)
         binding.appBarMain.toolbar.navigationIcon = ContextCompat.getDrawable(this, R.drawable.ic_hamburger_two_lines)
         setupModelSelector()
+        navController.addOnDestinationChangedListener { _, destination, _ ->
+            val isChatOpen = destination.id == R.id.nav_home
+            binding.appBarMain.toolbarModelSelectionPill.isVisible = isChatOpen
+            if (isChatOpen) {
+                updateModelSelectorPillText()
+            }
+        }
         setupDrawer()
     }
 
@@ -176,7 +183,9 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         if (::binding.isInitialized && ::profilePreferencesStore.isInitialized) {
             updateProfileRow()
-            updateModelSelectorPillText()
+            if (binding.appBarMain.toolbarModelSelectionPill.isVisible) {
+                updateModelSelectorPillText()
+            }
         }
     }
 
