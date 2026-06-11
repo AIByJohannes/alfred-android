@@ -16,6 +16,14 @@
         <item>GPT-5.5</item>
         <item>DeepSeek V3.2</item>
     </string-array>
+    <string-array name="model_toolbar_labels">
+        <item>3.5 Flash</item>
+        <item>3.1 Lite</item>
+        <item>3.1 Pro</item>
+        <item>Sonnet 4.6</item>
+        <item>5.5 High</item>
+        <item>DeepSeek</item>
+    </string-array>
     <string-array name="model_values">
         <item>google/gemini-3.5-flash</item>
         <item>google/gemini-3.1-flash-lite</item>

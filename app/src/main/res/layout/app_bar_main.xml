@@ -16,7 +16,44 @@
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
             android:background="@color/top_bar_bg"
-            app:popupTheme="@style/Theme.Alfred.PopupOverlay" />
+            app:popupTheme="@style/Theme.Alfred.PopupOverlay">
+
+            <LinearLayout
+                android:id="@+id/toolbar_model_selection_pill"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_gravity="start|center_vertical"
+                android:layout_marginStart="72dp"
+                android:background="@drawable/bg_model_selector_pill"
+                android:clickable="true"
+                android:contentDescription="@string/choose_model"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:minWidth="116dp"
+                android:orientation="horizontal"
+                android:paddingHorizontal="14dp">
+
+                <TextView
+                    android:id="@+id/toolbar_selected_model_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="#FFFFFF"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    tools:text="5.5 High" />
+
+                <ImageView
+                    android:layout_width="12dp"
+                    android:layout_height="12dp"
+                    android:layout_marginStart="6dp"
+                    android:src="@drawable/ic_arrow_drop_down"
+                    app:tint="#FFFFFF" />
+
+            </LinearLayout>
+
+        </androidx.appcompat.widget.Toolbar>
 
     </com.google.android.material.appbar.AppBarLayout>
 

@@ -23,14 +23,18 @@ import com.aibyjohannes.alfred.ui.home.UiConversation
 import com.aibyjohannes.alfred.ui.home.DrawerProjectsAdapter
 import com.aibyjohannes.alfred.ui.home.UiWorkspace
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.TextView
 import android.view.View
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.aibyjohannes.alfred.data.SysInfoProvider
 import com.aibyjohannes.alfred.notifications.NotificationScheduler
 import android.Manifest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.core.view.isVisible
 
 
 class MainActivity : AppCompatActivity() {
@@ -72,7 +76,9 @@ class MainActivity : AppCompatActivity() {
             ), drawerLayout
         )
         setupActionBarWithNavController(navController, appBarConfiguration)
+        supportActionBar?.setDisplayShowTitleEnabled(false)
         binding.appBarMain.toolbar.navigationIcon = ContextCompat.getDrawable(this, R.drawable.ic_hamburger_two_lines)
+        setupModelSelector()
         setupDrawer()
     }
 
@@ -170,7 +176,56 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         if (::binding.isInitialized && ::profilePreferencesStore.isInitialized) {
             updateProfileRow()
+            updateModelSelectorPillText()
         }
+    }
+
+    private fun setupModelSelector() {
+        binding.appBarMain.toolbarModelSelectionPill.setOnClickListener {
+            showModelSelector()
+        }
+        updateModelSelectorPillText()
+    }
+
+    private fun showModelSelector() {
+        val labels = resources.getStringArray(R.array.model_labels)
+        val shortLabels = resources.getStringArray(R.array.model_short_labels)
+        val values = resources.getStringArray(R.array.model_values)
+        val apiKeyStore = ApiKeyStore(this)
+        val currentModel = apiKeyStore.loadModel()
+        val dialog = BottomSheetDialog(this)
+        val sheet = layoutInflater.inflate(R.layout.bottom_sheet_model_selector, null)
+        val optionsContainer = sheet.findViewById<LinearLayout>(R.id.model_options_container)
+
+        labels.forEachIndexed { index, label ->
+            val value = values.getOrNull(index) ?: return@forEachIndexed
+            val row = layoutInflater.inflate(R.layout.item_model_option, optionsContainer, false)
+            val isSelected = value == currentModel
+
+            row.isSelected = isSelected
+            row.findViewById<TextView>(R.id.model_option_title).text =
+                shortLabels.getOrNull(index) ?: label
+            row.findViewById<TextView>(R.id.model_option_subtitle).text = value
+            row.findViewById<ImageView>(R.id.model_option_selected).isVisible = isSelected
+            row.setOnClickListener {
+                apiKeyStore.saveModel(value)
+                updateModelSelectorPillText()
+                dialog.dismiss()
+            }
+            optionsContainer.addView(row)
+        }
+
+        dialog.setContentView(sheet)
+        dialog.show()
+    }
+
+    private fun updateModelSelectorPillText() {
+        val currentModel = ApiKeyStore(this).loadModel()
+        val labels = resources.getStringArray(R.array.model_toolbar_labels)
+        val values = resources.getStringArray(R.array.model_values)
+        val label = labels.getOrNull(values.indexOf(currentModel))
+            ?: currentModel.substringAfterLast("/")
+        binding.appBarMain.toolbarSelectedModelText.text = label
     }
 
     private fun updateProfileRow() {

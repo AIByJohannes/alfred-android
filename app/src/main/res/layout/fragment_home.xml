@@ -124,40 +124,6 @@
                 android:inputType="textMultiLine"
                 android:imeOptions="actionSend" />
 
-            <!-- Model Selection Pill -->
-            <LinearLayout
-                android:id="@+id/model_selection_pill"
-                android:layout_width="wrap_content"
-                android:layout_height="32dp"
-                android:minWidth="108dp"
-                android:background="@drawable/bg_model_selector_pill"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:clickable="true"
-                android:focusable="true"
-                android:paddingHorizontal="12dp"
-                android:layout_marginEnd="6dp">
-
-                <TextView
-                    android:id="@+id/selected_model_text"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:ellipsize="end"
-                    android:maxLines="1"
-                    tools:text="DeepSeek V3.2"
-                    android:textColor="#FFFFFF"
-                    android:textSize="13sp"
-                    android:textStyle="bold" />
-
-                <ImageView
-                    android:layout_width="12dp"
-                    android:layout_height="12dp"
-                    android:layout_marginStart="4dp"
-                    android:src="@drawable/ic_arrow_drop_down"
-                    app:tint="#FFFFFF" />
-            </LinearLayout>
-
             <ImageButton
                 android:id="@+id/btn_mic"
                 android:layout_width="36dp"
