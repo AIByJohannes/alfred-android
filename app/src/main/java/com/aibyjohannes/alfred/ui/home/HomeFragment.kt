@@ -8,6 +8,9 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.ViewModelProvider
@@ -24,6 +27,7 @@ import android.view.MenuInflater
 import android.view.MenuItem
 import android.text.TextWatcher
 import android.text.Editable
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import kotlin.math.max
 
 class HomeFragment : Fragment() {
@@ -254,31 +258,40 @@ class HomeFragment : Fragment() {
 
     private fun showModelPopup(anchorView: View) {
         val labels = resources.getStringArray(R.array.model_labels)
+        val shortLabels = resources.getStringArray(R.array.model_short_labels)
         val values = resources.getStringArray(R.array.model_values)
         val apiKeyStore = ApiKeyStore(anchorView.context)
         val currentModel = apiKeyStore.loadModel()
-        val popup = androidx.appcompat.widget.PopupMenu(anchorView.context, anchorView)
+        val dialog = BottomSheetDialog(anchorView.context)
+        val sheet = layoutInflater.inflate(R.layout.bottom_sheet_model_selector, null)
+        val optionsContainer = sheet.findViewById<LinearLayout>(R.id.model_options_container)
 
         labels.forEachIndexed { index, label ->
-            popup.menu.add(0, index, index, label).apply {
-                isCheckable = true
-                isChecked = values.getOrNull(index) == currentModel
+            val value = values.getOrNull(index) ?: return@forEachIndexed
+            val row = layoutInflater.inflate(R.layout.item_model_option, optionsContainer, false)
+            val isSelected = value == currentModel
+
+            row.isSelected = isSelected
+            row.findViewById<TextView>(R.id.model_option_title).text =
+                shortLabels.getOrNull(index) ?: label
+            row.findViewById<TextView>(R.id.model_option_subtitle).text = value
+            row.findViewById<ImageView>(R.id.model_option_selected).isVisible = isSelected
+            row.setOnClickListener {
+                apiKeyStore.saveModel(value)
+                updateModelSelectorPillText()
+                dialog.dismiss()
             }
+            optionsContainer.addView(row)
         }
 
-        popup.setOnMenuItemClickListener { item ->
-            val value = values.getOrNull(item.itemId) ?: return@setOnMenuItemClickListener false
-            apiKeyStore.saveModel(value)
-            updateModelSelectorPillText()
-            true
-        }
-        popup.show()
+        dialog.setContentView(sheet)
+        dialog.show()
     }
 
     private fun updateModelSelectorPillText() {
         if (context == null) return
         val currentModel = ApiKeyStore(requireContext()).loadModel()
-        val labels = resources.getStringArray(R.array.model_labels)
+        val labels = resources.getStringArray(R.array.model_short_labels)
         val values = resources.getStringArray(R.array.model_values)
         val label = labels.getOrNull(values.indexOf(currentModel))
             ?: currentModel.substringAfterLast("/")

@@ -8,6 +8,14 @@
         <item>GPT-5.5</item>
         <item>DeepSeek V3.2</item>
     </string-array>
+    <string-array name="model_short_labels">
+        <item>Gemini 3.5</item>
+        <item>Gemini Lite</item>
+        <item>Gemini Pro</item>
+        <item>Claude Sonnet</item>
+        <item>GPT-5.5</item>
+        <item>DeepSeek V3.2</item>
+    </string-array>
     <string-array name="model_values">
         <item>google/gemini-3.5-flash</item>
         <item>google/gemini-3.1-flash-lite</item>

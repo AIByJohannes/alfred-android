@@ -129,6 +129,7 @@
                 android:id="@+id/model_selection_pill"
                 android:layout_width="wrap_content"
                 android:layout_height="32dp"
+                android:minWidth="108dp"
                 android:background="@drawable/bg_model_selector_pill"
                 android:gravity="center_vertical"
                 android:orientation="horizontal"
@@ -139,9 +140,12 @@
 
                 <TextView
                     android:id="@+id/selected_model_text"
-                    android:layout_width="wrap_content"
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    tools:text="Gemini 3.5 Flash"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    tools:text="DeepSeek V3.2"
                     android:textColor="#FFFFFF"
                     android:textSize="13sp"
                     android:textStyle="bold" />
