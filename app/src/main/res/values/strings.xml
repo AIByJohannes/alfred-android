@@ -70,6 +70,6 @@
     <string name="delete_workspace_confirm_title">Delete Workspace?</string>
     <string name="delete_workspace_confirm_message">Are you sure you want to delete \"%1$s\"?\n\nThis will permanently delete this workspace and all its chats.</string>
     <string name="workspace_name_empty_error">Please enter a workspace name</string>
-    <string name="projects">Projects</string>
-    <string name="add_project">Add project</string>
+    <string name="projects">Workspaces</string>
+    <string name="add_project">Add workspace</string>
 </resources>
