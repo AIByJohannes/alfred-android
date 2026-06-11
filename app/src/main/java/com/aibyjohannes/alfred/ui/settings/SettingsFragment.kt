@@ -14,6 +14,7 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import com.aibyjohannes.alfred.R
 import com.aibyjohannes.alfred.data.ApiKeyStore
+import com.aibyjohannes.alfred.data.ProfilePreferencesStore
 import com.aibyjohannes.alfred.databinding.FragmentSettingsBinding
 import com.aibyjohannes.alfred.notifications.NotificationPreferencesStore
 import com.aibyjohannes.alfred.notifications.NotificationScheduler
@@ -27,6 +28,7 @@ class SettingsFragment : Fragment() {
     private val binding get() = _binding!!
 
     private lateinit var apiKeyStore: ApiKeyStore
+    private lateinit var profilePreferencesStore: ProfilePreferencesStore
     private lateinit var notificationPreferencesStore: NotificationPreferencesStore
     private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
 
@@ -58,9 +60,11 @@ class SettingsFragment : Fragment() {
         val root: View = binding.root
 
         apiKeyStore = ApiKeyStore(requireContext())
+        profilePreferencesStore = ProfilePreferencesStore(requireContext())
         notificationPreferencesStore = NotificationPreferencesStore(requireContext())
 
         setupButtons()
+        setupProfileControls()
         setupModelDropdown()
         setupNotificationControls()
         updateStatus()
@@ -106,6 +110,27 @@ class SettingsFragment : Fragment() {
             apiKeyStore.clearApiKey()
             Snackbar.make(binding.root, R.string.api_key_cleared, Snackbar.LENGTH_SHORT).show()
             updateStatus()
+        }
+    }
+
+    private fun setupProfileControls() {
+        binding.profileDisplayNameInput.setText(profilePreferencesStore.displayName)
+        binding.profileStatusInput.setText(profilePreferencesStore.statusLabel)
+
+        binding.saveProfileButton.setOnClickListener {
+            val displayName = binding.profileDisplayNameInput.text?.toString()?.trim().orEmpty()
+            val statusLabel = binding.profileStatusInput.text?.toString()?.trim().orEmpty()
+
+            profilePreferencesStore.displayName = displayName.ifBlank {
+                ProfilePreferencesStore.DEFAULT_DISPLAY_NAME
+            }
+            profilePreferencesStore.statusLabel = statusLabel.ifBlank {
+                ProfilePreferencesStore.DEFAULT_STATUS_LABEL
+            }
+
+            binding.profileDisplayNameInput.setText(profilePreferencesStore.displayName)
+            binding.profileStatusInput.setText(profilePreferencesStore.statusLabel)
+            Snackbar.make(binding.root, R.string.profile_saved, Snackbar.LENGTH_SHORT).show()
         }
     }
 

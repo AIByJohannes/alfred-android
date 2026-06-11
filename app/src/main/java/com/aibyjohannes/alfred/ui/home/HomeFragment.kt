@@ -14,10 +14,16 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.aibyjohannes.alfred.R
 import com.aibyjohannes.alfred.databinding.FragmentHomeBinding
+import com.aibyjohannes.alfred.data.ApiKeyStore
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.lifecycle.lifecycleScope
+import android.view.Menu
+import android.view.MenuInflater
+import android.view.MenuItem
+import android.text.TextWatcher
+import android.text.Editable
 import kotlin.math.max
 
 class HomeFragment : Fragment() {
@@ -80,8 +86,6 @@ class HomeFragment : Fragment() {
     private fun animateOrbToTop() {
         backgroundAnimator?.cancel()
         
-        // Calculate translation to top (negative Y)
-        // Move up by 35% of screen height or a fixed dp amount
         val translationY = PropertyValuesHolder.ofFloat(View.TRANSLATION_Y, -binding.root.height * 0.35f)
         val scaleX = PropertyValuesHolder.ofFloat(View.SCALE_X, 0.6f)
         val scaleY = PropertyValuesHolder.ofFloat(View.SCALE_Y, 0.6f)
@@ -108,10 +112,8 @@ class HomeFragment : Fragment() {
             interpolator = AccelerateDecelerateInterpolator()
             start()
         }
-        // After reset, restart idle animation
         isOrbAtTop = false
     }
-
 
     private fun animateGreetingText() {
         val greeting = getString(R.string.greeting_message)
@@ -140,17 +142,46 @@ class HomeFragment : Fragment() {
 
     private fun setupInputHandling() {
         binding.sendButton.setOnClickListener {
-            sendMessage()
+            val message = binding.messageInput.text?.toString() ?: ""
+            if (message.isNotBlank()) {
+                sendMessage()
+            }
         }
 
         binding.messageInput.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEND) {
-                sendMessage()
-                true
+                val message = binding.messageInput.text?.toString() ?: ""
+                if (message.isNotBlank()) {
+                    sendMessage()
+                    true
+                } else {
+                    false
+                }
             } else {
                 false
             }
         }
+
+        binding.messageInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                val hasText = !s.isNullOrBlank()
+                binding.btnMic.isVisible = !hasText
+                if (hasText) {
+                    binding.sendButton.setImageResource(R.drawable.ic_arrow_up)
+                } else {
+                    binding.sendButton.setImageResource(R.drawable.ic_waveform)
+                }
+            }
+            override fun afterTextChanged(s: Editable?) {}
+        })
+
+        binding.modelSelectionPill.setOnClickListener {
+            showModelPopup(it)
+        }
+
+        binding.btnMic.setOnClickListener { }
+        binding.btnAdd.setOnClickListener { }
     }
 
     private fun sendMessage() {
@@ -203,10 +234,62 @@ class HomeFragment : Fragment() {
         }
     }
 
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setHasOptionsMenu(true)
+    }
+
+    override fun onCreateOptionsMenu(menu: Menu, inflater: MenuInflater) {
+        inflater.inflate(R.menu.home_menu, menu)
+        super.onCreateOptionsMenu(menu, inflater)
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        if (item.itemId == R.id.action_clear_chat) {
+            homeViewModel.clearChat()
+            return true
+        }
+        return super.onOptionsItemSelected(item)
+    }
+
+    private fun showModelPopup(anchorView: View) {
+        val labels = resources.getStringArray(R.array.model_labels)
+        val values = resources.getStringArray(R.array.model_values)
+        val apiKeyStore = ApiKeyStore(anchorView.context)
+        val currentModel = apiKeyStore.loadModel()
+        val popup = androidx.appcompat.widget.PopupMenu(anchorView.context, anchorView)
+
+        labels.forEachIndexed { index, label ->
+            popup.menu.add(0, index, index, label).apply {
+                isCheckable = true
+                isChecked = values.getOrNull(index) == currentModel
+            }
+        }
+
+        popup.setOnMenuItemClickListener { item ->
+            val value = values.getOrNull(item.itemId) ?: return@setOnMenuItemClickListener false
+            apiKeyStore.saveModel(value)
+            updateModelSelectorPillText()
+            true
+        }
+        popup.show()
+    }
+
+    private fun updateModelSelectorPillText() {
+        if (context == null) return
+        val currentModel = ApiKeyStore(requireContext()).loadModel()
+        val labels = resources.getStringArray(R.array.model_labels)
+        val values = resources.getStringArray(R.array.model_values)
+        val label = labels.getOrNull(values.indexOf(currentModel))
+            ?: currentModel.substringAfterLast("/")
+        binding.selectedModelText.text = label
+    }
+
     override fun onResume() {
         super.onResume()
         // Re-check API key status when returning from settings
         homeViewModel.checkApiKey()
+        updateModelSelectorPillText()
     }
 
     override fun onDestroyView() {

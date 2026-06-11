@@ -12,9 +12,12 @@
     <!-- Chat UI -->
     <string name="greeting_message">Hello! I\'m A.L.F.R.E.D.</string>
     <string name="message_hint">Type a message…</string>
+    <string name="message_hint_compact">Ask anything</string>
     <string name="send">Send</string>
+    <string name="voice_typing">Voice typing</string>
     <string name="api_key_warning">API key not configured. Go to Settings to add your OpenRouter API key.</string>
     <string name="chats">Chats</string>
+    <string name="new_chat">New chat</string>
     <string name="new_conversation">New Conversation</string>
     <string name="active_conversation">Active conversation</string>
 
@@ -37,6 +40,12 @@
     <string name="api_key_not_configured">No API key configured</string>
     <string name="api_key_empty_error">Please enter an API key</string>
     <string name="language_model_helper">Changes apply to new chat requests.</string>
+    <string name="profile_title">Profile</string>
+    <string name="profile_description">Shown in the drawer on this device.</string>
+    <string name="profile_display_name">Display name</string>
+    <string name="profile_status_label">Status label</string>
+    <string name="save_profile">Save Profile</string>
+    <string name="profile_saved">Profile saved</string>
     <string name="notifications_title">Notifications</string>
     <string name="notifications_enabled">Enable notifications</string>
     <string name="notifications_description">Daily and inactivity reminders use recent local chats to suggest what to continue.</string>
@@ -59,4 +68,6 @@
     <string name="delete_workspace_confirm_title">Delete Workspace?</string>
     <string name="delete_workspace_confirm_message">Are you sure you want to delete \"%1$s\"?\n\nThis will permanently delete this workspace and all its chats.</string>
     <string name="workspace_name_empty_error">Please enter a workspace name</string>
+    <string name="projects">Projects</string>
+    <string name="add_project">Add project</string>
 </resources>

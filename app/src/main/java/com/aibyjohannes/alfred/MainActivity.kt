@@ -13,13 +13,14 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import com.aibyjohannes.alfred.databinding.ActivityMainBinding
 import com.aibyjohannes.alfred.data.ApiKeyStore
 import com.aibyjohannes.alfred.data.ChatRepository
+import com.aibyjohannes.alfred.data.ProfilePreferencesStore
 import com.aibyjohannes.alfred.data.local.FileConversationStore
 import com.aibyjohannes.alfred.data.local.FileLocalKnowledgeSearchClient
 import com.aibyjohannes.alfred.data.local.FileMemorySearchSource
 import com.aibyjohannes.alfred.ui.home.ConversationAdapter
 import com.aibyjohannes.alfred.ui.home.HomeViewModel
 import com.aibyjohannes.alfred.ui.home.UiConversation
-import com.aibyjohannes.alfred.ui.home.WorkspaceChipAdapter
+import com.aibyjohannes.alfred.ui.home.DrawerProjectsAdapter
 import com.aibyjohannes.alfred.ui.home.UiWorkspace
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -29,7 +30,7 @@ import com.aibyjohannes.alfred.data.SysInfoProvider
 import com.aibyjohannes.alfred.notifications.NotificationScheduler
 import android.Manifest
 import androidx.activity.result.contract.ActivityResultContracts
-
+import androidx.core.content.ContextCompat
 
 
 class MainActivity : AppCompatActivity() {
@@ -38,13 +39,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var homeViewModel: HomeViewModel
     private lateinit var conversationAdapter: ConversationAdapter
-    private lateinit var workspaceAdapter: WorkspaceChipAdapter
+    private lateinit var workspaceAdapter: DrawerProjectsAdapter
+    private lateinit var profilePreferencesStore: ProfilePreferencesStore
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        profilePreferencesStore = ProfilePreferencesStore(this)
 
         homeViewModel = ViewModelProvider(this)[HomeViewModel::class.java]
         initializeHomeViewModel()
@@ -69,6 +72,7 @@ class MainActivity : AppCompatActivity() {
             ), drawerLayout
         )
         setupActionBarWithNavController(navController, appBarConfiguration)
+        binding.appBarMain.toolbar.navigationIcon = ContextCompat.getDrawable(this, R.drawable.ic_hamburger_two_lines)
         setupDrawer()
     }
 
@@ -93,20 +97,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupDrawer() {
-        workspaceAdapter = WorkspaceChipAdapter(
+        workspaceAdapter = DrawerProjectsAdapter(
             onWorkspaceSelected = { workspace ->
                 homeViewModel.switchWorkspace(workspace.id)
-            },
-            onAddWorkspace = {
-                showCreateWorkspaceDialog()
+                binding.drawerLayout.closeDrawer(GravityCompat.START)
             },
             onWorkspaceLongPressed = { workspace, view ->
                 showWorkspaceMenu(workspace, view)
             }
         )
 
-        binding.drawerWorkspacesRecyclerView.apply {
-            layoutManager = LinearLayoutManager(this@MainActivity, LinearLayoutManager.HORIZONTAL, false)
+        binding.drawerProjectsRecyclerView.apply {
+            layoutManager = LinearLayoutManager(this@MainActivity)
             adapter = workspaceAdapter
         }
 
@@ -126,19 +128,28 @@ class MainActivity : AppCompatActivity() {
             adapter = conversationAdapter
         }
 
-        binding.drawerNewConversationButton.setOnClickListener {
+        binding.btnNewChatLayout.setOnClickListener {
             homeViewModel.createConversationAndSwitch()
             navigateToHome()
             binding.drawerLayout.closeDrawer(GravityCompat.START)
         }
 
-        binding.drawerSettingsRow.setOnClickListener {
+        binding.navHeader.btnCloseDrawer.setOnClickListener {
+            binding.drawerLayout.closeDrawer(GravityCompat.START)
+        }
+
+        binding.drawerAddWorkspaceButton.setOnClickListener {
+            showCreateWorkspaceDialog()
+        }
+
+        binding.drawerProfileRow.setOnClickListener {
             val navController = findNavController(R.id.nav_host_fragment_content_main)
             if (navController.currentDestination?.id != R.id.nav_settings) {
                 navController.navigate(R.id.nav_settings)
             }
             binding.drawerLayout.closeDrawer(GravityCompat.START)
         }
+        updateProfileRow()
 
         homeViewModel.workspaces.observe(this) { workspaces ->
             workspaceAdapter.submitData(workspaces, homeViewModel.activeWorkspaceId.value)
@@ -153,6 +164,35 @@ class MainActivity : AppCompatActivity() {
         homeViewModel.activeConversationId.observe(this) { activeConversationId ->
             conversationAdapter.setActiveConversationId(activeConversationId)
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::binding.isInitialized && ::profilePreferencesStore.isInitialized) {
+            updateProfileRow()
+        }
+    }
+
+    private fun updateProfileRow() {
+        val displayName = profilePreferencesStore.displayName.ifBlank {
+            ProfilePreferencesStore.DEFAULT_DISPLAY_NAME
+        }
+        val statusLabel = profilePreferencesStore.statusLabel.ifBlank {
+            ProfilePreferencesStore.DEFAULT_STATUS_LABEL
+        }
+        binding.drawerProfileName.text = displayName
+        binding.drawerProfileStatus.text = statusLabel
+        binding.drawerProfileInitials.text = initialsFor(displayName)
+    }
+
+    private fun initialsFor(displayName: String): String {
+        val parts = displayName.trim()
+            .split(Regex("\\s+"))
+            .filter { it.isNotBlank() }
+        return parts.take(2)
+            .mapNotNull { it.firstOrNull()?.uppercaseChar()?.toString() }
+            .joinToString("")
+            .ifBlank { "A" }
     }
 
     private fun navigateToHome() {
