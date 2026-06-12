@@ -8,6 +8,7 @@ import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchClient
 import com.aibyjohannes.alfred.core.model.CoreChatMessage
 import com.aibyjohannes.alfred.core.search.PerplexitySearchClient
 import com.aibyjohannes.alfred.data.api.ChatMessage
+import com.aibyjohannes.alfred.core.audio.OpenRouterAudioClient
 import com.fasterxml.jackson.annotation.JsonClassDescription
 import com.fasterxml.jackson.annotation.JsonPropertyDescription
 import kotlinx.coroutines.flow.Flow
@@ -16,6 +17,19 @@ class ChatRepository(
     private val apiKeyStore: ApiKeyStore,
     private val localKnowledgeSearchClient: LocalKnowledgeSearchClient? = null
 ) {
+    suspend fun transcribeAudio(audioFile: java.io.File): Result<String> {
+        val apiKey = apiKeyStore.loadOpenRouterKey()
+            ?: return Result.failure(Exception("API key not configured. Please add your OpenRouter API key in Settings."))
+
+        return try {
+            OpenRouterAudioClient(apiKey).use { client ->
+                client.transcribe(audioFile)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun sendMessage(
         userMessage: String,
         conversationHistory: List<ChatMessage>,

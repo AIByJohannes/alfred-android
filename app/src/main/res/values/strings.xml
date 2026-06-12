@@ -72,4 +72,10 @@
     <string name="workspace_name_empty_error">Please enter a workspace name</string>
     <string name="projects">Workspaces</string>
     <string name="add_project">Add workspace</string>
+
+    <!-- Voice Dictation -->
+    <string name="recording_toast">Recording… Tap again to stop</string>
+    <string name="transcribing_toast">Transcribing…</string>
+    <string name="transcription_permission_required">Permission to record audio is required for dictation.</string>
+    <string name="transcription_failed">Transcription failed: %1$s</string>
 </resources>

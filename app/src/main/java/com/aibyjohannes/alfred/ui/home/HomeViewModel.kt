@@ -104,6 +104,11 @@ class HomeViewModel : ViewModel() {
         _needsApiKey.value = apiKeyStore?.hasApiKey() != true
     }
 
+    suspend fun transcribeAudio(audioFile: java.io.File): Result<String> {
+        val repo = repository ?: return Result.failure(Exception("Repository not initialized"))
+        return repo.transcribeAudio(audioFile)
+    }
+
     fun sendMessage(userInput: String) {
         if (userInput.isBlank()) return
 

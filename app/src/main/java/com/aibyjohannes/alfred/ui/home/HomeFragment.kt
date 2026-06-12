@@ -1,28 +1,33 @@
 package com.aibyjohannes.alfred.ui.home
 
+import android.Manifest
 import android.animation.ObjectAnimator
 import android.animation.PropertyValuesHolder
-import android.view.animation.AccelerateDecelerateInterpolator
+import android.content.pm.PackageManager
 import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.LayoutInflater
+import android.view.Menu
+import android.view.MenuInflater
+import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
+import android.view.animation.AccelerateDecelerateInterpolator
 import android.view.inputmethod.EditorInfo
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.aibyjohannes.alfred.R
 import com.aibyjohannes.alfred.databinding.FragmentHomeBinding
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import androidx.lifecycle.lifecycleScope
-import android.view.Menu
-import android.view.MenuInflater
-import android.view.MenuItem
-import android.text.TextWatcher
-import android.text.Editable
 import kotlin.math.max
 
 class HomeFragment : Fragment() {
@@ -34,6 +39,22 @@ class HomeFragment : Fragment() {
     private lateinit var chatAdapter: ChatAdapter
     private var typingJob: Job? = null
     private var lastMessageCount = 0
+    private var isRecording = false
+    private var audioRecorder: AudioRecorder? = null
+
+    private val recordAudioPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            toggleRecording()
+        } else {
+            Toast.makeText(
+                context,
+                getString(R.string.transcription_permission_required),
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -175,7 +196,7 @@ class HomeFragment : Fragment() {
             override fun afterTextChanged(s: Editable?) {}
         })
 
-        binding.btnMic.setOnClickListener { }
+        binding.btnMic.setOnClickListener { toggleRecording() }
         binding.btnAdd.setOnClickListener { }
     }
 
@@ -253,9 +274,76 @@ class HomeFragment : Fragment() {
         homeViewModel.checkApiKey()
     }
 
+    override fun onPause() {
+        super.onPause()
+        if (isRecording) {
+            audioRecorder?.cancelRecording()
+            isRecording = false
+            binding.btnMic.setColorFilter(null)
+            binding.btnMic.setImageResource(R.drawable.ic_mic)
+        }
+    }
+
     override fun onDestroyView() {
         super.onDestroyView()
         _binding = null
+    }
+
+    private fun toggleRecording() {
+        val context = context ?: return
+        if (isRecording) {
+            isRecording = false
+            binding.btnMic.setColorFilter(null)
+            binding.btnMic.setImageResource(R.drawable.ic_mic)
+            val audioFile = audioRecorder?.stopRecording()
+            if (audioFile != null && audioFile.exists()) {
+                transcribeAndAppend(audioFile)
+            }
+        } else {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                isRecording = true
+                binding.btnMic.setImageResource(R.drawable.ic_stop)
+                binding.btnMic.setColorFilter(ContextCompat.getColor(context, android.R.color.holo_red_light))
+                if (audioRecorder == null) {
+                    audioRecorder = AudioRecorder(context)
+                }
+                audioRecorder?.startRecording()
+                Toast.makeText(context, getString(R.string.recording_toast), Toast.LENGTH_SHORT).show()
+            } else {
+                recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
+        }
+    }
+
+    private fun transcribeAndAppend(audioFile: java.io.File) {
+        val context = context ?: return
+        viewLifecycleOwner.lifecycleScope.launch {
+            binding.btnMic.isEnabled = false
+            binding.messageInput.isEnabled = false
+            Toast.makeText(context, getString(R.string.transcribing_toast), Toast.LENGTH_SHORT).show()
+
+            val result = homeViewModel.transcribeAudio(audioFile)
+
+            binding.btnMic.isEnabled = true
+            binding.messageInput.isEnabled = true
+
+            result.fold(
+                onSuccess = { text ->
+                    if (text.isNotBlank()) {
+                        val currentText = binding.messageInput.text?.toString() ?: ""
+                        val newText = if (currentText.isBlank()) text else "$currentText $text"
+                        binding.messageInput.setText(newText)
+                        binding.messageInput.setSelection(newText.length)
+                        binding.messageInput.requestFocus()
+                    }
+                },
+                onFailure = { error ->
+                    val errorMsg = error.message ?: "Unknown error"
+                    Toast.makeText(context, getString(R.string.transcription_failed, errorMsg), Toast.LENGTH_LONG).show()
+                }
+            )
+            audioFile.delete()
+        }
     }
 
     private fun isNearBottom(): Boolean {
