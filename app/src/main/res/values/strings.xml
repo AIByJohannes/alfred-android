@@ -83,4 +83,16 @@
     <string name="stt_model_title">Speech-to-Text Model</string>
     <string name="stt_model_description">Choose the AI model Alfred uses to transcribe your voice input.</string>
     <string name="stt_model_helper">Changes apply to future voice input requests.</string>
+
+    <!-- Live Voice Mode -->
+    <string name="voice_mode_listening">Listening…</string>
+    <string name="voice_mode_thinking">Thinking…</string>
+    <string name="voice_mode_speaking">Speaking…</string>
+    <string name="voice_mode_tap_to_stop">Tap to stop</string>
+    <string name="tts_error">Couldn\'t speak response: %1$s</string>
+
+    <!-- TTS Model Settings -->
+    <string name="tts_model_title">Text-to-Speech Model</string>
+    <string name="tts_model_description">Choose the voice model Alfred uses to speak responses in voice mode.</string>
+    <string name="tts_model_helper">Changes apply to future voice mode sessions.</string>
 </resources>

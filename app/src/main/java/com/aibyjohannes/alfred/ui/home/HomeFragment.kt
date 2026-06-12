@@ -4,6 +4,7 @@ import android.Manifest
 import android.animation.ObjectAnimator
 import android.animation.PropertyValuesHolder
 import android.content.pm.PackageManager
+import android.media.MediaPlayer
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
@@ -39,14 +40,38 @@ class HomeFragment : Fragment() {
     private lateinit var chatAdapter: ChatAdapter
     private var typingJob: Job? = null
     private var lastMessageCount = 0
+
+    // Dictation (btn_mic) state
     private var isRecording = false
     private var audioRecorder: AudioRecorder? = null
+
+    // Voice mode (wave button) state
+    private var voiceAudioRecorder: AudioRecorder? = null
+    private var voiceOrAnimator: VoiceOrAnimator? = null
+    private var mediaPlayer: MediaPlayer? = null
+    /** The final AI text to synthesize — stored when streaming completes during voice mode. */
+    private var pendingVoiceText: String? = null
+    private var isInVoiceMode = false
 
     private val recordAudioPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
             toggleRecording()
+        } else {
+            Toast.makeText(
+                context,
+                getString(R.string.transcription_permission_required),
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    private val voiceModePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            startListening()
         } else {
             Toast.makeText(
                 context,
@@ -65,6 +90,8 @@ class HomeFragment : Fragment() {
 
         _binding = FragmentHomeBinding.inflate(inflater, container, false)
         val root: View = binding.root
+
+        voiceOrAnimator = VoiceOrAnimator(binding.aiOrbBackground)
 
         setupRecyclerView()
         setupInputHandling()
@@ -88,8 +115,9 @@ class HomeFragment : Fragment() {
     }
 
     private fun startIdleAnimation() {
+        if (isInVoiceMode) return
         backgroundAnimator?.cancel()
-        
+
         val scaleX = PropertyValuesHolder.ofFloat(View.SCALE_X, 1.0f, 1.2f)
         val scaleY = PropertyValuesHolder.ofFloat(View.SCALE_Y, 1.0f, 1.2f)
         val alpha = PropertyValuesHolder.ofFloat(View.ALPHA, 0.3f, 0.5f)
@@ -104,8 +132,9 @@ class HomeFragment : Fragment() {
     }
 
     private fun animateOrbToTop() {
+        if (isInVoiceMode) return
         backgroundAnimator?.cancel()
-        
+
         val translationY = PropertyValuesHolder.ofFloat(View.TRANSLATION_Y, -binding.root.height * 0.35f)
         val scaleX = PropertyValuesHolder.ofFloat(View.SCALE_X, 0.6f)
         val scaleY = PropertyValuesHolder.ofFloat(View.SCALE_Y, 0.6f)
@@ -120,6 +149,7 @@ class HomeFragment : Fragment() {
     }
 
     private fun resetOrbPosition() {
+        if (isInVoiceMode) return
         backgroundAnimator?.cancel()
 
         val translationY = PropertyValuesHolder.ofFloat(View.TRANSLATION_Y, 0f)
@@ -165,6 +195,9 @@ class HomeFragment : Fragment() {
             val message = binding.messageInput.text?.toString() ?: ""
             if (message.isNotBlank()) {
                 sendMessage()
+            } else {
+                // Empty input: enter live voice mode
+                onWaveButtonTapped()
             }
         }
 
@@ -208,26 +241,196 @@ class HomeFragment : Fragment() {
         binding.messageInput.text?.clear()
     }
 
+    // ─── Voice Mode ───────────────────────────────────────────────────────────
+
+    private fun onWaveButtonTapped() {
+        if (isInVoiceMode) {
+            // Already listening — stop and process
+            stopListeningAndProcess()
+        } else {
+            // Start voice mode
+            val ctx = context ?: return
+            if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                startListening()
+            } else {
+                voiceModePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
+        }
+    }
+
+    private fun startListening() {
+        val ctx = context ?: return
+        isInVoiceMode = true
+        pendingVoiceText = null
+
+        // Stop any ongoing TTS playback
+        stopMediaPlayer()
+
+        if (voiceAudioRecorder == null) {
+            voiceAudioRecorder = AudioRecorder(ctx)
+        }
+        voiceAudioRecorder?.startRecording()
+
+        homeViewModel.setVoiceModeState(VoiceModeState.LISTENING)
+        applyVoiceModeUi(VoiceModeState.LISTENING)
+    }
+
+    private fun stopListeningAndProcess() {
+        val audioFile = voiceAudioRecorder?.stopRecording()
+        homeViewModel.setVoiceModeState(VoiceModeState.THINKING)
+        applyVoiceModeUi(VoiceModeState.THINKING)
+
+        if (audioFile != null && audioFile.exists()) {
+            transcribeAndSendInVoiceMode(audioFile)
+        } else {
+            endVoiceMode()
+        }
+    }
+
+    private fun transcribeAndSendInVoiceMode(audioFile: java.io.File) {
+        val ctx = context ?: return
+        viewLifecycleOwner.lifecycleScope.launch {
+            val result = homeViewModel.transcribeAudio(audioFile)
+            audioFile.delete()
+
+            result.fold(
+                onSuccess = { text ->
+                    if (text.isNotBlank()) {
+                        // Mark that the next completed message should be spoken
+                        pendingVoiceText = null
+                        homeViewModel.setVoiceModeState(VoiceModeState.THINKING)
+                        // sendMessage will stream to the chat; we wait for ttsAudioFile observer
+                        homeViewModel.sendMessage(text)
+                    } else {
+                        Toast.makeText(ctx, getString(R.string.transcription_failed, "No speech detected"), Toast.LENGTH_SHORT).show()
+                        endVoiceMode()
+                    }
+                },
+                onFailure = { error ->
+                    Toast.makeText(ctx, getString(R.string.transcription_failed, error.message ?: "Unknown error"), Toast.LENGTH_LONG).show()
+                    endVoiceMode()
+                }
+            )
+        }
+    }
+
+    /** Called from the ttsAudioFile observer when a new TTS file is ready. */
+    private fun playTtsFile(file: java.io.File) {
+        val ctx = context ?: return
+        homeViewModel.setVoiceModeState(VoiceModeState.SPEAKING)
+        applyVoiceModeUi(VoiceModeState.SPEAKING)
+
+        stopMediaPlayer()
+
+        mediaPlayer = MediaPlayer().apply {
+            try {
+                setDataSource(file.absolutePath)
+                prepare()
+                setOnCompletionListener {
+                    file.delete()
+                    endVoiceMode()
+                }
+                setOnErrorListener { _, _, _ ->
+                    file.delete()
+                    endVoiceMode()
+                    false
+                }
+                start()
+            } catch (e: Exception) {
+                Toast.makeText(ctx, getString(R.string.tts_error, e.message ?: "Playback error"), Toast.LENGTH_SHORT).show()
+                file.delete()
+                endVoiceMode()
+            }
+        }
+    }
+
+    private fun endVoiceMode() {
+        isInVoiceMode = false
+        pendingVoiceText = null
+        stopMediaPlayer()
+        homeViewModel.setVoiceModeState(VoiceModeState.IDLE)
+        homeViewModel.emitTtsFile(null)
+        applyVoiceModeUi(VoiceModeState.IDLE)
+    }
+
+    private fun stopMediaPlayer() {
+        try {
+            mediaPlayer?.let {
+                if (it.isPlaying) it.stop()
+                it.release()
+            }
+        } catch (_: Exception) {}
+        mediaPlayer = null
+    }
+
+    private fun applyVoiceModeUi(state: VoiceModeState) {
+        val animator = voiceOrAnimator ?: return
+        when (state) {
+            VoiceModeState.IDLE -> {
+                animator.cancel()
+                binding.voiceModeLabel.visibility = View.GONE
+                binding.sendButton.setImageResource(R.drawable.ic_waveform)
+                binding.btnMic.isEnabled = true
+                binding.messageInput.isEnabled = true
+                // Resume normal orb animation
+                if (isOrbAtTop) {
+                    backgroundAnimator?.cancel()
+                    animateOrbToTop()  // re-apply the top position without voice override
+                } else {
+                    startIdleAnimation()
+                }
+            }
+            VoiceModeState.LISTENING -> {
+                backgroundAnimator?.cancel()
+                animator.playListening()
+                binding.voiceModeLabel.text = getString(R.string.voice_mode_listening)
+                binding.voiceModeLabel.visibility = View.VISIBLE
+                binding.sendButton.setImageResource(R.drawable.ic_stop)
+                binding.btnMic.isEnabled = false
+                binding.messageInput.isEnabled = false
+            }
+            VoiceModeState.THINKING -> {
+                backgroundAnimator?.cancel()
+                animator.playThinking()
+                binding.voiceModeLabel.text = getString(R.string.voice_mode_thinking)
+                binding.voiceModeLabel.visibility = View.VISIBLE
+                binding.sendButton.setImageResource(R.drawable.ic_waveform)
+                binding.btnMic.isEnabled = false
+                binding.messageInput.isEnabled = false
+            }
+            VoiceModeState.SPEAKING -> {
+                backgroundAnimator?.cancel()
+                animator.playSpeaking()
+                binding.voiceModeLabel.text = getString(R.string.voice_mode_speaking)
+                binding.voiceModeLabel.visibility = View.VISIBLE
+                binding.sendButton.setImageResource(R.drawable.ic_waveform)
+                binding.btnMic.isEnabled = false
+                binding.messageInput.isEnabled = false
+            }
+        }
+    }
+
+    // ─── Chat Observers ───────────────────────────────────────────────────────
+
     private fun setupObservers() {
         homeViewModel.messages.observe(viewLifecycleOwner) { messages ->
-            // Animate orb logic
-            if (messages.isNotEmpty() && !isOrbAtTop) {
-                typingJob?.cancel()
-                animateOrbToTop()
-                // Hide greeting message with fade out animation
-                binding.greetingMessage.animate()
-                    .alpha(0f)
-                    .setDuration(500)
-                    .withEndAction {
-                        binding.greetingMessage.visibility = View.GONE
-                    }
-                    .start()
-            } else if (messages.isEmpty() && isOrbAtTop) {
-                resetOrbPosition()
-                // Show greeting message again with animation
-                animateGreetingText()
-                // Restart idle animation after reset (delayed slightly or handled in reset)
-                binding.root.postDelayed({ startIdleAnimation() }, 800)
+            // Animate orb logic (only when not in voice mode)
+            if (!isInVoiceMode) {
+                if (messages.isNotEmpty() && !isOrbAtTop) {
+                    typingJob?.cancel()
+                    animateOrbToTop()
+                    binding.greetingMessage.animate()
+                        .alpha(0f)
+                        .setDuration(500)
+                        .withEndAction {
+                            binding.greetingMessage.visibility = View.GONE
+                        }
+                        .start()
+                } else if (messages.isEmpty() && isOrbAtTop) {
+                    resetOrbPosition()
+                    animateGreetingText()
+                    binding.root.postDelayed({ startIdleAnimation() }, 800)
+                }
             }
 
             chatAdapter.submitList(messages) {
@@ -238,17 +441,60 @@ class HomeFragment : Fragment() {
                 }
                 lastMessageCount = messages.size
             }
+
+            // When a streaming message completes and voice mode is active, synthesize TTS
+            if (isInVoiceMode && homeViewModel.voiceModeState.value == VoiceModeState.THINKING) {
+                val latestAssistant = messages.lastOrNull { !it.isUser && !it.isStreaming && !it.isError }
+                if (latestAssistant != null && latestAssistant.content.isNotBlank()) {
+                    val alreadyPending = pendingVoiceText == latestAssistant.content
+                    if (!alreadyPending) {
+                        pendingVoiceText = latestAssistant.content
+                        synthesizeAndEmitTts(latestAssistant.content)
+                    }
+                }
+            }
         }
 
         homeViewModel.isLoading.observe(viewLifecycleOwner) { isLoading ->
-            binding.loadingIndicator.isVisible = isLoading
-            binding.sendButton.isEnabled = !isLoading
+            if (!isInVoiceMode) {
+                binding.loadingIndicator.isVisible = isLoading
+                binding.sendButton.isEnabled = !isLoading
+            } else {
+                // In voice mode the loading indicator is not shown; TTS observer handles transition
+                binding.loadingIndicator.isVisible = false
+                binding.sendButton.isEnabled = true
+            }
         }
 
         homeViewModel.needsApiKey.observe(viewLifecycleOwner) { needsKey ->
             binding.apiKeyWarning.isVisible = needsKey
         }
+
+        homeViewModel.ttsAudioFile.observe(viewLifecycleOwner) { file ->
+            if (file != null && isInVoiceMode) {
+                playTtsFile(file)
+            }
+        }
     }
+
+    private fun synthesizeAndEmitTts(text: String) {
+        val ctx = context ?: return
+        viewLifecycleOwner.lifecycleScope.launch {
+            val cacheDir = ctx.cacheDir
+            val result = homeViewModel.synthesizeSpeech(text, cacheDir)
+            result.fold(
+                onSuccess = { file ->
+                    homeViewModel.emitTtsFile(file)
+                },
+                onFailure = { error ->
+                    Toast.makeText(ctx, getString(R.string.tts_error, error.message ?: "Unknown error"), Toast.LENGTH_LONG).show()
+                    endVoiceMode()
+                }
+            )
+        }
+    }
+
+    // ─── Dictation (btn_mic) — unchanged behaviour ────────────────────────────
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -270,22 +516,30 @@ class HomeFragment : Fragment() {
 
     override fun onResume() {
         super.onResume()
-        // Re-check API key status when returning from settings
         homeViewModel.checkApiKey()
     }
 
     override fun onPause() {
         super.onPause()
+        // Cancel dictation mic if active
         if (isRecording) {
             audioRecorder?.cancelRecording()
             isRecording = false
             binding.btnMic.setColorFilter(null)
             binding.btnMic.setImageResource(R.drawable.ic_mic)
         }
+        // Cancel voice mode if active
+        if (isInVoiceMode) {
+            voiceAudioRecorder?.cancelRecording()
+            stopMediaPlayer()
+            endVoiceMode()
+        }
     }
 
     override fun onDestroyView() {
         super.onDestroyView()
+        stopMediaPlayer()
+        voiceOrAnimator?.cancel()
         _binding = null
     }
 

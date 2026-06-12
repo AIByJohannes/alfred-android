@@ -29,4 +29,30 @@
         <item>openai/whisper-1</item>
         <item>openai/whisper-large-v3</item>
     </string-array>
+
+    <string-array name="tts_model_labels">
+        <item>OpenAI TTS-1 (Default)</item>
+        <item>OpenAI TTS-1 HD</item>
+    </string-array>
+    <string-array name="tts_model_values">
+        <item>openai/tts-1</item>
+        <item>openai/tts-1-hd</item>
+    </string-array>
+
+    <string-array name="tts_voice_labels">
+        <item>Alloy (Default)</item>
+        <item>Echo</item>
+        <item>Fable</item>
+        <item>Onyx</item>
+        <item>Nova</item>
+        <item>Shimmer</item>
+    </string-array>
+    <string-array name="tts_voice_values">
+        <item>alloy</item>
+        <item>echo</item>
+        <item>fable</item>
+        <item>onyx</item>
+        <item>nova</item>
+        <item>shimmer</item>
+    </string-array>
 </resources>

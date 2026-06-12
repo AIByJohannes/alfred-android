@@ -19,6 +19,13 @@ enum class RenderMode {
     MARKDOWN
 }
 
+enum class VoiceModeState {
+    IDLE,
+    LISTENING,
+    THINKING,
+    SPEAKING
+}
+
 data class UiChatMessage(
     val id: Long = 0L,
     val content: String,
@@ -73,6 +80,15 @@ class HomeViewModel : ViewModel() {
     private val _needsApiKey = MutableLiveData(false)
     val needsApiKey: LiveData<Boolean> = _needsApiKey
 
+    private val _voiceModeState = MutableLiveData(VoiceModeState.IDLE)
+    val voiceModeState: LiveData<VoiceModeState> = _voiceModeState
+
+    private val _ttsAudioFile = MutableLiveData<java.io.File?>(null)
+    val ttsAudioFile: LiveData<java.io.File?> = _ttsAudioFile
+
+    /** Set to true when the next completed message should trigger TTS. */
+    private var voiceModeActive = false
+
     // Keep track of conversation history for context
     private val conversationHistory = mutableListOf<ChatMessage>()
     private var currentConversationId: Long? = null
@@ -107,6 +123,21 @@ class HomeViewModel : ViewModel() {
     suspend fun transcribeAudio(audioFile: java.io.File): Result<String> {
         val repo = repository ?: return Result.failure(Exception("Repository not initialized"))
         return repo.transcribeAudio(audioFile)
+    }
+
+    suspend fun synthesizeSpeech(text: String, cacheDir: java.io.File): Result<java.io.File> {
+        val repo = repository ?: return Result.failure(Exception("Repository not initialized"))
+        val outputFile = java.io.File(cacheDir, "tts_response_${System.currentTimeMillis()}.mp3")
+        return repo.synthesizeSpeech(text, outputFile)
+    }
+
+    fun setVoiceModeState(state: VoiceModeState) {
+        _voiceModeState.value = state
+        voiceModeActive = state != VoiceModeState.IDLE
+    }
+
+    fun emitTtsFile(file: java.io.File?) {
+        _ttsAudioFile.value = file
     }
 
     fun sendMessage(userInput: String) {

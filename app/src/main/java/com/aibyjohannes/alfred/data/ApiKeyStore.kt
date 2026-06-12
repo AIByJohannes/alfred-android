@@ -93,6 +93,40 @@ class ApiKeyStore(context: Context) {
         }
     }
 
+    fun saveTtsModel(model: String) {
+        try {
+            prefs.edit().putString(KEY_TTS_MODEL, model.trim()).apply()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving TTS model", e)
+        }
+    }
+
+    fun loadTtsModel(): String {
+        return try {
+            prefs.getString(KEY_TTS_MODEL, null) ?: DEFAULT_TTS_MODEL_VAL
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading TTS model", e)
+            DEFAULT_TTS_MODEL_VAL
+        }
+    }
+
+    fun saveTtsVoice(voice: String) {
+        try {
+            prefs.edit().putString(KEY_TTS_VOICE, voice.trim()).apply()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving TTS voice", e)
+        }
+    }
+
+    fun loadTtsVoice(): String {
+        return try {
+            prefs.getString(KEY_TTS_VOICE, null) ?: DEFAULT_TTS_VOICE_VAL
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading TTS voice", e)
+            DEFAULT_TTS_VOICE_VAL
+        }
+    }
+
     companion object {
         private const val TAG = "ApiKeyStore"
         private const val PREFS_FILE_NAME = "alfred_secret_prefs"
@@ -101,6 +135,10 @@ class ApiKeyStore(context: Context) {
         private const val DEFAULT_MODEL_VAL = "google/gemini-3.5-flash"
         private const val KEY_STT_MODEL = "selected_stt_model"
         private const val DEFAULT_STT_MODEL_VAL = "openai/whisper-1"
+        private const val KEY_TTS_MODEL = "selected_tts_model"
+        private const val DEFAULT_TTS_MODEL_VAL = "openai/tts-1"
+        private const val KEY_TTS_VOICE = "selected_tts_voice"
+        private const val DEFAULT_TTS_VOICE_VAL = "alloy"
     }
 }
 

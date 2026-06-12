@@ -9,9 +9,11 @@ import com.aibyjohannes.alfred.core.model.CoreChatMessage
 import com.aibyjohannes.alfred.core.search.PerplexitySearchClient
 import com.aibyjohannes.alfred.data.api.ChatMessage
 import com.aibyjohannes.alfred.core.audio.OpenRouterAudioClient
+import com.aibyjohannes.alfred.core.audio.OpenRouterTtsClient
 import com.fasterxml.jackson.annotation.JsonClassDescription
 import com.fasterxml.jackson.annotation.JsonPropertyDescription
 import kotlinx.coroutines.flow.Flow
+import java.io.File
 
 class ChatRepository(
     private val apiKeyStore: ApiKeyStore,
@@ -25,6 +27,21 @@ class ChatRepository(
         return try {
             OpenRouterAudioClient(apiKey, sttModel).use { client ->
                 client.transcribe(audioFile)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun synthesizeSpeech(text: String, outputFile: File): Result<File> {
+        val apiKey = apiKeyStore.loadOpenRouterKey()
+            ?: return Result.failure(Exception("API key not configured. Please add your OpenRouter API key in Settings."))
+        val ttsModel = apiKeyStore.loadTtsModel()
+        val ttsVoice = apiKeyStore.loadTtsVoice()
+
+        return try {
+            OpenRouterTtsClient(apiKey, ttsModel, ttsVoice).use { client ->
+                client.synthesize(text, outputFile)
             }
         } catch (e: Exception) {
             Result.failure(e)
@@ -100,6 +117,7 @@ class ChatRepository(
     companion object {
         const val DEFAULT_MODEL = OpenRouterChatEngine.DEFAULT_MODEL
         const val PERPLEXITY_MODEL = PerplexitySearchClient.DEFAULT_MODEL
+        const val DEFAULT_TTS_MODEL = OpenRouterTtsClient.DEFAULT_MODEL
     }
 
     @Deprecated("Use core engine package directly for new integrations.")
