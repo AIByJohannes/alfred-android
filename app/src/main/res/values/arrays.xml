@@ -2,34 +2,31 @@
 <resources>
     <string-array name="model_labels">
         <item>Gemini 3.5 Flash (Default)</item>
-        <item>Gemini 3.1 Flash Lite</item>
-        <item>Gemini 3.1 Pro Preview</item>
-        <item>Claude Sonnet 4.6</item>
-        <item>GPT-5.5</item>
-        <item>DeepSeek V3.2</item>
+        <item>DeepSeek V4 Flash</item>
+        <item>DeepSeek V4 Pro</item>
     </string-array>
     <string-array name="model_short_labels">
         <item>Gemini 3.5</item>
-        <item>Gemini Lite</item>
-        <item>Gemini Pro</item>
-        <item>Claude Sonnet</item>
-        <item>GPT-5.5</item>
-        <item>DeepSeek V3.2</item>
+        <item>DeepSeek V4 Flash</item>
+        <item>DeepSeek V4 Pro</item>
     </string-array>
     <string-array name="model_toolbar_labels">
         <item>3.5 Flash</item>
-        <item>3.1 Lite</item>
-        <item>3.1 Pro</item>
-        <item>Sonnet 4.6</item>
-        <item>5.5 High</item>
-        <item>DeepSeek</item>
+        <item>DS V4 Flash</item>
+        <item>DS V4 Pro</item>
     </string-array>
     <string-array name="model_values">
         <item>google/gemini-3.5-flash</item>
-        <item>google/gemini-3.1-flash-lite</item>
-        <item>google/gemini-3.1-pro-preview</item>
-        <item>anthropic/claude-sonnet-4.6</item>
-        <item>openai/gpt-5.5</item>
-        <item>deepseek/deepseek-v3.2</item>
+        <item>deepseek/deepseek-v4-flash</item>
+        <item>deepseek/deepseek-v4-pro</item>
+    </string-array>
+
+    <string-array name="stt_model_labels">
+        <item>OpenAI Whisper-1 (Default)</item>
+        <item>OpenAI Whisper Large V3</item>
+    </string-array>
+    <string-array name="stt_model_values">
+        <item>openai/whisper-1</item>
+        <item>openai/whisper-large-v3</item>
     </string-array>
 </resources>

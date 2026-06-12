@@ -78,4 +78,9 @@
     <string name="transcribing_toast">Transcribing…</string>
     <string name="transcription_permission_required">Permission to record audio is required for dictation.</string>
     <string name="transcription_failed">Transcription failed: %1$s</string>
+
+    <!-- STT Model Settings -->
+    <string name="stt_model_title">Speech-to-Text Model</string>
+    <string name="stt_model_description">Choose the AI model Alfred uses to transcribe your voice input.</string>
+    <string name="stt_model_helper">Changes apply to future voice input requests.</string>
 </resources>

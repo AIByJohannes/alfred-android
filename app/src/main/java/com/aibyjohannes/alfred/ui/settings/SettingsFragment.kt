@@ -66,6 +66,7 @@ class SettingsFragment : Fragment() {
         setupButtons()
         setupProfileControls()
         setupModelDropdown()
+        setupSttModelDropdown()
         setupNotificationControls()
         updateStatus()
         updateNotificationControls()
@@ -89,6 +90,25 @@ class SettingsFragment : Fragment() {
             val selectedModel = models[position]
             apiKeyStore.saveModel(selectedModel)
             Snackbar.make(binding.root, "Model updated to ${labels[position]}", Snackbar.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun setupSttModelDropdown() {
+        val models = resources.getStringArray(R.array.stt_model_values)
+        val labels = resources.getStringArray(R.array.stt_model_labels)
+        val adapter = ArrayAdapter(requireContext(), android.R.layout.simple_dropdown_item_1line, labels)
+        binding.sttModelSelectDropdown.setAdapter(adapter)
+
+        val currentModel = apiKeyStore.loadSttModel()
+        val index = models.indexOf(currentModel)
+        if (index >= 0) {
+            binding.sttModelSelectDropdown.setText(labels[index], false)
+        }
+
+        binding.sttModelSelectDropdown.setOnItemClickListener { _, _, position, _ ->
+            val selectedModel = models[position]
+            apiKeyStore.saveSttModel(selectedModel)
+            Snackbar.make(binding.root, "Speech-to-Text model updated to ${labels[position]}", Snackbar.LENGTH_SHORT).show()
         }
     }
 

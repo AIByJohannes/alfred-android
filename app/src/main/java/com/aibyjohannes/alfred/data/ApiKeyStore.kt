@@ -76,12 +76,31 @@ class ApiKeyStore(context: Context) {
         }
     }
 
+    fun saveSttModel(model: String) {
+        try {
+            prefs.edit().putString(KEY_STT_MODEL, model.trim()).apply()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving STT model", e)
+        }
+    }
+
+    fun loadSttModel(): String {
+        return try {
+            prefs.getString(KEY_STT_MODEL, null) ?: DEFAULT_STT_MODEL_VAL
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading STT model", e)
+            DEFAULT_STT_MODEL_VAL
+        }
+    }
+
     companion object {
         private const val TAG = "ApiKeyStore"
         private const val PREFS_FILE_NAME = "alfred_secret_prefs"
         private const val KEY_OPENROUTER_API_KEY = "openrouter_api_key"
         private const val KEY_MODEL = "selected_model"
         private const val DEFAULT_MODEL_VAL = "google/gemini-3.5-flash"
+        private const val KEY_STT_MODEL = "selected_stt_model"
+        private const val DEFAULT_STT_MODEL_VAL = "openai/whisper-1"
     }
 }
 

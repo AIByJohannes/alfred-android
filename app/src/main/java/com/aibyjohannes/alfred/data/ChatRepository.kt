@@ -20,9 +20,10 @@ class ChatRepository(
     suspend fun transcribeAudio(audioFile: java.io.File): Result<String> {
         val apiKey = apiKeyStore.loadOpenRouterKey()
             ?: return Result.failure(Exception("API key not configured. Please add your OpenRouter API key in Settings."))
+        val sttModel = apiKeyStore.loadSttModel()
 
         return try {
-            OpenRouterAudioClient(apiKey).use { client ->
+            OpenRouterAudioClient(apiKey, sttModel).use { client ->
                 client.transcribe(audioFile)
             }
         } catch (e: Exception) {
