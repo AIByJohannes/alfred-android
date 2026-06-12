@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.aibyjohannes.alfred.core.audio.OpenRouterTtsClient
 
 class ApiKeyStore(context: Context) {
 
@@ -103,7 +104,11 @@ class ApiKeyStore(context: Context) {
 
     fun loadTtsModel(): String {
         return try {
-            prefs.getString(KEY_TTS_MODEL, null) ?: DEFAULT_TTS_MODEL_VAL
+            when (val model = prefs.getString(KEY_TTS_MODEL, null)?.trim()) {
+                null, "" -> DEFAULT_TTS_MODEL_VAL
+                in LEGACY_OPENAI_TTS_MODELS -> DEFAULT_TTS_MODEL_VAL
+                else -> model
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error loading TTS model", e)
             DEFAULT_TTS_MODEL_VAL
@@ -120,7 +125,12 @@ class ApiKeyStore(context: Context) {
 
     fun loadTtsVoice(): String {
         return try {
-            prefs.getString(KEY_TTS_VOICE, null) ?: DEFAULT_TTS_VOICE_VAL
+            val voice = prefs.getString(KEY_TTS_VOICE, null)?.trim()
+            when {
+                voice.isNullOrBlank() -> DEFAULT_TTS_VOICE_VAL
+                voice in LEGACY_OPENAI_TTS_VOICE_MIGRATIONS -> LEGACY_OPENAI_TTS_VOICE_MIGRATIONS.getValue(voice)
+                else -> voice
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error loading TTS voice", e)
             DEFAULT_TTS_VOICE_VAL
@@ -136,9 +146,21 @@ class ApiKeyStore(context: Context) {
         private const val KEY_STT_MODEL = "selected_stt_model"
         private const val DEFAULT_STT_MODEL_VAL = "openai/whisper-1"
         private const val KEY_TTS_MODEL = "selected_tts_model"
-        private const val DEFAULT_TTS_MODEL_VAL = "openai/tts-1"
+        private const val DEFAULT_TTS_MODEL_VAL = OpenRouterTtsClient.DEFAULT_MODEL
         private const val KEY_TTS_VOICE = "selected_tts_voice"
-        private const val DEFAULT_TTS_VOICE_VAL = "alloy"
+        private const val DEFAULT_TTS_VOICE_VAL = OpenRouterTtsClient.DEFAULT_VOICE
+        private val LEGACY_OPENAI_TTS_MODELS = setOf(
+            "openai/tts-1",
+            "openai/tts-1-hd"
+        )
+        private val LEGACY_OPENAI_TTS_VOICE_MIGRATIONS = mapOf(
+            "alloy" to "af_alloy",
+            "echo" to "am_echo",
+            "fable" to "bm_fable",
+            "onyx" to "am_onyx",
+            "nova" to "af_nova",
+            "shimmer" to "af_sky"
+        )
     }
 }
 

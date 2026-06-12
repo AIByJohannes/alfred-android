@@ -76,7 +76,7 @@ class OpenRouterTtsClient(
     }
 
     companion object {
-        const val DEFAULT_MODEL = "openai/tts-1"
-        const val DEFAULT_VOICE = "alloy"
+        const val DEFAULT_MODEL = "hexgrad/kokoro-82m"
+        const val DEFAULT_VOICE = "af_alloy"
     }
 }

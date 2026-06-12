@@ -95,4 +95,6 @@
     <string name="tts_model_title">Text-to-Speech Model</string>
     <string name="tts_model_description">Choose the voice model Alfred uses to speak responses in voice mode.</string>
     <string name="tts_model_helper">Changes apply to future voice mode sessions.</string>
+    <string name="tts_voice_title">Voice</string>
+    <string name="tts_voice_helper">Changes apply to future voice mode responses.</string>
 </resources>

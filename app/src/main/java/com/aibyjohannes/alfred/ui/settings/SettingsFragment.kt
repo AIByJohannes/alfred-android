@@ -67,6 +67,8 @@ class SettingsFragment : Fragment() {
         setupProfileControls()
         setupModelDropdown()
         setupSttModelDropdown()
+        setupTtsModelDropdown()
+        setupTtsVoiceDropdown()
         setupNotificationControls()
         updateStatus()
         updateNotificationControls()
@@ -109,6 +111,44 @@ class SettingsFragment : Fragment() {
             val selectedModel = models[position]
             apiKeyStore.saveSttModel(selectedModel)
             Snackbar.make(binding.root, "Speech-to-Text model updated to ${labels[position]}", Snackbar.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun setupTtsModelDropdown() {
+        val models = resources.getStringArray(R.array.tts_model_values)
+        val labels = resources.getStringArray(R.array.tts_model_labels)
+        val adapter = ArrayAdapter(requireContext(), android.R.layout.simple_dropdown_item_1line, labels)
+        binding.ttsModelSelectDropdown.setAdapter(adapter)
+
+        val currentModel = apiKeyStore.loadTtsModel()
+        val index = models.indexOf(currentModel)
+        if (index >= 0) {
+            binding.ttsModelSelectDropdown.setText(labels[index], false)
+        }
+
+        binding.ttsModelSelectDropdown.setOnItemClickListener { _, _, position, _ ->
+            val selectedModel = models[position]
+            apiKeyStore.saveTtsModel(selectedModel)
+            Snackbar.make(binding.root, "Text-to-Speech model updated to ${labels[position]}", Snackbar.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun setupTtsVoiceDropdown() {
+        val voices = resources.getStringArray(R.array.tts_voice_values)
+        val labels = resources.getStringArray(R.array.tts_voice_labels)
+        val adapter = ArrayAdapter(requireContext(), android.R.layout.simple_dropdown_item_1line, labels)
+        binding.ttsVoiceSelectDropdown.setAdapter(adapter)
+
+        val currentVoice = apiKeyStore.loadTtsVoice()
+        val index = voices.indexOf(currentVoice)
+        if (index >= 0) {
+            binding.ttsVoiceSelectDropdown.setText(labels[index], false)
+        }
+
+        binding.ttsVoiceSelectDropdown.setOnItemClickListener { _, _, position, _ ->
+            val selectedVoice = voices[position]
+            apiKeyStore.saveTtsVoice(selectedVoice)
+            Snackbar.make(binding.root, "Voice updated to ${labels[position]}", Snackbar.LENGTH_SHORT).show()
         }
     }
 

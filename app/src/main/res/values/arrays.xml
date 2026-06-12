@@ -31,28 +31,30 @@
     </string-array>
 
     <string-array name="tts_model_labels">
-        <item>OpenAI TTS-1 (Default)</item>
-        <item>OpenAI TTS-1 HD</item>
+        <item>Kokoro 82M (Default)</item>
     </string-array>
     <string-array name="tts_model_values">
-        <item>openai/tts-1</item>
-        <item>openai/tts-1-hd</item>
+        <item>hexgrad/kokoro-82m</item>
     </string-array>
 
     <string-array name="tts_voice_labels">
         <item>Alloy (Default)</item>
+        <item>Nova</item>
         <item>Echo</item>
         <item>Fable</item>
         <item>Onyx</item>
-        <item>Nova</item>
-        <item>Shimmer</item>
+        <item>Bella</item>
+        <item>Heart</item>
+        <item>Sky</item>
     </string-array>
     <string-array name="tts_voice_values">
-        <item>alloy</item>
-        <item>echo</item>
-        <item>fable</item>
-        <item>onyx</item>
-        <item>nova</item>
-        <item>shimmer</item>
+        <item>af_alloy</item>
+        <item>af_nova</item>
+        <item>am_echo</item>
+        <item>bm_fable</item>
+        <item>am_onyx</item>
+        <item>af_bella</item>
+        <item>af_heart</item>
+        <item>af_sky</item>
     </string-array>
 </resources>
