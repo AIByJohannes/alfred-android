@@ -43,4 +43,18 @@
     <color name="status_configured_text">@color/palette_black</color>
     <color name="status_not_configured_bg">#B3261E</color>
     <color name="status_not_configured_text">#FFFFFF</color>
+
+    <!-- Semantic components styling -->
+    <color name="input_bg">@color/palette_surface</color>
+    <color name="input_stroke">#e5e5e6</color>
+    <color name="new_chat_btn_bg">#e5e5e6</color>
+    <color name="model_selector_bg">@color/palette_surface</color>
+    <color name="model_selector_stroke">#e5e5e6</color>
+    <color name="model_sheet_bg">@color/palette_background</color>
+    <color name="sheet_handle_color">#d0d0d0</color>
+    <color name="model_option_selected_bg">#e2e7f0</color>
+    <color name="model_option_selected_stroke">@color/palette_blue</color>
+    <color name="model_option_unselected_bg">@color/palette_surface</color>
+    <color name="text_secondary">#6a6b70</color>
+    <color name="drawer_divider">#e5e5e6</color>
 </resources>

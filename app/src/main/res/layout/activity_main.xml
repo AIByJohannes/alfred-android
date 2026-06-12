@@ -85,7 +85,7 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:text="@string/projects"
-                        android:textColor="#8e8e93"
+                        android:textColor="@color/text_secondary"
                         android:textSize="12sp"
                         android:textStyle="bold" />
 
@@ -96,7 +96,7 @@
                         android:background="?attr/selectableItemBackgroundBorderless"
                         android:contentDescription="@string/add_project"
                         android:src="@drawable/ic_plus"
-                        app:tint="#8e8e93" />
+                        app:tint="@color/text_secondary" />
                 </LinearLayout>
 
                 <androidx.recyclerview.widget.RecyclerView
@@ -114,7 +114,7 @@
                     android:paddingTop="16dp"
                     android:paddingBottom="6dp"
                     android:text="@string/chats"
-                    android:textColor="#8e8e93"
+                    android:textColor="@color/text_secondary"
                     android:textSize="12sp"
                     android:textStyle="bold" />
 
@@ -130,7 +130,7 @@
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"
-            android:background="#333336" />
+            android:background="@color/drawer_divider" />
 
         <!-- Profile row at bottom -->
         <LinearLayout
@@ -182,7 +182,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     tools:text="Local profile"
-                    android:textColor="#8e8e93"
+                    android:textColor="@color/text_secondary"
                     android:textSize="11sp"
                     android:singleLine="true" />
             </LinearLayout>

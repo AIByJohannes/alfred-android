@@ -14,9 +14,11 @@
         <!-- Customize your theme here. -->
         <item name="android:navigationBarColor">@color/palette_blue</item>
         <item name="android:windowBackground">@color/window_background</item>
-        <item name="colorSurface">@color/palette_background</item>
+        <item name="colorSurface">@color/palette_surface</item>
         <item name="colorOnSurface">@color/text_primary</item>
         <item name="android:textColor">@color/text_primary</item>
+        <item name="colorControlActivated">@color/palette_blue</item>
+        <item name="colorAccent">@color/palette_blue</item>
     </style>
 
     <style name="Theme.Alfred.NoActionBar">

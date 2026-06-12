@@ -28,7 +28,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
         android:text="@string/choose_model_description"
-        android:textColor="#8e8e93"
+        android:textColor="@color/text_secondary"
         android:textSize="13sp" />
 
     <LinearLayout
