@@ -12,6 +12,17 @@ To easily interact with the OpenRouter API during development without manually t
    ```
 This key will be bundled directly into your debug builds.
 
+## Chat History Storage
+
+On first launch, Alfred asks the user to choose a parent folder for chat history. The app creates a fixed `Alfred/` subfolder inside that location and stores chat data there so users can inspect or back up their histories directly.
+
+The storage layout is:
+
+- `Alfred/metadata.json` stores workspaces, conversation summaries, active workspace, active conversation per workspace, and ID counters.
+- `Alfred/workspace-<id>-<initial-slug>/conversation-<id>.jsonl` stores one chat per JSONL file.
+
+Workspace folder names are stable after creation. Renaming a workspace updates `metadata.json` only and does not rename the folder.
+
 ## LLM Evals
 
 LLM evals run as a separate verification lane in the `:evals` module, not as unit tests.

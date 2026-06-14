@@ -5,14 +5,16 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Locale
 
-class FileConversationStore(
-    private val rootDir: File
+class FileConversationStore private constructor(
+    private val storage: ChatHistoryStorage,
+    private val objectMapper: ObjectMapper
 ) : ConversationStore {
+    constructor(rootDir: File) : this(FileChatHistoryStorage(rootDir), ObjectMapper())
+    constructor(storage: ChatHistoryStorage) : this(storage, ObjectMapper())
+
     private val lock = Any()
-    private val objectMapper = ObjectMapper()
-    private val conversationsDir = File(rootDir, "conversations")
-    private val metadataFile = File(rootDir, "conversations.json")
 
     override suspend fun listWorkspaces(): List<WorkspaceSummary> = withStoreLock {
         readState().workspaces.map { WorkspaceSummary(it.id, it.name) }
@@ -20,10 +22,7 @@ class FileConversationStore(
 
     override suspend fun getOrCreateActiveWorkspace(): WorkspaceSummary = withStoreLock {
         val state = readState()
-        val activeId = state.activeWorkspaceId ?: 1L
-        val active = state.workspaces.firstOrNull { it.id == activeId }
-            ?: state.workspaces.firstOrNull()
-            ?: throw IllegalStateException("No workspaces found")
+        val active = findActiveWorkspace(state)
         if (state.activeWorkspaceId != active.id) {
             state.activeWorkspaceId = active.id
             writeState(state)
@@ -34,13 +33,15 @@ class FileConversationStore(
     override suspend fun createWorkspace(name: String): WorkspaceSummary = withStoreLock {
         val state = readState()
         val newId = state.nextWorkspaceId++
-        val newWs = WorkspaceRecord().apply {
+        val workspace = WorkspaceRecord().apply {
             id = newId
             this.name = name
+            folderName = uniqueWorkspaceFolderName(state, newId, name)
             createdAtEpochMs = System.currentTimeMillis()
         }
-        state.workspaces.add(newWs)
+        state.workspaces.add(workspace)
         state.activeWorkspaceId = newId
+        storage.ensureDirectory(listOf(workspace.folderName))
         writeState(state)
         WorkspaceSummary(newId, name)
     }
@@ -64,15 +65,16 @@ class FileConversationStore(
 
     override suspend fun deleteWorkspace(workspaceId: Long): Unit = withStoreLock {
         val state = readState()
-        state.workspaces.removeAll { it.id == workspaceId }
-        
-        // Cascade delete conversations in this workspace
-        val conversationsToDelete = state.conversations.filter { it.workspaceId == workspaceId }
-        for (conv in conversationsToDelete) {
-            messageFile(conv.id).delete()
+        if (state.workspaces.size <= 1) {
+            return@withStoreLock
         }
+        val workspace = state.workspaces.firstOrNull { it.id == workspaceId }
+            ?: throw IllegalArgumentException("Workspace not found: $workspaceId")
+        state.workspaces.removeAll { it.id == workspaceId }
         state.conversations.removeAll { it.workspaceId == workspaceId }
-        
+        state.activeConversationIdsByWorkspace.remove(workspaceKey(workspaceId))
+        storage.delete(listOf(workspace.folderName))
+
         if (state.activeWorkspaceId == workspaceId) {
             state.activeWorkspaceId = state.workspaces.firstOrNull()?.id
         }
@@ -81,52 +83,54 @@ class FileConversationStore(
 
     override suspend fun getOrCreateActiveConversation(): ConversationSummary = withStoreLock {
         val state = readState()
-        val activeWsId = state.activeWorkspaceId ?: 1L
-        val active = state.activeConversationId?.let { activeId ->
-            state.conversations.firstOrNull { it.id == activeId && it.workspaceId == activeWsId }
+        val activeWorkspace = findActiveWorkspace(state)
+        val activeConversationId = state.activeConversationIdsByWorkspace[workspaceKey(activeWorkspace.id)]
+        val active = activeConversationId?.let { id ->
+            state.conversations.firstOrNull { it.id == id && it.workspaceId == activeWorkspace.id }
         }
-        if (active != null) {
-            active.toSummary()
-        } else {
-            val lastConv = state.conversations
-                .filter { it.workspaceId == activeWsId }
+
+        val target = active
+            ?: state.conversations
+                .filter { it.workspaceId == activeWorkspace.id }
                 .maxByOrNull { it.updatedAtEpochMs }
-            if (lastConv != null) {
-                state.activeConversationId = lastConv.id
-                writeState(state)
-                lastConv.toSummary()
-            } else {
-                createConversationInternal(state, activeWsId)
-            }
-        }
+            ?: return@withStoreLock createConversationInternal(state, activeWorkspace)
+
+        state.activeConversationIdsByWorkspace[workspaceKey(activeWorkspace.id)] = target.id
+        writeState(state)
+        target.toSummary()
     }
 
     override suspend fun listConversations(): List<ConversationSummary> = withStoreLock {
         val state = readState()
-        val activeWsId = state.activeWorkspaceId ?: 1L
+        val activeWorkspace = findActiveWorkspace(state)
         state.conversations
-            .filter { it.workspaceId == activeWsId }
+            .filter { it.workspaceId == activeWorkspace.id }
             .sortedByDescending { it.updatedAtEpochMs }
             .map { it.toSummary() }
     }
 
     override suspend fun createConversation(): ConversationSummary = withStoreLock {
         val state = readState()
-        val activeWsId = state.activeWorkspaceId ?: 1L
-        createConversationInternal(state, activeWsId)
+        val activeWorkspace = findActiveWorkspace(state)
+        createConversationInternal(state, activeWorkspace)
     }
 
     override suspend fun switchActiveConversation(conversationId: Long): ConversationSummary = withStoreLock {
         val state = readState()
-        val conversation = state.conversations.firstOrNull { it.id == conversationId }
-            ?: throw IllegalArgumentException("Conversation not found: $conversationId")
-        state.activeConversationId = conversationId
+        val activeWorkspace = findActiveWorkspace(state)
+        val conversation = state.conversations.firstOrNull {
+            it.id == conversationId && it.workspaceId == activeWorkspace.id
+        } ?: throw IllegalArgumentException("Conversation not found in active workspace: $conversationId")
+        state.activeConversationIdsByWorkspace[workspaceKey(activeWorkspace.id)] = conversationId
         writeState(state)
         conversation.toSummary()
     }
 
     override suspend fun loadMessages(conversationId: Long): List<StoredChatMessage> = withStoreLock {
-        readMessages(conversationId).map {
+        val state = readState()
+        val conversation = state.conversations.firstOrNull { it.id == conversationId }
+            ?: return@withStoreLock emptyList()
+        readMessages(conversation).map {
             StoredChatMessage(
                 id = it.id,
                 role = it.role,
@@ -148,7 +152,7 @@ class FileConversationStore(
             createdAtEpochMs = now
         }
 
-        appendMessageRecord(message)
+        storage.appendLine(messagePath(conversation), objectMapper.writeValueAsString(message), JSONL_MIME_TYPE)
         if (role == ChatMessage.ROLE_USER && conversation.title.isNullOrBlank()) {
             conversation.title = buildConversationTitle(content)
         }
@@ -158,11 +162,14 @@ class FileConversationStore(
 
     override suspend fun deleteConversation(conversationId: Long): Unit = withStoreLock {
         val state = readState()
+        val conversation = state.conversations.firstOrNull { it.id == conversationId }
+            ?: return@withStoreLock
         state.conversations.removeAll { it.id == conversationId }
-        if (state.activeConversationId == conversationId) {
-            state.activeConversationId = null
+        val workspaceKey = workspaceKey(conversation.workspaceId)
+        if (state.activeConversationIdsByWorkspace[workspaceKey] == conversationId) {
+            state.activeConversationIdsByWorkspace.remove(workspaceKey)
         }
-        messageFile(conversationId).delete()
+        storage.delete(messagePath(conversation))
         writeState(state)
     }
 
@@ -175,7 +182,7 @@ class FileConversationStore(
         val state = readState()
         val conversationsById = state.conversations.associateBy { it.id }
         state.conversations.flatMap { conversation ->
-            readMessages(conversation.id).mapNotNull { message ->
+            readMessages(conversation).mapNotNull { message ->
                 val score = score(message.content, terms)
                 if (score <= 0) {
                     null
@@ -199,17 +206,12 @@ class FileConversationStore(
 
     private suspend fun <T> withStoreLock(block: () -> T): T = withContext(Dispatchers.IO) {
         synchronized(lock) {
-            ensureDirectories()
+            storage.ensureReady()
             block()
         }
     }
 
-    private fun ensureDirectories() {
-        rootDir.mkdirs()
-        conversationsDir.mkdirs()
-    }
-
-    private fun createConversationInternal(state: StoreState, workspaceId: Long = 1L): ConversationSummary {
+    private fun createConversationInternal(state: StoreState, workspace: WorkspaceRecord): ConversationSummary {
         val now = System.currentTimeMillis()
         val id = state.nextConversationId++
         val conversation = ConversationRecord().apply {
@@ -217,68 +219,116 @@ class FileConversationStore(
             title = null
             createdAtEpochMs = now
             updatedAtEpochMs = now
-            this.workspaceId = workspaceId
+            workspaceId = workspace.id
+            workspaceFolderName = workspace.folderName
+            fileName = "conversation-$id.jsonl"
         }
-        state.activeConversationId = id
+        state.activeConversationIdsByWorkspace[workspaceKey(workspace.id)] = id
         state.conversations.add(conversation)
+        storage.writeText(messagePath(conversation), "", JSONL_MIME_TYPE)
         writeState(state)
-        messageFile(id).createNewFile()
         return conversation.toSummary()
     }
 
     private fun readState(): StoreState {
-        if (!metadataFile.exists() || metadataFile.length() == 0L) {
-            val state = StoreState()
-            ensureDefaultWorkspace(state)
-            return state
+        val raw = storage.readText(METADATA_PATH)
+        val state = if (raw.isNullOrBlank()) {
+            StoreState()
+        } else {
+            objectMapper.readValue(raw, StoreState::class.java)
         }
-        val state = objectMapper.readValue(metadataFile, StoreState::class.java)
-        ensureDefaultWorkspace(state)
+        val changed = normalizeState(state)
+        if (changed || raw.isNullOrBlank()) {
+            writeState(state)
+        }
         return state
     }
 
-    private fun ensureDefaultWorkspace(state: StoreState) {
+    private fun normalizeState(state: StoreState): Boolean {
+        var changed = false
         if (state.workspaces.isEmpty()) {
-            val personal = WorkspaceRecord().apply {
-                id = 1L
-                name = "Personal"
-                createdAtEpochMs = System.currentTimeMillis()
-            }
-            state.workspaces.add(personal)
+            state.workspaces.add(
+                WorkspaceRecord().apply {
+                    id = 1L
+                    name = "Personal"
+                    folderName = "workspace-1-personal"
+                    createdAtEpochMs = System.currentTimeMillis()
+                }
+            )
+            state.activeWorkspaceId = 1L
             if (state.nextWorkspaceId <= 1L) {
                 state.nextWorkspaceId = 2L
             }
-            if (state.activeWorkspaceId == null) {
-                state.activeWorkspaceId = 1L
-            }
-            for (c in state.conversations) {
-                if (c.workspaceId == 0L) {
-                    c.workspaceId = 1L
-                }
-            }
-            writeState(state)
+            changed = true
         }
+
+        for (workspace in state.workspaces) {
+            if (workspace.folderName.isBlank()) {
+                workspace.folderName = uniqueWorkspaceFolderName(state, workspace.id, workspace.name)
+                changed = true
+            }
+            storage.ensureDirectory(listOf(workspace.folderName))
+        }
+
+        if (state.activeWorkspaceId == null || state.workspaces.none { it.id == state.activeWorkspaceId }) {
+            state.activeWorkspaceId = state.workspaces.first().id
+            changed = true
+        }
+
+        for (conversation in state.conversations) {
+            if (conversation.workspaceId == 0L) {
+                conversation.workspaceId = 1L
+                changed = true
+            }
+            val workspace = state.workspaces.firstOrNull { it.id == conversation.workspaceId }
+            if (workspace != null && conversation.workspaceFolderName != workspace.folderName) {
+                conversation.workspaceFolderName = workspace.folderName
+                changed = true
+            }
+            if (conversation.fileName.isBlank()) {
+                conversation.fileName = "${conversation.id}.jsonl"
+                changed = true
+            }
+        }
+
+        state.activeConversationId?.let { legacyActiveId ->
+            val legacyConversation = state.conversations.firstOrNull { it.id == legacyActiveId }
+            if (legacyConversation != null) {
+                state.activeConversationIdsByWorkspace[workspaceKey(legacyConversation.workspaceId)] = legacyActiveId
+                changed = true
+            }
+            state.activeConversationId = null
+        }
+
+        return changed
+    }
+
+    private fun findActiveWorkspace(state: StoreState): WorkspaceRecord {
+        val activeId = state.activeWorkspaceId ?: state.workspaces.firstOrNull()?.id
+        return state.workspaces.firstOrNull { it.id == activeId }
+            ?: state.workspaces.firstOrNull()
+            ?: throw IllegalStateException("No workspaces found")
     }
 
     private fun writeState(state: StoreState) {
-        objectMapper.writerWithDefaultPrettyPrinter().writeValue(metadataFile, state)
+        storage.writeText(
+            METADATA_PATH,
+            objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(state),
+            JSON_MIME_TYPE
+        )
     }
 
-    private fun readMessages(conversationId: Long): List<MessageRecord> {
-        val file = messageFile(conversationId)
-        if (!file.exists()) {
-            return emptyList()
-        }
-        return file.readLines()
+    private fun readMessages(conversation: ConversationRecord): List<MessageRecord> {
+        val raw = storage.readText(messagePath(conversation)) ?: return emptyList()
+        return raw.lineSequence()
             .filter { it.isNotBlank() }
             .map { objectMapper.readValue(it, MessageRecord::class.java) }
+            .toList()
     }
 
-    private fun appendMessageRecord(message: MessageRecord) {
-        messageFile(message.conversationId).appendText(objectMapper.writeValueAsString(message) + "\n")
+    private fun messagePath(conversation: ConversationRecord): List<String> {
+        return listOf(conversation.workspaceFolderName, conversation.fileName)
     }
-
-    private fun messageFile(conversationId: Long): File = File(conversationsDir, "$conversationId.jsonl")
 
     private fun ConversationRecord.toSummary(): ConversationSummary {
         return ConversationSummary(
@@ -286,6 +336,29 @@ class FileConversationStore(
             title = title,
             updatedAtEpochMs = updatedAtEpochMs
         )
+    }
+
+    private fun uniqueWorkspaceFolderName(state: StoreState, workspaceId: Long, name: String): String {
+        val base = "workspace-$workspaceId-${slugify(name).ifBlank { "workspace" }}"
+        val existing = state.workspaces
+            .filterNot { it.id == workspaceId }
+            .map { it.folderName }
+            .toSet()
+        if (base !in existing) {
+            return base
+        }
+        var suffix = 2
+        while ("$base-$suffix" in existing) {
+            suffix++
+        }
+        return "$base-$suffix"
+    }
+
+    private fun slugify(name: String): String {
+        return name.lowercase(Locale.US)
+            .replace(Regex("[^a-z0-9]+"), "-")
+            .trim('-')
+            .take(40)
     }
 
     private fun buildConversationTitle(userMessage: String): String {
@@ -322,10 +395,13 @@ class FileConversationStore(
         return prefix + content.substring(start, end).trim() + suffix
     }
 
+    private fun workspaceKey(workspaceId: Long): String = workspaceId.toString()
+
     private class StoreState {
         var activeWorkspaceId: Long? = null
         var nextWorkspaceId: Long = 1L
         var activeConversationId: Long? = null
+        var activeConversationIdsByWorkspace: MutableMap<String, Long> = mutableMapOf()
         var nextConversationId: Long = 1L
         var nextMessageId: Long = 1L
         var conversations: MutableList<ConversationRecord> = mutableListOf()
@@ -335,6 +411,7 @@ class FileConversationStore(
     private class WorkspaceRecord {
         var id: Long = 0L
         var name: String = ""
+        var folderName: String = ""
         var createdAtEpochMs: Long = 0L
     }
 
@@ -344,6 +421,8 @@ class FileConversationStore(
         var createdAtEpochMs: Long = 0L
         var updatedAtEpochMs: Long = 0L
         var workspaceId: Long = 1L
+        var workspaceFolderName: String = ""
+        var fileName: String = ""
     }
 
     private class MessageRecord {
@@ -352,6 +431,12 @@ class FileConversationStore(
         var role: String = ""
         var content: String = ""
         var createdAtEpochMs: Long = 0L
+    }
+
+    companion object {
+        private val METADATA_PATH = listOf("metadata.json")
+        private const val JSON_MIME_TYPE = "application/json"
+        private const val JSONL_MIME_TYPE = "application/x-ndjson"
     }
 }
 

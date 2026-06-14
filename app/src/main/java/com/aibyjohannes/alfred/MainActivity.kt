@@ -14,6 +14,7 @@ import com.aibyjohannes.alfred.databinding.ActivityMainBinding
 import com.aibyjohannes.alfred.data.ApiKeyStore
 import com.aibyjohannes.alfred.data.ChatRepository
 import com.aibyjohannes.alfred.data.ProfilePreferencesStore
+import com.aibyjohannes.alfred.data.local.ChatHistoryLocationStore
 import com.aibyjohannes.alfred.data.local.FileConversationStore
 import com.aibyjohannes.alfred.data.local.FileLocalKnowledgeSearchClient
 import com.aibyjohannes.alfred.data.local.FileMemorySearchSource
@@ -45,6 +46,21 @@ class MainActivity : AppCompatActivity() {
     private lateinit var conversationAdapter: ConversationAdapter
     private lateinit var workspaceAdapter: DrawerProjectsAdapter
     private lateinit var profilePreferencesStore: ProfilePreferencesStore
+    private lateinit var chatHistoryLocationStore: ChatHistoryLocationStore
+
+    private val chatHistoryFolderLauncher = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri == null) {
+            showChatHistoryFolderRequiredDialog()
+            return@registerForActivityResult
+        }
+
+        try {
+            chatHistoryLocationStore.persistFolder(uri)
+            initializeHomeViewModel()
+        } catch (error: Exception) {
+            showChatHistoryFolderRequiredDialog(error.message)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,6 +68,7 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         profilePreferencesStore = ProfilePreferencesStore(this)
+        chatHistoryLocationStore = ChatHistoryLocationStore(this)
 
         homeViewModel = ViewModelProvider(this)[HomeViewModel::class.java]
         initializeHomeViewModel()
@@ -90,8 +107,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initializeHomeViewModel() {
+        val storage = chatHistoryLocationStore.createStorage()
+        if (storage == null) {
+            requestChatHistoryFolder()
+            return
+        }
+
         val apiKeyStore = ApiKeyStore(this)
-        val conversationStore = FileConversationStore(filesDir)
+        val conversationStore = FileConversationStore(storage)
         val localKnowledgeSearchClient = FileLocalKnowledgeSearchClient(
             conversationStore = conversationStore,
             memorySearchSource = FileMemorySearchSource(filesDir.resolve("memories.jsonl"))
@@ -107,6 +130,26 @@ class MainActivity : AppCompatActivity() {
                 NotificationScheduler.recordChatActivity(this)
             }
         )
+    }
+
+    private fun requestChatHistoryFolder() {
+        chatHistoryFolderLauncher.launch(null)
+    }
+
+    private fun showChatHistoryFolderRequiredDialog(detail: String? = null) {
+        val message = if (detail.isNullOrBlank()) {
+            getString(R.string.chat_history_folder_required_message)
+        } else {
+            getString(R.string.chat_history_folder_error_message, detail)
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.chat_history_folder_required_title)
+            .setMessage(message)
+            .setPositiveButton(R.string.choose_folder) { _, _ ->
+                requestChatHistoryFolder()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     private fun setupDrawer() {

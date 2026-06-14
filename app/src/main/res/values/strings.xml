@@ -20,6 +20,10 @@
     <string name="new_chat">New chat</string>
     <string name="new_conversation">New Conversation</string>
     <string name="active_conversation">Active conversation</string>
+    <string name="chat_history_folder_required_title">Choose chat history folder</string>
+    <string name="chat_history_folder_required_message">Choose a folder where Alfred can create an Alfred folder and store each chat as JSONL.</string>
+    <string name="chat_history_folder_error_message">Couldn\'t use that folder: %1$s</string>
+    <string name="choose_folder">Choose folder</string>
 
     <!-- Settings -->
     <string name="settings_title">Settings</string>

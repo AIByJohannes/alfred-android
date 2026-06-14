@@ -318,8 +318,13 @@ class HomeViewModel : ViewModel() {
     fun selectConversation(conversationId: Long) {
         val store = conversationStore ?: return
         viewModelScope.launch {
-            val selectedConversation = store.switchActiveConversation(conversationId)
-            loadConversation(selectedConversation)
+            try {
+                val selectedConversation = store.switchActiveConversation(conversationId)
+                loadConversation(selectedConversation)
+            } catch (_: IllegalArgumentException) {
+                val activeConversation = store.getOrCreateActiveConversation()
+                loadConversation(activeConversation)
+            }
             refreshConversationList()
         }
     }

@@ -126,6 +126,30 @@ class HomeViewModelTest {
     }
 
     @Test
+    fun `selectConversation reloads active conversation when selected id is invalid`() = runTest {
+        // Arrange
+        val activeConversation = ConversationSummary(1L, "Active Chat", System.currentTimeMillis())
+
+        every { apiKeyStore.hasApiKey() } returns true
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns activeConversation
+        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.listConversations() } returns listOf(activeConversation)
+        coEvery { conversationStore.switchActiveConversation(99L) } throws IllegalArgumentException("Invalid")
+
+        // Act
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.selectConversation(99L)
+        testScheduler.advanceUntilIdle()
+
+        // Assert
+        assert(viewModel.activeConversationId.value == 1L)
+        coVerify(exactly = 1) { conversationStore.switchActiveConversation(99L) }
+        coVerify(atLeast = 2) { conversationStore.getOrCreateActiveConversation() }
+    }
+
+    @Test
     fun `switchWorkspace updates active workspace and loads its active conversation`() = runTest {
         // Arrange
         val workspace1 = WorkspaceSummary(1L, "Personal")

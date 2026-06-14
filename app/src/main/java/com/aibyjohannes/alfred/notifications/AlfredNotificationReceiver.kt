@@ -10,6 +10,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.aibyjohannes.alfred.MainActivity
 import com.aibyjohannes.alfred.R
+import com.aibyjohannes.alfred.data.local.ChatHistoryLocationStore
 import com.aibyjohannes.alfred.data.local.FileConversationStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -68,7 +69,14 @@ class AlfredNotificationReceiver : BroadcastReceiver() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val prompt = NotificationPersonalizer(FileConversationStore(context.filesDir)).buildPrompt(kind)
+        val storage = runCatching {
+            ChatHistoryLocationStore(context).createStorage()
+        }.getOrNull()
+        val prompt = if (storage != null) {
+            NotificationPersonalizer(FileConversationStore(storage)).buildPrompt(kind)
+        } else {
+            NotificationPersonalizer.genericPrompt(kind)
+        }
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)

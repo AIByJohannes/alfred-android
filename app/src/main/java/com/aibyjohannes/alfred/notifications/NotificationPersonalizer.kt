@@ -78,6 +78,14 @@ class NotificationPersonalizer(
             "Ready to continue building with Alfred?",
             "Alfred can help you sort out the next step."
         )
+
+        fun genericPrompt(kind: NotificationKind): String {
+            return if (kind == NotificationKind.INACTIVITY) {
+                "Alfred is ready when you want to continue."
+            } else {
+                GENERIC_PROMPTS.random()
+            }
+        }
     }
 }
 
