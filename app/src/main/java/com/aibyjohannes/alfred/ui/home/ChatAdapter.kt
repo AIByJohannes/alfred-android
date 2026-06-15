@@ -5,6 +5,7 @@ import android.graphics.Typeface
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.content.ContextCompat
@@ -107,8 +108,8 @@ class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(Me
         }
 
         private fun bindTraceItems(message: UiChatMessage) {
-            binding.traceContainer.removeAllViews()
             if (message.traceItems.isEmpty() || message.isUser || message.isError) {
+                binding.traceContainer.removeAllViews()
                 binding.traceContainer.visibility = View.GONE
                 return
             }
@@ -116,34 +117,68 @@ class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(Me
             binding.traceContainer.visibility = View.VISIBLE
             val context = binding.root.context
             val secondaryColor = ContextCompat.getColor(context, R.color.assistant_message_text)
-            message.traceItems.forEach { trace ->
-                lateinit var body: TextView
-                val title = TextView(context).apply {
-                    text = trace.title
-                    setTypeface(typeface, Typeface.BOLD)
-                    textSize = 12f
-                    setTextColor(secondaryColor)
-                }
-                binding.traceContainer.addView(title)
 
-                body = TextView(context).apply {
-                    text = trace.content.take(1_200)
-                    textSize = 12f
-                    setTextColor(secondaryColor)
-                    alpha = if (trace.isError) 1f else 0.78f
-                    setPadding(0, 2, 0, 8)
-                    visibility = if (trace.kind == UiTraceKind.REASONING && !trace.isExpanded) {
-                        View.GONE
-                    } else {
-                        View.VISIBLE
+            val currentChildCount = binding.traceContainer.childCount
+            val requiredChildCount = message.traceItems.size * 2
+
+            // Remove extra views if we have too many
+            if (currentChildCount > requiredChildCount) {
+                binding.traceContainer.removeViews(requiredChildCount, currentChildCount - requiredChildCount)
+            }
+
+            message.traceItems.forEachIndexed { index, trace ->
+                val titleIndex = index * 2
+                val bodyIndex = titleIndex + 1
+
+                // Get or create title TextView
+                val title = if (titleIndex < binding.traceContainer.childCount) {
+                    binding.traceContainer.getChildAt(titleIndex) as TextView
+                } else {
+                    TextView(context).apply {
+                        layoutParams = LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT
+                        )
+                        setTypeface(typeface, Typeface.BOLD)
+                        textSize = 12f
+                        setTextColor(secondaryColor)
+                        binding.traceContainer.addView(this)
                     }
                 }
+                title.text = trace.title
+                title.setTextColor(secondaryColor)
+
+                // Get or create body TextView
+                val body = if (bodyIndex < binding.traceContainer.childCount) {
+                    binding.traceContainer.getChildAt(bodyIndex) as TextView
+                } else {
+                    TextView(context).apply {
+                        layoutParams = LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT
+                        )
+                        textSize = 12f
+                        setTextColor(secondaryColor)
+                        setPadding(0, 2, 0, 8)
+                        binding.traceContainer.addView(this)
+                    }
+                }
+                body.text = trace.content.take(1_200)
+                body.setTextColor(secondaryColor)
+                body.alpha = if (trace.isError) 1f else 0.78f
+                body.visibility = if (trace.kind == UiTraceKind.REASONING && !trace.isExpanded) {
+                    View.GONE
+                } else {
+                    View.VISIBLE
+                }
+
                 if (trace.kind == UiTraceKind.REASONING) {
                     title.setOnClickListener {
                         body.visibility = if (body.visibility == View.VISIBLE) View.GONE else View.VISIBLE
                     }
+                } else {
+                    title.setOnClickListener(null)
                 }
-                binding.traceContainer.addView(body)
             }
         }
 

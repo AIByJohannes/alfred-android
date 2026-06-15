@@ -396,4 +396,222 @@ class HomeViewModelTest {
         assert(assistant.content == "It is sunny.")
         assert(assistant.traceItems.any { it.kind == UiTraceKind.ASSISTANT_DRAFT && it.content == "I should check first." })
     }
+
+    @Test
+    fun `sendMessage groups reasoning chunks into a single trace item even if they have different ids`() = runTest {
+        val conversation = ConversationSummary(1L, null, System.currentTimeMillis())
+
+        every { apiKeyStore.hasApiKey() } returns true
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
+        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.listConversations() } returns listOf(conversation)
+        every { repository.streamMessage(any(), any(), any()) } returns flowOf(
+            ChatStreamEvent.PassStarted(0),
+            ChatStreamEvent.ReasoningDelta(
+                passIndex = 0,
+                id = "chunk-1",
+                textChunk = null,
+                summaryChunk = "Thinking "
+            ),
+            ChatStreamEvent.ReasoningDelta(
+                passIndex = 0,
+                id = "chunk-2",
+                textChunk = null,
+                summaryChunk = "about "
+            ),
+            ChatStreamEvent.ReasoningDelta(
+                passIndex = 0,
+                id = "chunk-3",
+                textChunk = null,
+                summaryChunk = "this."
+            ),
+            ChatStreamEvent.TextDelta(0, "Done."),
+            ChatStreamEvent.Completed(
+                ChatTurnResult(
+                    content = "Done.",
+                    toolCalls = emptyList(),
+                    intermediateMessages = emptyList()
+                )
+            )
+        )
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.sendMessage("Test reasoning grouping")
+        testScheduler.advanceUntilIdle()
+
+        val assistant = viewModel.messages.value.orEmpty().last()
+        val reasoningTraces = assistant.traceItems.filter { it.kind == UiTraceKind.REASONING }
+        
+        assert(reasoningTraces.size == 1) { "Expected exactly 1 reasoning trace, but found ${reasoningTraces.size}" }
+        assert(reasoningTraces.first().content == "Thinking about this.") { "Expected combined reasoning content, but was ${reasoningTraces.first().content}" }
+    }
+
+    @Test
+    fun `sendMessage groups tool call chunks into a single trace item even if subsequent chunks have null ids`() = runTest {
+        val conversation = ConversationSummary(1L, null, System.currentTimeMillis())
+
+        every { apiKeyStore.hasApiKey() } returns true
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
+        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.listConversations() } returns listOf(conversation)
+        every { repository.streamMessage(any(), any(), any()) } returns flowOf(
+            ChatStreamEvent.PassStarted(0),
+            ChatStreamEvent.ToolCallDelta(
+                passIndex = 0,
+                id = "call-1",
+                name = "WebSearchTool",
+                argumentsChunk = "{\"qu"
+            ),
+            ChatStreamEvent.ToolCallDelta(
+                passIndex = 0,
+                id = null,
+                name = null,
+                argumentsChunk = "ery\":\"Kot"
+            ),
+            ChatStreamEvent.ToolCallDelta(
+                passIndex = 0,
+                id = null,
+                name = null,
+                argumentsChunk = "lin\"}"
+            ),
+            ChatStreamEvent.ToolCallRequested(
+                passIndex = 0,
+                toolCallId = "call-1",
+                name = "WebSearchTool",
+                argumentsJson = "{\"query\":\"Kotlin\"}"
+            ),
+            ChatStreamEvent.Completed(
+                ChatTurnResult(
+                    content = "Done.",
+                    toolCalls = emptyList(),
+                    intermediateMessages = emptyList()
+                )
+            )
+        )
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.sendMessage("Test tool grouping")
+        testScheduler.advanceUntilIdle()
+
+        val assistant = viewModel.messages.value.orEmpty().last()
+        val toolTraces = assistant.traceItems.filter { it.kind == UiTraceKind.TOOL_CALL }
+
+        assert(toolTraces.size == 1) { "Expected exactly 1 tool trace, but found ${toolTraces.size}" }
+        assert(toolTraces.first().content == "{\"query\":\"Kotlin\"}") { "Expected combined tool args, but was ${toolTraces.first().content}" }
+    }
+
+    @Test
+    fun `sendMessage updates messages list incrementally during streaming`() = runTest {
+        val conversation = ConversationSummary(1L, null, System.currentTimeMillis())
+        val flow = kotlinx.coroutines.flow.MutableSharedFlow<ChatStreamEvent>()
+
+        every { apiKeyStore.hasApiKey() } returns true
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
+        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.listConversations() } returns listOf(conversation)
+        every { repository.streamMessage(any(), any(), any()) } returns flow
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.sendMessage("Checking weather")
+        testScheduler.advanceTimeBy(1)
+
+        // 1. Emit PassStarted
+        flow.emit(ChatStreamEvent.PassStarted(0))
+        testScheduler.advanceUntilIdle()
+        var assistant = viewModel.messages.value.orEmpty().last()
+        assert(assistant.content.isEmpty())
+        assert(assistant.traceItems.isEmpty())
+
+        // 2. Emit ReasoningDelta
+        flow.emit(
+            ChatStreamEvent.ReasoningDelta(
+                passIndex = 0,
+                id = "reasoning-0",
+                textChunk = "Thinking",
+                summaryChunk = null
+            )
+        )
+        testScheduler.advanceUntilIdle()
+        assistant = viewModel.messages.value.orEmpty().last()
+        var reasoningTrace = assistant.traceItems.firstOrNull { it.kind == UiTraceKind.REASONING }
+        assert(reasoningTrace != null)
+        assert(reasoningTrace?.content == "Thinking")
+
+        // 3. Emit ReasoningDelta append
+        flow.emit(
+            ChatStreamEvent.ReasoningDelta(
+                passIndex = 0,
+                id = "reasoning-0",
+                textChunk = " more",
+                summaryChunk = null
+            )
+        )
+        testScheduler.advanceUntilIdle()
+        assistant = viewModel.messages.value.orEmpty().last()
+        reasoningTrace = assistant.traceItems.firstOrNull { it.kind == UiTraceKind.REASONING }
+        assert(reasoningTrace?.content == "Thinking more")
+
+        // 4. Emit ToolCallDelta
+        flow.emit(
+            ChatStreamEvent.ToolCallDelta(
+                passIndex = 0,
+                id = "call-1",
+                name = "WebSearchTool",
+                argumentsChunk = "{\"qu"
+            )
+        )
+        testScheduler.advanceUntilIdle()
+        assistant = viewModel.messages.value.orEmpty().last()
+        var toolTrace = assistant.traceItems.firstOrNull { it.kind == UiTraceKind.TOOL_CALL }
+        assert(toolTrace != null)
+        assert(toolTrace?.content == "{\"qu")
+
+        // 5. Emit ToolCallDelta append
+        flow.emit(
+            ChatStreamEvent.ToolCallDelta(
+                passIndex = 0,
+                id = "call-1",
+                name = null,
+                argumentsChunk = "ery\"}"
+            )
+        )
+        testScheduler.advanceUntilIdle()
+        assistant = viewModel.messages.value.orEmpty().last()
+        toolTrace = assistant.traceItems.firstOrNull { it.kind == UiTraceKind.TOOL_CALL }
+        assert(toolTrace?.content == "{\"query\"}")
+
+        // 6. Emit ToolCallRequested
+        flow.emit(
+            ChatStreamEvent.ToolCallRequested(
+                passIndex = 0,
+                toolCallId = "call-1",
+                name = "WebSearchTool",
+                argumentsJson = "{\"query\"}"
+            )
+        )
+        testScheduler.advanceUntilIdle()
+        assistant = viewModel.messages.value.orEmpty().last()
+        toolTrace = assistant.traceItems.firstOrNull { it.kind == UiTraceKind.TOOL_CALL }
+        assert(toolTrace?.content == "{\"query\"}")
+
+        // 7. Emit Completed
+        flow.emit(
+            ChatStreamEvent.Completed(
+                ChatTurnResult(
+                    content = "Weather is nice.",
+                    toolCalls = emptyList(),
+                    intermediateMessages = emptyList()
+                )
+            )
+        )
+        testScheduler.advanceUntilIdle()
+        assistant = viewModel.messages.value.orEmpty().last()
+        assert(assistant.content == "Weather is nice.")
+    }
 }

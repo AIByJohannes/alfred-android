@@ -224,7 +224,7 @@ class HomeViewModel : ViewModel() {
                         }
 
                         is ChatStreamEvent.ReasoningDelta -> {
-                            val id = event.id ?: "reasoning-${event.passIndex}"
+                            val id = "reasoning-${event.passIndex}"
                             val text = event.summaryChunk ?: event.textChunk
                             if (!text.isNullOrBlank()) {
                                 upsertTraceItem(
@@ -266,8 +266,10 @@ class HomeViewModel : ViewModel() {
                         }
 
                         is ChatStreamEvent.ToolCallDelta -> {
-                            val id = event.id ?: "tool-${event.passIndex}"
-                            val title = event.name?.let { "Calling $it" } ?: "Preparing tool call"
+                            val id = event.id 
+                                ?: traceItems.lastOrNull { it.kind == UiTraceKind.TOOL_CALL }?.id 
+                                ?: "tool-${event.passIndex}"
+                            val title = event.name?.let { "Calling $it" } ?: "Tool call"
                             upsertTraceItem(
                                 messageId = assistantMessageId,
                                 traceItems = traceItems,
@@ -275,7 +277,8 @@ class HomeViewModel : ViewModel() {
                                     id = id,
                                     kind = UiTraceKind.TOOL_CALL,
                                     title = title,
-                                    content = event.argumentsChunk
+                                    content = event.argumentsChunk,
+                                    isExpanded = true
                                 ),
                                 appendContent = true
                             )

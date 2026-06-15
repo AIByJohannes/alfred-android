@@ -113,7 +113,7 @@ class OpenRouterChatEngine(
                 var passIndex = 0
 
                 while (passIndex < MAX_AGENT_PASSES && finalContent == null) {
-                    trySend(ChatStreamEvent.PassStarted(passIndex))
+                    send(ChatStreamEvent.PassStarted(passIndex))
                     val pass = streamSingleCompletionWithReasoningFallback(
                         client = client,
                         model = koogModel,
@@ -121,7 +121,7 @@ class OpenRouterChatEngine(
                         tools = tools,
                         passIndex = passIndex,
                         reasoningEnabled = reasoningEnabled,
-                        onEvent = { trySend(it) }
+                        onEvent = { this@channelFlow.send(it) }
                     )
                     reasoningEnabled = pass.reasoningEnabled
                     val passResult = pass.result
@@ -149,7 +149,7 @@ class OpenRouterChatEngine(
                             throw Exception("No response content from AI")
                         }
                         finalContent = passResult.content
-                        trySend(ChatStreamEvent.PassCompleted(passIndex))
+                        send(ChatStreamEvent.PassCompleted(passIndex))
                         break
                     }
 
@@ -180,7 +180,7 @@ class OpenRouterChatEngine(
                         )
                         promptMessages.add(toolCallMessage)
                         persistedIntermediateMessages.add(toolCallMessage)
-                        trySend(
+                        send(
                             ChatStreamEvent.ToolCallRequested(
                                 passIndex = passIndex,
                                 toolCallId = toolCall.id,
@@ -215,7 +215,7 @@ class OpenRouterChatEngine(
                         )
                         promptMessages.add(resultMessage)
                         persistedIntermediateMessages.add(resultMessage)
-                        trySend(
+                        send(
                             ChatStreamEvent.ToolResultAvailable(
                                 passIndex = passIndex,
                                 toolCallId = toolCall.id,
@@ -225,7 +225,7 @@ class OpenRouterChatEngine(
                             )
                         )
                     }
-                    trySend(ChatStreamEvent.PassCompleted(passIndex))
+                    send(ChatStreamEvent.PassCompleted(passIndex))
                     passIndex++
                 }
 
@@ -246,7 +246,7 @@ class OpenRouterChatEngine(
             }
         }
 
-        trySend(ChatStreamEvent.Completed(finalResult))
+        send(ChatStreamEvent.Completed(finalResult))
     }
 
     internal fun createOpenRouterClient(): OpenRouterLLMClient {
@@ -362,7 +362,7 @@ class OpenRouterChatEngine(
         tools: List<ToolDescriptor>,
         passIndex: Int,
         reasoningEnabled: Boolean,
-        onEvent: (ChatStreamEvent) -> Unit
+        onEvent: suspend (ChatStreamEvent) -> Unit
     ): PassWithPromptState {
         val prompt = buildConversationPrompt(messages, reasoningEnabled)
         return try {
@@ -388,7 +388,7 @@ class OpenRouterChatEngine(
         prompt: Prompt,
         tools: List<ToolDescriptor>,
         passIndex: Int,
-        onEvent: (ChatStreamEvent) -> Unit
+        onEvent: suspend (ChatStreamEvent) -> Unit
     ): StreamPassResult {
         val content = StringBuilder()
         val toolCalls = mutableListOf<ToolCall>()
@@ -398,6 +398,7 @@ class OpenRouterChatEngine(
         val toolCallArgsByKey = linkedMapOf<String, StringBuilder>()
         val toolCallNamesByKey = mutableMapOf<String, String>()
         val toolCallIdsByKey = mutableMapOf<String, String?>()
+        val toolCallIdByIndex = mutableMapOf<Int, String>()
         var completedText: String? = null
         var emittedAnyFrame = false
 
@@ -414,13 +415,13 @@ class OpenRouterChatEngine(
                 }
 
                 is StreamFrame.ReasoningDelta -> {
-                    val key = frame.id ?: "reasoning-${frame.index ?: 0}"
+                    val key = "reasoning-$passIndex"
                     frame.text?.let { reasoningTextById.getOrPut(key) { StringBuilder() }.append(it) }
                     frame.summary?.let { reasoningSummaryById.getOrPut(key) { StringBuilder() }.append(it) }
                     onEvent(
                         ChatStreamEvent.ReasoningDelta(
                             passIndex = passIndex,
-                            id = frame.id,
+                            id = key,
                             textChunk = frame.text,
                             summaryChunk = frame.summary
                         )
@@ -430,7 +431,7 @@ class OpenRouterChatEngine(
                 is StreamFrame.ReasoningComplete -> {
                     reasoningParts.add(
                         ReasoningPart(
-                            id = frame.id,
+                            id = "reasoning-$passIndex",
                             content = frame.content.orEmpty(),
                             summary = frame.summary.orEmpty(),
                             encrypted = frame.encrypted
@@ -439,7 +440,7 @@ class OpenRouterChatEngine(
                     onEvent(
                         ChatStreamEvent.ReasoningComplete(
                             passIndex = passIndex,
-                            id = frame.id,
+                            id = "reasoning-$passIndex",
                             content = frame.content.orEmpty(),
                             summary = frame.summary.orEmpty(),
                             encrypted = frame.encrypted
@@ -448,14 +449,20 @@ class OpenRouterChatEngine(
                 }
 
                 is StreamFrame.ToolCallDelta -> {
-                    val key = frame.id ?: "tool-${frame.index ?: 0}"
+                    val index = frame.index ?: 0
+                    val frameId = frame.id
+                    if (frameId != null) {
+                        toolCallIdByIndex[index] = frameId
+                    }
+                    val stableId = toolCallIdByIndex[index] ?: frameId ?: "tool-$index"
+                    val key = "tool-$passIndex-$index"
                     frame.name?.takeIf { it.isNotBlank() }?.let { toolCallNamesByKey[key] = it }
-                    toolCallIdsByKey[key] = frame.id
+                    toolCallIdsByKey[key] = stableId
                     toolCallArgsByKey.getOrPut(key) { StringBuilder() }.append(frame.content)
                     onEvent(
                         ChatStreamEvent.ToolCallDelta(
                             passIndex = passIndex,
-                            id = frame.id,
+                            id = stableId,
                             name = frame.name,
                             argumentsChunk = frame.content.orEmpty()
                         )
