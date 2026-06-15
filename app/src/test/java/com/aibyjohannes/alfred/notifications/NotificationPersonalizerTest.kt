@@ -2,6 +2,7 @@ package com.aibyjohannes.alfred.notifications
 
 import com.aibyjohannes.alfred.data.api.ChatMessage
 import com.aibyjohannes.alfred.data.local.ConversationStore
+import com.aibyjohannes.alfred.data.local.ConversationMessageDraft
 import com.aibyjohannes.alfred.data.local.ConversationSummary
 import com.aibyjohannes.alfred.data.local.StoredChatMessage
 import com.aibyjohannes.alfred.data.local.WorkspaceSummary
@@ -88,6 +89,7 @@ class NotificationPersonalizerTest {
             return messages[conversationId].orEmpty()
         }
         override suspend fun appendMessage(conversationId: Long, role: String, content: String) = Unit
+        override suspend fun appendMessages(conversationId: Long, messages: List<ConversationMessageDraft>) = Unit
         override suspend fun deleteConversation(conversationId: Long) = Unit
     }
 }

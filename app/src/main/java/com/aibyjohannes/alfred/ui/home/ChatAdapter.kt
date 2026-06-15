@@ -1,9 +1,11 @@
 package com.aibyjohannes.alfred.ui.home
 
 import android.content.Intent
+import android.graphics.Typeface
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.TextView
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.DiffUtil
@@ -17,6 +19,11 @@ import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.linkify.LinkifyPlugin
 
 class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(MessageDiffCallback()) {
+    init {
+        setHasStableIds(true)
+    }
+
+    override fun getItemId(position: Int): Long = getItem(position).id
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): MessageViewHolder {
         val binding = ItemChatMessageBinding.inflate(
@@ -50,6 +57,7 @@ class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(Me
             } else {
                 markwon.setMarkdown(binding.messageText, message.content)
             }
+            bindTraceItems(message)
 
             val context = binding.root.context
             val params = binding.messageCard.layoutParams as ConstraintLayout.LayoutParams
@@ -96,6 +104,47 @@ class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(Me
                 }
             }
             binding.messageCard.layoutParams = params
+        }
+
+        private fun bindTraceItems(message: UiChatMessage) {
+            binding.traceContainer.removeAllViews()
+            if (message.traceItems.isEmpty() || message.isUser || message.isError) {
+                binding.traceContainer.visibility = View.GONE
+                return
+            }
+
+            binding.traceContainer.visibility = View.VISIBLE
+            val context = binding.root.context
+            val secondaryColor = ContextCompat.getColor(context, R.color.assistant_message_text)
+            message.traceItems.forEach { trace ->
+                lateinit var body: TextView
+                val title = TextView(context).apply {
+                    text = trace.title
+                    setTypeface(typeface, Typeface.BOLD)
+                    textSize = 12f
+                    setTextColor(secondaryColor)
+                }
+                binding.traceContainer.addView(title)
+
+                body = TextView(context).apply {
+                    text = trace.content.take(1_200)
+                    textSize = 12f
+                    setTextColor(secondaryColor)
+                    alpha = if (trace.isError) 1f else 0.78f
+                    setPadding(0, 2, 0, 8)
+                    visibility = if (trace.kind == UiTraceKind.REASONING && !trace.isExpanded) {
+                        View.GONE
+                    } else {
+                        View.VISIBLE
+                    }
+                }
+                if (trace.kind == UiTraceKind.REASONING) {
+                    title.setOnClickListener {
+                        body.visibility = if (body.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                    }
+                }
+                binding.traceContainer.addView(body)
+            }
         }
 
         private fun shareMessage(context: android.content.Context, content: String) {

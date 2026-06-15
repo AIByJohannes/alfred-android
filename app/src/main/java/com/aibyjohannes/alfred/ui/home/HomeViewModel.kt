@@ -9,6 +9,7 @@ import com.aibyjohannes.alfred.data.ApiKeyStore
 import com.aibyjohannes.alfred.data.ChatRepository
 import com.aibyjohannes.alfred.data.SysInfoProvider
 import com.aibyjohannes.alfred.data.api.ChatMessage
+import com.aibyjohannes.alfred.data.local.ConversationMessageDraft
 import com.aibyjohannes.alfred.data.local.ConversationStore
 import com.aibyjohannes.alfred.data.local.ConversationSummary
 import kotlinx.coroutines.flow.collect
@@ -33,7 +34,24 @@ data class UiChatMessage(
     val isError: Boolean = false,
     val isStreaming: Boolean = false,
     val renderMode: RenderMode = RenderMode.MARKDOWN,
-    val showTypingDots: Boolean = false
+    val showTypingDots: Boolean = false,
+    val traceItems: List<UiTraceItem> = emptyList()
+)
+
+enum class UiTraceKind {
+    ASSISTANT_DRAFT,
+    REASONING,
+    TOOL_CALL,
+    TOOL_RESULT
+}
+
+data class UiTraceItem(
+    val id: String,
+    val kind: UiTraceKind,
+    val title: String,
+    val content: String,
+    val isError: Boolean = false,
+    val isExpanded: Boolean = false
 )
 
 data class UiConversation(
@@ -164,7 +182,7 @@ class HomeViewModel : ViewModel() {
                 content = "",
                 isUser = false,
                 isStreaming = true,
-                renderMode = RenderMode.PLAIN,
+                renderMode = RenderMode.MARKDOWN,
                 showTypingDots = false
             )
         )
@@ -175,14 +193,20 @@ class HomeViewModel : ViewModel() {
 
         viewModelScope.launch {
             val userHistoryMessage = ChatMessage(role = ChatMessage.ROLE_USER, content = userInput)
-            val visibleAssistantContent = StringBuilder()
+            val passAssistantContent = StringBuilder()
             val pendingAssistantContent = StringBuilder()
+            val traceItems = mutableListOf<UiTraceItem>()
             var lastFlushAtMs = 0L
 
             try {
                 repo.streamMessage(userInput, conversationHistory.toList(), sysInfo).collect { event ->
                     when (event) {
-                        is ChatStreamEvent.Delta -> {
+                        is ChatStreamEvent.PassStarted -> {
+                            passAssistantContent.clear()
+                            pendingAssistantContent.clear()
+                        }
+
+                        is ChatStreamEvent.TextDelta -> {
                             pendingAssistantContent.append(event.textChunk)
                             val now = System.currentTimeMillis()
                             val shouldFlush = pendingAssistantContent.length >= STREAM_FLUSH_CHAR_THRESHOLD ||
@@ -192,37 +216,170 @@ class HomeViewModel : ViewModel() {
                             if (shouldFlush) {
                                 lastFlushAtMs = flushPendingAssistantText(
                                     messageId = assistantMessageId,
-                                    visibleContent = visibleAssistantContent,
+                                    visibleContent = passAssistantContent,
                                     pendingContent = pendingAssistantContent,
                                     timestampMs = now
                                 )
                             }
                         }
 
+                        is ChatStreamEvent.ReasoningDelta -> {
+                            val id = event.id ?: "reasoning-${event.passIndex}"
+                            val text = event.summaryChunk ?: event.textChunk
+                            if (!text.isNullOrBlank()) {
+                                upsertTraceItem(
+                                    messageId = assistantMessageId,
+                                    traceItems = traceItems,
+                                    item = UiTraceItem(
+                                        id = id,
+                                        kind = UiTraceKind.REASONING,
+                                        title = "Reasoning",
+                                        content = text,
+                                        isExpanded = true
+                                    ),
+                                    appendContent = true
+                                )
+                            }
+                        }
+
+                        is ChatStreamEvent.ReasoningComplete -> {
+                            val id = event.id ?: "reasoning-${event.passIndex}"
+                            val content = event.summary.joinToString("\n").ifBlank {
+                                event.content.joinToString("\n")
+                            }.ifBlank {
+                                if (event.encrypted.isNullOrBlank()) "" else "Reasoning preserved for continuity."
+                            }
+                            if (content.isNotBlank()) {
+                                upsertTraceItem(
+                                    messageId = assistantMessageId,
+                                    traceItems = traceItems,
+                                    item = UiTraceItem(
+                                        id = id,
+                                        kind = UiTraceKind.REASONING,
+                                        title = "Reasoning",
+                                        content = content,
+                                        isExpanded = false
+                                    ),
+                                    appendContent = false
+                                )
+                            }
+                        }
+
+                        is ChatStreamEvent.ToolCallDelta -> {
+                            val id = event.id ?: "tool-${event.passIndex}"
+                            val title = event.name?.let { "Calling $it" } ?: "Preparing tool call"
+                            upsertTraceItem(
+                                messageId = assistantMessageId,
+                                traceItems = traceItems,
+                                item = UiTraceItem(
+                                    id = id,
+                                    kind = UiTraceKind.TOOL_CALL,
+                                    title = title,
+                                    content = event.argumentsChunk
+                                ),
+                                appendContent = true
+                            )
+                        }
+
+                        is ChatStreamEvent.ToolCallRequested -> {
+                            flushPendingAssistantText(
+                                messageId = assistantMessageId,
+                                visibleContent = passAssistantContent,
+                                pendingContent = pendingAssistantContent,
+                                timestampMs = System.currentTimeMillis()
+                            )
+                            if (passAssistantContent.isNotBlank()) {
+                                traceItems.add(
+                                    UiTraceItem(
+                                        id = "draft-${event.passIndex}",
+                                        kind = UiTraceKind.ASSISTANT_DRAFT,
+                                        title = "Intermediate answer",
+                                        content = passAssistantContent.toString()
+                                    )
+                                )
+                                passAssistantContent.clear()
+                            }
+                            upsertTraceItem(
+                                messageId = assistantMessageId,
+                                traceItems = traceItems,
+                                item = UiTraceItem(
+                                    id = event.toolCallId ?: "tool-${event.passIndex}-${event.name}",
+                                    kind = UiTraceKind.TOOL_CALL,
+                                    title = "Called ${event.name}",
+                                    content = event.argumentsJson
+                                ),
+                                appendContent = false,
+                                contentOverride = ""
+                            )
+                        }
+
+                        is ChatStreamEvent.ToolResultAvailable -> {
+                            upsertTraceItem(
+                                messageId = assistantMessageId,
+                                traceItems = traceItems,
+                                item = UiTraceItem(
+                                    id = "result-${event.toolCallId ?: "${event.passIndex}-${event.name}"}",
+                                    kind = UiTraceKind.TOOL_RESULT,
+                                    title = "Result from ${event.name}",
+                                    content = event.resultPreview,
+                                    isError = event.isError
+                                ),
+                                appendContent = false
+                            )
+                        }
+
+                        is ChatStreamEvent.PassCompleted -> Unit
+
                         is ChatStreamEvent.Completed -> {
                             val finalResponse = event.result.content
                             flushPendingAssistantText(
                                 messageId = assistantMessageId,
-                                visibleContent = visibleAssistantContent,
+                                visibleContent = passAssistantContent,
                                 pendingContent = pendingAssistantContent,
                                 timestampMs = System.currentTimeMillis()
                             )
-                            conversationHistory.add(userHistoryMessage)
-                            conversationHistory.add(
+                            val turnMessages = listOf(userHistoryMessage) + event.result.intermediateMessages.map { core ->
                                 ChatMessage(
-                                    role = ChatMessage.ROLE_ASSISTANT,
-                                    content = finalResponse
+                                    role = core.role,
+                                    content = core.content,
+                                    kind = when (core.kind.name) {
+                                        "REASONING" -> ChatMessage.KIND_REASONING
+                                        "TOOL_CALL" -> ChatMessage.KIND_TOOL_CALL
+                                        "TOOL_RESULT" -> ChatMessage.KIND_TOOL_RESULT
+                                        else -> ChatMessage.KIND_MESSAGE
+                                    },
+                                    turnId = core.turnId,
+                                    toolCallId = core.toolCallId,
+                                    toolName = core.toolName,
+                                    toolArgumentsJson = core.toolArgumentsJson,
+                                    isError = core.isError,
+                                    reasoningText = core.reasoningText,
+                                    reasoningSummary = core.reasoningSummary,
+                                    encryptedReasoning = core.encryptedReasoning,
+                                    includeInPrompt = core.includeInPrompt,
+                                    searchable = core.searchable
                                 )
-                            )
-                            store.appendMessage(
+                            }
+                            conversationHistory.addAll(turnMessages)
+                            store.appendMessages(
                                 conversationId = conversationId,
-                                role = ChatMessage.ROLE_USER,
-                                content = userInput
-                            )
-                            store.appendMessage(
-                                conversationId = conversationId,
-                                role = ChatMessage.ROLE_ASSISTANT,
-                                content = finalResponse
+                                messages = turnMessages.map {
+                                    ConversationMessageDraft(
+                                        role = it.role,
+                                        content = it.content,
+                                        kind = it.kind,
+                                        turnId = it.turnId,
+                                        toolCallId = it.toolCallId,
+                                        toolName = it.toolName,
+                                        toolArgumentsJson = it.toolArgumentsJson,
+                                        isError = it.isError,
+                                        reasoningText = it.reasoningText,
+                                        reasoningSummary = it.reasoningSummary,
+                                        encryptedReasoning = it.encryptedReasoning,
+                                        includeInPrompt = it.includeInPrompt,
+                                        searchable = it.searchable
+                                    )
+                                }
                             )
                             onChatActivity?.invoke()
                             refreshConversationList()
@@ -233,7 +390,8 @@ class HomeViewModel : ViewModel() {
                                 isError = false,
                                 isStreaming = false,
                                 renderMode = RenderMode.MARKDOWN,
-                                showTypingDots = false
+                                showTypingDots = false,
+                                traceItems = traceItems.toList()
                             )
                         }
                     }
@@ -419,12 +577,19 @@ class HomeViewModel : ViewModel() {
         _activeConversationId.postValue(conversation.id)
 
         val storedMessages = store.loadMessages(conversation.id)
-        val uiMessages = storedMessages.map { stored ->
-            UiChatMessage(
-                id = stored.id,
-                content = stored.content,
-                isUser = stored.role == ChatMessage.ROLE_USER
-            )
+        val pendingTraceByTurn = mutableMapOf<String, MutableList<UiTraceItem>>()
+        val uiMessages = storedMessages.mapNotNull { stored ->
+            if (!stored.searchable && stored.turnId != null) {
+                pendingTraceByTurn.getOrPut(stored.turnId) { mutableListOf() }.add(stored.toTraceItem())
+                null
+            } else {
+                UiChatMessage(
+                    id = stored.id,
+                    content = stored.content,
+                    isUser = stored.role == ChatMessage.ROLE_USER,
+                    traceItems = stored.turnId?.let { pendingTraceByTurn.remove(it) }.orEmpty()
+                )
+            }
         }
         _messages.postValue(uiMessages)
 
@@ -433,7 +598,18 @@ class HomeViewModel : ViewModel() {
             storedMessages.map { stored ->
                 ChatMessage(
                     role = stored.role,
-                    content = stored.content
+                    content = stored.content,
+                    kind = stored.kind,
+                    turnId = stored.turnId,
+                    toolCallId = stored.toolCallId,
+                    toolName = stored.toolName,
+                    toolArgumentsJson = stored.toolArgumentsJson,
+                    isError = stored.isError,
+                    reasoningText = stored.reasoningText,
+                    reasoningSummary = stored.reasoningSummary,
+                    encryptedReasoning = stored.encryptedReasoning,
+                    includeInPrompt = stored.includeInPrompt,
+                    searchable = stored.searchable
                 )
             }
         )
@@ -467,7 +643,8 @@ class HomeViewModel : ViewModel() {
         isError: Boolean,
         isStreaming: Boolean,
         renderMode: RenderMode,
-        showTypingDots: Boolean
+        showTypingDots: Boolean,
+        traceItems: List<UiTraceItem>? = null
     ): Boolean {
         val updatedMessages = _messages.value.orEmpty().toMutableList()
         val index = updatedMessages.indexOfFirst { it.id == messageId }
@@ -481,7 +658,8 @@ class HomeViewModel : ViewModel() {
             isError = isError,
             isStreaming = isStreaming,
             renderMode = renderMode,
-            showTypingDots = showTypingDots
+            showTypingDots = showTypingDots,
+            traceItems = traceItems ?: existing.traceItems
         )
         _messages.value = updatedMessages
         return true
@@ -504,9 +682,67 @@ class HomeViewModel : ViewModel() {
             content = visibleContent.toString(),
             isError = false,
             isStreaming = true,
-            renderMode = RenderMode.PLAIN,
+            renderMode = RenderMode.MARKDOWN,
             showTypingDots = false
         )
         return timestampMs
+    }
+
+    private fun upsertTraceItem(
+        messageId: Long,
+        traceItems: MutableList<UiTraceItem>,
+        item: UiTraceItem,
+        appendContent: Boolean,
+        contentOverride: String? = null
+    ) {
+        val index = traceItems.indexOfFirst { it.id == item.id }
+        if (index >= 0) {
+            val existing = traceItems[index]
+            traceItems[index] = item.copy(
+                content = if (appendContent) existing.content + item.content else item.content
+            )
+        } else {
+            traceItems.add(item)
+        }
+
+        updateUiMessage(
+            messageId = messageId,
+            content = contentOverride ?: _messages.value.orEmpty().firstOrNull { it.id == messageId }?.content.orEmpty(),
+            isError = false,
+            isStreaming = true,
+            renderMode = RenderMode.MARKDOWN,
+            showTypingDots = false,
+            traceItems = traceItems.toList()
+        )
+    }
+
+    private fun com.aibyjohannes.alfred.data.local.StoredChatMessage.toTraceItem(): UiTraceItem {
+        return when (kind) {
+            ChatMessage.KIND_REASONING -> UiTraceItem(
+                id = id.toString(),
+                kind = UiTraceKind.REASONING,
+                title = "Reasoning",
+                content = reasoningSummary ?: reasoningText ?: content
+            )
+            ChatMessage.KIND_TOOL_CALL -> UiTraceItem(
+                id = id.toString(),
+                kind = UiTraceKind.TOOL_CALL,
+                title = toolName?.let { "Called $it" } ?: "Tool call",
+                content = toolArgumentsJson ?: content
+            )
+            ChatMessage.KIND_TOOL_RESULT -> UiTraceItem(
+                id = id.toString(),
+                kind = UiTraceKind.TOOL_RESULT,
+                title = toolName?.let { "Result from $it" } ?: "Tool result",
+                content = content.take(400),
+                isError = isError
+            )
+            else -> UiTraceItem(
+                id = id.toString(),
+                kind = UiTraceKind.ASSISTANT_DRAFT,
+                title = "Intermediate answer",
+                content = content
+            )
+        }
     }
 }

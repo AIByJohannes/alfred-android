@@ -11,11 +11,13 @@ import ai.koog.prompt.executor.clients.openrouter.OpenRouterLLMClient
 import ai.koog.prompt.llm.LLMCapability
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
+import ai.koog.prompt.params.LLMParams
 import ai.koog.prompt.streaming.StreamFrame
 import com.aibyjohannes.alfred.core.SystemPrompts
 import com.aibyjohannes.alfred.core.model.ChatStreamEvent
 import com.aibyjohannes.alfred.core.model.ChatTurnResult
 import com.aibyjohannes.alfred.core.model.CoreChatMessage
+import com.aibyjohannes.alfred.core.model.CoreChatMessageKind
 import com.aibyjohannes.alfred.core.model.ToolCallTrace
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchClient
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchRequest
@@ -28,6 +30,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 class OpenRouterChatEngine(
     private val apiKey: String,
@@ -48,7 +52,21 @@ class OpenRouterChatEngine(
 
     private data class StreamPassResult(
         val content: String,
-        val toolCalls: List<ToolCall>
+        val toolCalls: List<ToolCall>,
+        val reasoning: List<ReasoningPart>,
+        val emittedAnyFrame: Boolean
+    )
+
+    private data class ReasoningPart(
+        val id: String?,
+        val content: List<String>,
+        val summary: List<String>,
+        val encrypted: String?
+    )
+
+    private data class PassWithPromptState(
+        val result: StreamPassResult,
+        val reasoningEnabled: Boolean
     )
 
     override suspend fun sendMessage(
@@ -77,68 +95,154 @@ class OpenRouterChatEngine(
             createOpenRouterClient().use { client ->
                 val koogModel = buildKoogModel(model)
                 val tools = buildAlfredToolDescriptors()
-                val initialPrompt = buildConversationPrompt(userMessage, conversationHistory)
                 val traces = mutableListOf<ToolCallTrace>()
+                val turnId = System.currentTimeMillis().toString()
+                val promptMessages = conversationHistory
+                    .filter { it.includeInPrompt }
+                    .toMutableList()
+                promptMessages.add(
+                    CoreChatMessage(
+                        role = "user",
+                        content = userMessage,
+                        turnId = turnId
+                    )
+                )
+                val persistedIntermediateMessages = mutableListOf<CoreChatMessage>()
+                var reasoningEnabled = true
+                var finalContent: String? = null
+                var passIndex = 0
 
-                val initialPass = streamSingleCompletion(
-                    client = client,
-                    model = koogModel,
-                    prompt = initialPrompt,
-                    tools = tools
-                ) { delta ->
-                    if (delta.isNotEmpty()) {
-                        trySend(ChatStreamEvent.Delta(delta))
-                    }
-                }
+                while (passIndex < MAX_AGENT_PASSES && finalContent == null) {
+                    trySend(ChatStreamEvent.PassStarted(passIndex))
+                    val pass = streamSingleCompletionWithReasoningFallback(
+                        client = client,
+                        model = koogModel,
+                        messages = promptMessages,
+                        tools = tools,
+                        passIndex = passIndex,
+                        reasoningEnabled = reasoningEnabled,
+                        onEvent = { trySend(it) }
+                    )
+                    reasoningEnabled = pass.reasoningEnabled
+                    val passResult = pass.result
 
-                if (initialPass.toolCalls.isEmpty()) {
-                    if (initialPass.content.isBlank()) {
-                        throw Exception("No response content from AI")
+                    passResult.reasoning.forEach { reasoning ->
+                        val text = reasoning.content.joinToString("\n").trim()
+                        val summary = reasoning.summary.joinToString("\n").trim()
+                        val message = CoreChatMessage(
+                            role = "assistant",
+                            content = summary.ifBlank { text },
+                            kind = CoreChatMessageKind.REASONING,
+                            turnId = turnId,
+                            reasoningText = text.ifBlank { null },
+                            reasoningSummary = summary.ifBlank { null },
+                            encryptedReasoning = reasoning.encrypted,
+                            includeInPrompt = true,
+                            searchable = false
+                        )
+                        promptMessages.add(message)
+                        persistedIntermediateMessages.add(message)
                     }
-                    ChatTurnResult(content = initialPass.content, toolCalls = traces)
-                } else {
-                    val toolResults = initialPass.toolCalls.map { toolCall ->
+
+                    if (passResult.toolCalls.isEmpty()) {
+                        if (passResult.content.isBlank()) {
+                            throw Exception("No response content from AI")
+                        }
+                        finalContent = passResult.content
+                        trySend(ChatStreamEvent.PassCompleted(passIndex))
+                        break
+                    }
+
+                    if (passResult.content.isNotBlank()) {
+                        val draftMessage = CoreChatMessage(
+                            role = "assistant",
+                            content = passResult.content,
+                            kind = CoreChatMessageKind.MESSAGE,
+                            turnId = turnId,
+                            includeInPrompt = true,
+                            searchable = false
+                        )
+                        promptMessages.add(draftMessage)
+                        persistedIntermediateMessages.add(draftMessage)
+                    }
+
+                    passResult.toolCalls.forEach { toolCall ->
+                        val toolCallMessage = CoreChatMessage(
+                            role = "assistant",
+                            content = toolCall.argumentsJson,
+                            kind = CoreChatMessageKind.TOOL_CALL,
+                            turnId = turnId,
+                            toolCallId = toolCall.id,
+                            toolName = toolCall.name,
+                            toolArgumentsJson = toolCall.argumentsJson,
+                            includeInPrompt = true,
+                            searchable = false
+                        )
+                        promptMessages.add(toolCallMessage)
+                        persistedIntermediateMessages.add(toolCallMessage)
+                        trySend(
+                            ChatStreamEvent.ToolCallRequested(
+                                passIndex = passIndex,
+                                toolCallId = toolCall.id,
+                                name = toolCall.name,
+                                argumentsJson = toolCall.argumentsJson
+                            )
+                        )
+
                         val result = executeToolCall(toolCall.name, toolCall.argumentsJson)
                         val isError = result.startsWith("Web search failed", ignoreCase = true) ||
                             result.startsWith("Local knowledge search failed", ignoreCase = true) ||
                             result.startsWith("Unknown tool", ignoreCase = true)
                         traces.add(
                             ToolCallTrace(
+                                id = toolCall.id,
                                 name = toolCall.name,
                                 argumentsJson = toolCall.argumentsJson,
                                 resultPreview = result.take(400),
                                 isError = isError
                             )
                         )
-                        ToolResultForPrompt(
-                            toolCall = toolCall,
-                            result = result
+                        val resultMessage = CoreChatMessage(
+                            role = "tool",
+                            content = result,
+                            kind = CoreChatMessageKind.TOOL_RESULT,
+                            turnId = turnId,
+                            toolCallId = toolCall.id,
+                            toolName = toolCall.name,
+                            isError = isError,
+                            includeInPrompt = true,
+                            searchable = false
+                        )
+                        promptMessages.add(resultMessage)
+                        persistedIntermediateMessages.add(resultMessage)
+                        trySend(
+                            ChatStreamEvent.ToolResultAvailable(
+                                passIndex = passIndex,
+                                toolCallId = toolCall.id,
+                                name = toolCall.name,
+                                resultPreview = result.take(400),
+                                isError = isError
+                            )
                         )
                     }
-
-                    val followUpPrompt = buildConversationPrompt(
-                        userMessage = userMessage,
-                        conversationHistory = conversationHistory,
-                        assistantToolRequest = initialPass.content,
-                        toolResults = toolResults
-                    )
-
-                    val finalPass = streamSingleCompletion(
-                        client = client,
-                        model = koogModel,
-                        prompt = followUpPrompt,
-                        tools = tools
-                    ) { delta ->
-                        if (delta.isNotEmpty()) {
-                            trySend(ChatStreamEvent.Delta(delta))
-                        }
-                    }
-
-                    if (finalPass.content.isBlank()) {
-                        throw Exception("No final response content from AI")
-                    }
-                    ChatTurnResult(content = finalPass.content, toolCalls = traces)
+                    trySend(ChatStreamEvent.PassCompleted(passIndex))
+                    passIndex++
                 }
+
+                val content = finalContent ?: throw Exception("Tool loop exceeded $MAX_AGENT_PASSES passes")
+                val finalMessage = CoreChatMessage(
+                    role = "assistant",
+                    content = content,
+                    kind = CoreChatMessageKind.MESSAGE,
+                    turnId = turnId,
+                    includeInPrompt = true,
+                    searchable = true
+                )
+                ChatTurnResult(
+                    content = content,
+                    toolCalls = traces,
+                    intermediateMessages = persistedIntermediateMessages + finalMessage
+                )
             }
         }
 
@@ -201,53 +305,81 @@ class OpenRouterChatEngine(
         )
     }
 
-    private data class ToolResultForPrompt(
-        val toolCall: ToolCall,
-        val result: String
-    )
-
     private fun buildConversationPrompt(
-        userMessage: String,
-        conversationHistory: List<CoreChatMessage>,
-        assistantToolRequest: String? = null,
-        toolResults: List<ToolResultForPrompt> = emptyList()
-    ) = prompt("alfred-openrouter-chat") {
-        system(prompt)
-
-        for (msg in conversationHistory) {
-            when (msg.role) {
-                "user" -> user(msg.content)
-                "assistant" -> assistant(msg.content)
-            }
+        messages: List<CoreChatMessage>,
+        reasoningEnabled: Boolean
+    ): Prompt {
+        val params = if (reasoningEnabled) {
+            LLMParams(
+                additionalProperties = mapOf(
+                    "reasoning" to JsonObject(mapOf("effort" to JsonPrimitive("low")))
+                )
+            )
+        } else {
+            LLMParams()
         }
 
-        user(userMessage)
+        return prompt("alfred-openrouter-chat", params) {
+            system(prompt)
 
-        if (toolResults.isNotEmpty()) {
-            if (!assistantToolRequest.isNullOrBlank()) {
-                assistant(assistantToolRequest)
+            for (msg in messages.filter { it.includeInPrompt }) {
+                when (msg.kind) {
+                    CoreChatMessageKind.REASONING -> {
+                        val content = msg.reasoningText ?: msg.content
+                        val summary = msg.reasoningSummary
+                        if (!content.isNullOrBlank()) {
+                            reasoning(content, summary.orEmpty())
+                        }
+                    }
+                    CoreChatMessageKind.TOOL_CALL -> {
+                        val name = msg.toolName
+                        val args = msg.toolArgumentsJson ?: msg.content
+                        if (!name.isNullOrBlank()) {
+                            toolCall(name, args, msg.toolCallId.orEmpty())
+                        }
+                    }
+                    CoreChatMessageKind.TOOL_RESULT -> {
+                        val name = msg.toolName
+                        if (!name.isNullOrBlank()) {
+                            toolResult(name, msg.content, msg.toolCallId.orEmpty(), msg.isError)
+                        }
+                    }
+                    CoreChatMessageKind.MESSAGE -> {
+                        when (msg.role) {
+                            "user" -> user(msg.content)
+                            "assistant" -> assistant(msg.content)
+                        }
+                    }
+                }
             }
-            user(formatToolResultsForFollowUp(toolResults))
         }
     }
 
-    private fun formatToolResultsForFollowUp(toolResults: List<ToolResultForPrompt>): String {
-        return buildString {
-            appendLine("Tool results are available for the previous assistant tool request.")
-            appendLine("Use these results to answer the user's original message. Do not call tools again unless required.")
-            toolResults.forEachIndexed { index, toolResult ->
-                appendLine()
-                append(index + 1)
-                append(". ")
-                append(toolResult.toolCall.name)
-                toolResult.toolCall.id?.let { append(" (id=$it)") }
-                appendLine()
-                append("Arguments JSON: ")
-                appendLine(toolResult.toolCall.argumentsJson)
-                appendLine("Result:")
-                appendLine(toolResult.result)
+    private suspend fun streamSingleCompletionWithReasoningFallback(
+        client: OpenRouterLLMClient,
+        model: LLModel,
+        messages: List<CoreChatMessage>,
+        tools: List<ToolDescriptor>,
+        passIndex: Int,
+        reasoningEnabled: Boolean,
+        onEvent: (ChatStreamEvent) -> Unit
+    ): PassWithPromptState {
+        val prompt = buildConversationPrompt(messages, reasoningEnabled)
+        return try {
+            PassWithPromptState(
+                result = streamSingleCompletion(client, model, prompt, tools, passIndex, onEvent),
+                reasoningEnabled = reasoningEnabled
+            )
+        } catch (error: Exception) {
+            if (!reasoningEnabled) {
+                throw error
             }
-        }.trim()
+            val fallbackPrompt = buildConversationPrompt(messages, reasoningEnabled = false)
+            PassWithPromptState(
+                result = streamSingleCompletion(client, model, fallbackPrompt, tools, passIndex, onEvent),
+                reasoningEnabled = false
+            )
+        }
     }
 
     private suspend fun streamSingleCompletion(
@@ -255,21 +387,79 @@ class OpenRouterChatEngine(
         model: LLModel,
         prompt: Prompt,
         tools: List<ToolDescriptor>,
-        onDelta: (String) -> Unit
+        passIndex: Int,
+        onEvent: (ChatStreamEvent) -> Unit
     ): StreamPassResult {
         val content = StringBuilder()
         val toolCalls = mutableListOf<ToolCall>()
+        val reasoningParts = mutableListOf<ReasoningPart>()
+        val reasoningTextById = linkedMapOf<String, StringBuilder>()
+        val reasoningSummaryById = linkedMapOf<String, StringBuilder>()
+        val toolCallArgsByKey = linkedMapOf<String, StringBuilder>()
+        val toolCallNamesByKey = mutableMapOf<String, String>()
+        val toolCallIdsByKey = mutableMapOf<String, String?>()
         var completedText: String? = null
+        var emittedAnyFrame = false
 
         client.executeStreaming(prompt, model, tools).collect { frame ->
+            emittedAnyFrame = true
             when (frame) {
                 is StreamFrame.TextDelta -> {
                     content.append(frame.text)
-                    onDelta(frame.text)
+                    onEvent(ChatStreamEvent.TextDelta(passIndex, frame.text))
                 }
 
                 is StreamFrame.TextComplete -> {
                     completedText = frame.text
+                }
+
+                is StreamFrame.ReasoningDelta -> {
+                    val key = frame.id ?: "reasoning-${frame.index ?: 0}"
+                    frame.text?.let { reasoningTextById.getOrPut(key) { StringBuilder() }.append(it) }
+                    frame.summary?.let { reasoningSummaryById.getOrPut(key) { StringBuilder() }.append(it) }
+                    onEvent(
+                        ChatStreamEvent.ReasoningDelta(
+                            passIndex = passIndex,
+                            id = frame.id,
+                            textChunk = frame.text,
+                            summaryChunk = frame.summary
+                        )
+                    )
+                }
+
+                is StreamFrame.ReasoningComplete -> {
+                    reasoningParts.add(
+                        ReasoningPart(
+                            id = frame.id,
+                            content = frame.content.orEmpty(),
+                            summary = frame.summary.orEmpty(),
+                            encrypted = frame.encrypted
+                        )
+                    )
+                    onEvent(
+                        ChatStreamEvent.ReasoningComplete(
+                            passIndex = passIndex,
+                            id = frame.id,
+                            content = frame.content.orEmpty(),
+                            summary = frame.summary.orEmpty(),
+                            encrypted = frame.encrypted
+                        )
+                    )
+                }
+
+                is StreamFrame.ToolCallDelta -> {
+                    val key = frame.id ?: "tool-${frame.index ?: 0}"
+                    frame.name?.takeIf { it.isNotBlank() }?.let { toolCallNamesByKey[key] = it }
+                    toolCallIdsByKey[key] = frame.id
+                    toolCallArgsByKey.getOrPut(key) { StringBuilder() }.append(frame.content)
+                    onEvent(
+                        ChatStreamEvent.ToolCallDelta(
+                            passIndex = passIndex,
+                            id = frame.id,
+                            name = frame.name,
+                            argumentsChunk = frame.content.orEmpty()
+                        )
+                    )
                 }
 
                 is StreamFrame.ToolCallComplete -> {
@@ -286,9 +476,36 @@ class OpenRouterChatEngine(
             }
         }
 
+        val completedReasoningKeys = reasoningParts.mapNotNull { it.id }.toSet()
+        reasoningTextById.forEach { (key, text) ->
+            if (key !in completedReasoningKeys) {
+                reasoningParts.add(
+                    ReasoningPart(
+                        id = key,
+                        content = listOf(text.toString()),
+                        summary = reasoningSummaryById[key]?.toString()?.takeIf { it.isNotBlank() }?.let(::listOf).orEmpty(),
+                        encrypted = null
+                    )
+                )
+            }
+        }
+        toolCallArgsByKey.forEach { (key, args) ->
+            if (toolCalls.none { it.id == toolCallIdsByKey[key] } && toolCallNamesByKey[key] != null) {
+                toolCalls.add(
+                    ToolCall(
+                        id = toolCallIdsByKey[key],
+                        name = toolCallNamesByKey.getValue(key),
+                        argumentsJson = args.toString()
+                    )
+                )
+            }
+        }
+
         return StreamPassResult(
             content = completedText ?: content.toString(),
-            toolCalls = toolCalls
+            toolCalls = toolCalls,
+            reasoning = reasoningParts,
+            emittedAnyFrame = emittedAnyFrame
         )
     }
 
@@ -381,6 +598,7 @@ class OpenRouterChatEngine(
         const val DEFAULT_MODEL = "google/gemini-3.5-flash"
         const val WEB_SEARCH_FUNCTION_NAME = "WebSearchTool"
         const val LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME = "SearchLocalKnowledgeTool"
+        private const val MAX_AGENT_PASSES = 6
     }
 }
 

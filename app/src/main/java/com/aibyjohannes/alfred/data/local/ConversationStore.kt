@@ -14,7 +14,34 @@ data class WorkspaceSummary(
 data class StoredChatMessage(
     val id: Long,
     val role: String,
-    val content: String
+    val content: String,
+    val kind: String = "message",
+    val turnId: String? = null,
+    val toolCallId: String? = null,
+    val toolName: String? = null,
+    val toolArgumentsJson: String? = null,
+    val isError: Boolean = false,
+    val reasoningText: String? = null,
+    val reasoningSummary: String? = null,
+    val encryptedReasoning: String? = null,
+    val includeInPrompt: Boolean = true,
+    val searchable: Boolean = true
+)
+
+data class ConversationMessageDraft(
+    val role: String,
+    val content: String,
+    val kind: String = "message",
+    val turnId: String? = null,
+    val toolCallId: String? = null,
+    val toolName: String? = null,
+    val toolArgumentsJson: String? = null,
+    val isError: Boolean = false,
+    val reasoningText: String? = null,
+    val reasoningSummary: String? = null,
+    val encryptedReasoning: String? = null,
+    val includeInPrompt: Boolean = true,
+    val searchable: Boolean = true
 )
 
 interface ConversationStore {
@@ -33,5 +60,6 @@ interface ConversationStore {
     suspend fun switchActiveConversation(conversationId: Long): ConversationSummary
     suspend fun loadMessages(conversationId: Long): List<StoredChatMessage>
     suspend fun appendMessage(conversationId: Long, role: String, content: String)
+    suspend fun appendMessages(conversationId: Long, messages: List<ConversationMessageDraft>)
     suspend fun deleteConversation(conversationId: Long)
 }

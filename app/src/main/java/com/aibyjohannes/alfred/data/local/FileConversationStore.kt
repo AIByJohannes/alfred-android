@@ -134,27 +134,65 @@ class FileConversationStore private constructor(
             StoredChatMessage(
                 id = it.id,
                 role = it.role,
-                content = it.content
+                content = it.content,
+                kind = it.kind,
+                turnId = it.turnId,
+                toolCallId = it.toolCallId,
+                toolName = it.toolName,
+                toolArgumentsJson = it.toolArgumentsJson,
+                isError = it.isError,
+                reasoningText = it.reasoningText,
+                reasoningSummary = it.reasoningSummary,
+                encryptedReasoning = it.encryptedReasoning,
+                includeInPrompt = it.includeInPrompt,
+                searchable = it.searchable
             )
         }
     }
 
     override suspend fun appendMessage(conversationId: Long, role: String, content: String): Unit = withStoreLock {
+        appendMessagesInternal(
+            conversationId = conversationId,
+            drafts = listOf(ConversationMessageDraft(role = role, content = content))
+        )
+    }
+
+    override suspend fun appendMessages(conversationId: Long, messages: List<ConversationMessageDraft>): Unit = withStoreLock {
+        appendMessagesInternal(conversationId, messages)
+    }
+
+    private fun appendMessagesInternal(conversationId: Long, drafts: List<ConversationMessageDraft>) {
+        if (drafts.isEmpty()) {
+            return
+        }
+
         val state = readState()
         val conversation = state.conversations.firstOrNull { it.id == conversationId }
             ?: throw IllegalArgumentException("Conversation not found: $conversationId")
         val now = System.currentTimeMillis()
-        val message = MessageRecord().apply {
-            id = state.nextMessageId++
-            this.conversationId = conversationId
-            this.role = role
-            this.content = content
-            createdAtEpochMs = now
-        }
-
-        storage.appendLine(messagePath(conversation), objectMapper.writeValueAsString(message), JSONL_MIME_TYPE)
-        if (role == ChatMessage.ROLE_USER && conversation.title.isNullOrBlank()) {
-            conversation.title = buildConversationTitle(content)
+        drafts.forEach { draft ->
+            val message = MessageRecord().apply {
+                id = state.nextMessageId++
+                this.conversationId = conversationId
+                role = draft.role
+                content = draft.content
+                kind = draft.kind
+                turnId = draft.turnId
+                toolCallId = draft.toolCallId
+                toolName = draft.toolName
+                toolArgumentsJson = draft.toolArgumentsJson
+                isError = draft.isError
+                reasoningText = draft.reasoningText
+                reasoningSummary = draft.reasoningSummary
+                encryptedReasoning = draft.encryptedReasoning
+                includeInPrompt = draft.includeInPrompt
+                searchable = draft.searchable
+                createdAtEpochMs = now
+            }
+            storage.appendLine(messagePath(conversation), objectMapper.writeValueAsString(message), JSONL_MIME_TYPE)
+            if (draft.role == ChatMessage.ROLE_USER && conversation.title.isNullOrBlank()) {
+                conversation.title = buildConversationTitle(draft.content)
+            }
         }
         conversation.updatedAtEpochMs = now
         writeState(state)
@@ -182,7 +220,7 @@ class FileConversationStore private constructor(
         val state = readState()
         val conversationsById = state.conversations.associateBy { it.id }
         state.conversations.flatMap { conversation ->
-            readMessages(conversation).mapNotNull { message ->
+            readMessages(conversation).filter { it.searchable }.mapNotNull { message ->
                 val score = score(message.content, terms)
                 if (score <= 0) {
                     null
@@ -430,6 +468,17 @@ class FileConversationStore private constructor(
         var conversationId: Long = 0L
         var role: String = ""
         var content: String = ""
+        var kind: String = ChatMessage.KIND_MESSAGE
+        var turnId: String? = null
+        var toolCallId: String? = null
+        var toolName: String? = null
+        var toolArgumentsJson: String? = null
+        var isError: Boolean = false
+        var reasoningText: String? = null
+        var reasoningSummary: String? = null
+        var encryptedReasoning: String? = null
+        var includeInPrompt: Boolean = true
+        var searchable: Boolean = true
         var createdAtEpochMs: Long = 0L
     }
 

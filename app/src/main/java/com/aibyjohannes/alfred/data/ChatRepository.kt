@@ -6,6 +6,7 @@ import com.aibyjohannes.alfred.core.engine.OpenRouterChatEngine
 import com.aibyjohannes.alfred.core.model.ChatStreamEvent
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchClient
 import com.aibyjohannes.alfred.core.model.CoreChatMessage
+import com.aibyjohannes.alfred.core.model.CoreChatMessageKind
 import com.aibyjohannes.alfred.core.search.PerplexitySearchClient
 import com.aibyjohannes.alfred.data.api.ChatMessage
 import com.aibyjohannes.alfred.core.audio.OpenRouterAudioClient
@@ -78,7 +79,26 @@ class ChatRepository(
     }
 
     private fun List<ChatMessage>.toCoreMessages(): List<CoreChatMessage> = map {
-        CoreChatMessage(role = it.role, content = it.content)
+        CoreChatMessage(
+            role = it.role,
+            content = it.content,
+            kind = when (it.kind) {
+                ChatMessage.KIND_REASONING -> CoreChatMessageKind.REASONING
+                ChatMessage.KIND_TOOL_CALL -> CoreChatMessageKind.TOOL_CALL
+                ChatMessage.KIND_TOOL_RESULT -> CoreChatMessageKind.TOOL_RESULT
+                else -> CoreChatMessageKind.MESSAGE
+            },
+            turnId = it.turnId,
+            toolCallId = it.toolCallId,
+            toolName = it.toolName,
+            toolArgumentsJson = it.toolArgumentsJson,
+            isError = it.isError,
+            reasoningText = it.reasoningText,
+            reasoningSummary = it.reasoningSummary,
+            encryptedReasoning = it.encryptedReasoning,
+            includeInPrompt = it.includeInPrompt,
+            searchable = it.searchable
+        )
     }
 
     private fun createEngine(apiKey: String, sysInfo: String? = null): ChatEngine {

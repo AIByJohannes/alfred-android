@@ -132,4 +132,59 @@ class FileConversationStoreTest {
         assertFalse(jsonl.exists())
         assertTrue(store.loadMessages(conversation.id).isEmpty())
     }
+
+    @Test
+    fun `structured trace metadata round trips and is excluded from search`() = runTest {
+        val store = FileConversationStore(temporaryFolder.newFolder())
+        val conversation = store.getOrCreateActiveConversation()
+
+        store.appendMessages(
+            conversation.id,
+            listOf(
+                ConversationMessageDraft(
+                    role = ChatMessage.ROLE_USER,
+                    content = "Find Kotlin release notes",
+                    searchable = true
+                ),
+                ConversationMessageDraft(
+                    role = ChatMessage.ROLE_ASSISTANT,
+                    content = "Searching",
+                    kind = ChatMessage.KIND_TOOL_CALL,
+                    turnId = "turn-1",
+                    toolCallId = "call-1",
+                    toolName = "WebSearchTool",
+                    toolArgumentsJson = """{"query":"Kotlin release notes"}""",
+                    searchable = false
+                ),
+                ConversationMessageDraft(
+                    role = ChatMessage.ROLE_TOOL,
+                    content = "Hidden trace result should not be searchable",
+                    kind = ChatMessage.KIND_TOOL_RESULT,
+                    turnId = "turn-1",
+                    toolCallId = "call-1",
+                    toolName = "WebSearchTool",
+                    searchable = false
+                ),
+                ConversationMessageDraft(
+                    role = ChatMessage.ROLE_ASSISTANT,
+                    content = "Kotlin release notes are available.",
+                    turnId = "turn-1",
+                    searchable = true
+                )
+            )
+        )
+
+        val messages = store.loadMessages(conversation.id)
+        assertEquals(4, messages.size)
+        assertEquals(ChatMessage.KIND_TOOL_CALL, messages[1].kind)
+        assertEquals("call-1", messages[1].toolCallId)
+        assertEquals("""{"query":"Kotlin release notes"}""", messages[1].toolArgumentsJson)
+        assertFalse(messages[1].searchable)
+
+        val traceHits = store.searchSessionMessages("Hidden trace result", limit = 10)
+        assertTrue(traceHits.isEmpty())
+
+        val visibleHits = store.searchSessionMessages("Kotlin release", limit = 10)
+        assertTrue(visibleHits.isNotEmpty())
+    }
 }

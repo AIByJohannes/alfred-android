@@ -1,14 +1,21 @@
 package com.aibyjohannes.alfred.ui.home
 
 import androidx.arch.core.executor.testing.InstantTaskExecutorRule
+import com.aibyjohannes.alfred.core.model.ChatStreamEvent
+import com.aibyjohannes.alfred.core.model.ChatTurnResult
+import com.aibyjohannes.alfred.core.model.CoreChatMessage
+import com.aibyjohannes.alfred.core.model.CoreChatMessageKind
 import com.aibyjohannes.alfred.data.ApiKeyStore
 import com.aibyjohannes.alfred.data.ChatRepository
+import com.aibyjohannes.alfred.data.api.ChatMessage
 import com.aibyjohannes.alfred.data.local.ConversationStore
 import com.aibyjohannes.alfred.data.local.ConversationSummary
+import com.aibyjohannes.alfred.data.local.StoredChatMessage
 import com.aibyjohannes.alfred.data.local.WorkspaceSummary
 import io.mockk.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.*
 import org.junit.After
 import org.junit.Before
@@ -54,11 +61,7 @@ class HomeViewModelTest {
         every { apiKeyStore.loadModel() } returns "google/gemini-3.1-flash-lite-preview"
         coEvery { conversationStore.getOrCreateActiveConversation() } returns initialConversation
         coEvery { conversationStore.loadMessages(1L) } returns listOf(
-            mockk {
-                every { id } returns 1L
-                every { role } returns "user"
-                every { content } returns "Hello"
-            }
+            StoredChatMessage(id = 1L, role = "user", content = "Hello")
         )
         coEvery { conversationStore.createConversation() } returns newConversation
         coEvery { conversationStore.loadMessages(2L) } returns emptyList()
@@ -206,5 +209,191 @@ class HomeViewModelTest {
         coVerify(atLeast = 1) { conversationStore.getOrCreateActiveWorkspace() }
         assert(viewModel.activeWorkspaceId.value == 2L)
         assert(viewModel.activeConversationId.value == 3L)
+    }
+
+    @Test
+    fun `sendMessage persists completed structured stream atomically`() = runTest {
+        val conversation = ConversationSummary(1L, null, System.currentTimeMillis())
+
+        every { apiKeyStore.hasApiKey() } returns true
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
+        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.listConversations() } returns listOf(conversation)
+        every { repository.streamMessage(any(), any(), any()) } returns flowOf(
+            ChatStreamEvent.PassStarted(0),
+            ChatStreamEvent.TextDelta(0, "Hello"),
+            ChatStreamEvent.Completed(
+                ChatTurnResult(
+                    content = "Hello",
+                    toolCalls = emptyList(),
+                    intermediateMessages = listOf(
+                        CoreChatMessage(role = ChatMessage.ROLE_ASSISTANT, content = "Hello")
+                    )
+                )
+            )
+        )
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.sendMessage("Hi")
+        testScheduler.advanceUntilIdle()
+
+        assert(viewModel.messages.value?.lastOrNull()?.content == "Hello")
+        coVerify(exactly = 1) { conversationStore.appendMessages(eq(1L), match { it.size == 2 }) }
+        coVerify(exactly = 0) { conversationStore.appendMessage(any(), any(), any()) }
+    }
+
+    @Test
+    fun `sendMessage renders compact reasoning and tool traces`() = runTest {
+        val conversation = ConversationSummary(1L, null, System.currentTimeMillis())
+
+        every { apiKeyStore.hasApiKey() } returns true
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
+        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.listConversations() } returns listOf(conversation)
+        every { repository.streamMessage(any(), any(), any()) } returns flowOf(
+            ChatStreamEvent.PassStarted(0),
+            ChatStreamEvent.ReasoningDelta(
+                passIndex = 0,
+                id = "reason-1",
+                textChunk = null,
+                summaryChunk = "Need current data."
+            ),
+            ChatStreamEvent.ToolCallDelta(
+                passIndex = 0,
+                id = "call-1",
+                name = "WebSearchTool",
+                argumentsChunk = """{"query":"Kotlin release"}"""
+            ),
+            ChatStreamEvent.ToolCallRequested(
+                passIndex = 0,
+                toolCallId = "call-1",
+                name = "WebSearchTool",
+                argumentsJson = """{"query":"Kotlin release"}"""
+            ),
+            ChatStreamEvent.ToolResultAvailable(
+                passIndex = 0,
+                toolCallId = "call-1",
+                name = "WebSearchTool",
+                resultPreview = "Kotlin 2.2 is available.",
+                isError = false
+            ),
+            ChatStreamEvent.PassStarted(1),
+            ChatStreamEvent.TextDelta(1, "Kotlin 2.2 is available."),
+            ChatStreamEvent.Completed(
+                ChatTurnResult(
+                    content = "Kotlin 2.2 is available.",
+                    toolCalls = emptyList(),
+                    intermediateMessages = listOf(
+                        CoreChatMessage(
+                            role = ChatMessage.ROLE_ASSISTANT,
+                            content = "Need current data.",
+                            kind = CoreChatMessageKind.REASONING,
+                            reasoningSummary = "Need current data.",
+                            searchable = false
+                        ),
+                        CoreChatMessage(
+                            role = ChatMessage.ROLE_ASSISTANT,
+                            content = """{"query":"Kotlin release"}""",
+                            kind = CoreChatMessageKind.TOOL_CALL,
+                            toolCallId = "call-1",
+                            toolName = "WebSearchTool",
+                            toolArgumentsJson = """{"query":"Kotlin release"}""",
+                            searchable = false
+                        ),
+                        CoreChatMessage(
+                            role = ChatMessage.ROLE_TOOL,
+                            content = "Kotlin 2.2 is available.",
+                            kind = CoreChatMessageKind.TOOL_RESULT,
+                            toolCallId = "call-1",
+                            toolName = "WebSearchTool",
+                            searchable = false
+                        ),
+                        CoreChatMessage(
+                            role = ChatMessage.ROLE_ASSISTANT,
+                            content = "Kotlin 2.2 is available."
+                        )
+                    )
+                )
+            )
+        )
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.sendMessage("What is the latest Kotlin release?")
+        testScheduler.advanceUntilIdle()
+
+        val assistant = viewModel.messages.value.orEmpty().last()
+        assert(assistant.content == "Kotlin 2.2 is available.")
+        assert(assistant.traceItems.any { it.kind == UiTraceKind.REASONING && it.content.contains("Need current data") })
+        assert(assistant.traceItems.any { it.kind == UiTraceKind.TOOL_CALL && it.content.contains("Kotlin release") })
+        assert(assistant.traceItems.any { it.kind == UiTraceKind.TOOL_RESULT && it.content.contains("Kotlin 2.2") })
+        coVerify(exactly = 1) {
+            conversationStore.appendMessages(
+                eq(1L),
+                match { drafts ->
+                    drafts.any { it.kind == ChatMessage.KIND_TOOL_CALL && it.searchable == false } &&
+                        drafts.any { it.kind == ChatMessage.KIND_TOOL_RESULT && it.searchable == false }
+                }
+            )
+        }
+    }
+
+    @Test
+    fun `sendMessage moves pre tool draft into trace before final answer`() = runTest {
+        val conversation = ConversationSummary(1L, null, System.currentTimeMillis())
+
+        every { apiKeyStore.hasApiKey() } returns true
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
+        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.listConversations() } returns listOf(conversation)
+        every { repository.streamMessage(any(), any(), any()) } returns flowOf(
+            ChatStreamEvent.PassStarted(0),
+            ChatStreamEvent.TextDelta(0, "I should check first."),
+            ChatStreamEvent.ToolCallRequested(
+                passIndex = 0,
+                toolCallId = "call-1",
+                name = "WebSearchTool",
+                argumentsJson = """{"query":"weather"}"""
+            ),
+            ChatStreamEvent.ToolResultAvailable(
+                passIndex = 0,
+                toolCallId = "call-1",
+                name = "WebSearchTool",
+                resultPreview = "Sunny",
+                isError = false
+            ),
+            ChatStreamEvent.PassStarted(1),
+            ChatStreamEvent.TextDelta(1, "It is sunny."),
+            ChatStreamEvent.Completed(
+                ChatTurnResult(
+                    content = "It is sunny.",
+                    toolCalls = emptyList(),
+                    intermediateMessages = listOf(
+                        CoreChatMessage(
+                            role = ChatMessage.ROLE_ASSISTANT,
+                            content = "I should check first.",
+                            searchable = false
+                        ),
+                        CoreChatMessage(
+                            role = ChatMessage.ROLE_ASSISTANT,
+                            content = "It is sunny."
+                        )
+                    )
+                )
+            )
+        )
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.sendMessage("Weather?")
+        testScheduler.advanceUntilIdle()
+
+        val assistant = viewModel.messages.value.orEmpty().last()
+        assert(assistant.content == "It is sunny.")
+        assert(assistant.traceItems.any { it.kind == UiTraceKind.ASSISTANT_DRAFT && it.content == "I should check first." })
     }
 }
