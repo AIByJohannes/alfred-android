@@ -614,4 +614,71 @@ class HomeViewModelTest {
         assistant = viewModel.messages.value.orEmpty().last()
         assert(assistant.content == "Weather is nice.")
     }
+
+    @Test
+    fun `sendMessage preserves user message content during reasoning and tool call streaming`() = runTest {
+        val conversation = ConversationSummary(1L, null, System.currentTimeMillis())
+        val flow = kotlinx.coroutines.flow.MutableSharedFlow<ChatStreamEvent>()
+
+        every { apiKeyStore.hasApiKey() } returns true
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
+        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.listConversations() } returns listOf(conversation)
+        every { repository.streamMessage(any(), any(), any()) } returns flow
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        val inputMessageText = "Checking weather online"
+        viewModel.sendMessage(inputMessageText)
+        testScheduler.advanceTimeBy(1)
+
+        // 1. Emit PassStarted
+        flow.emit(ChatStreamEvent.PassStarted(0))
+        testScheduler.advanceUntilIdle()
+        var messages = viewModel.messages.value.orEmpty()
+        assert(messages.size >= 1)
+        assert(messages[0].isUser)
+        assert(messages[0].content == inputMessageText)
+
+        // 2. Emit ReasoningDelta
+        flow.emit(
+            ChatStreamEvent.ReasoningDelta(
+                passIndex = 0,
+                id = "reasoning-0",
+                textChunk = "Thinking",
+                summaryChunk = null
+            )
+        )
+        testScheduler.advanceUntilIdle()
+        messages = viewModel.messages.value.orEmpty()
+        assert(messages[0].content == inputMessageText) { "User message was blanked out after ReasoningDelta" }
+
+        // 3. Emit ToolCallDelta
+        flow.emit(
+            ChatStreamEvent.ToolCallDelta(
+                passIndex = 0,
+                id = "call-1",
+                name = "WebSearchTool",
+                argumentsChunk = "{\"qu"
+            )
+        )
+        testScheduler.advanceUntilIdle()
+        messages = viewModel.messages.value.orEmpty()
+        assert(messages[0].content == inputMessageText) { "User message was blanked out after ToolCallDelta" }
+
+        // 4. Emit ToolCallRequested
+        flow.emit(
+            ChatStreamEvent.ToolCallRequested(
+                passIndex = 0,
+                toolCallId = "call-1",
+                name = "WebSearchTool",
+                argumentsJson = "{\"query\":\"Kotlin\"}"
+            )
+        )
+        testScheduler.advanceUntilIdle()
+        messages = viewModel.messages.value.orEmpty()
+        assert(messages[0].content == inputMessageText) { "User message was blanked out after ToolCallRequested" }
+    }
 }
+

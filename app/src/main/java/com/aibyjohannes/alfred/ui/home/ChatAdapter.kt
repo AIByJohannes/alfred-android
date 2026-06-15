@@ -53,10 +53,15 @@ class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(Me
             .build()
 
         fun bind(message: UiChatMessage) {
-            if (message.renderMode == RenderMode.PLAIN) {
-                binding.messageText.text = message.content
+            if (message.content.isBlank()) {
+                binding.messageText.visibility = View.GONE
             } else {
-                markwon.setMarkdown(binding.messageText, message.content)
+                binding.messageText.visibility = View.VISIBLE
+                if (message.renderMode == RenderMode.PLAIN) {
+                    binding.messageText.text = message.content
+                } else {
+                    markwon.setMarkdown(binding.messageText, message.content)
+                }
             }
             bindTraceItems(message)
 
