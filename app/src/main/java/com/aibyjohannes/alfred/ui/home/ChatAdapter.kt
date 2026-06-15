@@ -108,14 +108,20 @@ class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(Me
         }
 
         private fun bindTraceItems(message: UiChatMessage) {
+            val context = binding.root.context
+            val density = context.resources.displayMetrics.density
+            val padding12 = (12 * density).toInt()
+
             if (message.traceItems.isEmpty() || message.isUser || message.isError) {
                 binding.traceContainer.removeAllViews()
                 binding.traceContainer.visibility = View.GONE
+                binding.messageText.setPadding(padding12, padding12, padding12, padding12)
                 return
             }
 
             binding.traceContainer.visibility = View.VISIBLE
-            val context = binding.root.context
+            val padding4 = (4 * density).toInt()
+            binding.messageText.setPadding(padding12, padding4, padding12, padding12)
             val secondaryColor = ContextCompat.getColor(context, R.color.assistant_message_text)
 
             val currentChildCount = binding.traceContainer.childCount
