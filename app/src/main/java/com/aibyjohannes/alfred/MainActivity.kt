@@ -102,6 +102,8 @@ class MainActivity : AppCompatActivity() {
             if (isChatOpen) {
                 updateModelSelectorPillText()
             }
+            // Re-apply custom 2-line hamburger; the nav component resets it on every destination change
+            binding.appBarMain.toolbar.navigationIcon = ContextCompat.getDrawable(this, R.drawable.ic_hamburger_two_lines)
         }
         setupDrawer()
     }

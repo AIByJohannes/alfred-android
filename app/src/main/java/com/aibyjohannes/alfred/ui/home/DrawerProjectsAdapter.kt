@@ -33,8 +33,13 @@ class DrawerProjectsAdapter(
     }
 
     fun submitData(list: List<UiWorkspace>, activeId: Long?) {
+        val activeChanged = activeWorkspaceId != activeId
         activeWorkspaceId = activeId
-        submitList(list)
+        submitList(list.toList()) {
+            if (activeChanged) {
+                notifyDataSetChanged()
+            }
+        }
     }
 
     class ProjectViewHolder(

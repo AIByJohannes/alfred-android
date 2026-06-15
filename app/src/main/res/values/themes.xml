@@ -19,6 +19,8 @@
         <item name="android:textColor">@color/text_primary</item>
         <item name="colorControlActivated">@color/palette_blue</item>
         <item name="colorAccent">@color/palette_blue</item>
+        <!-- Exposed dropdown popup styling -->
+        <item name="autoCompleteTextViewStyle">@style/Widget.Alfred.AutoCompleteTextView</item>
     </style>
 
     <style name="Theme.Alfred.NoActionBar">
@@ -29,4 +31,8 @@
     <style name="Theme.Alfred.AppBarOverlay" parent="ThemeOverlay.AppCompat.Dark.ActionBar" />
 
     <style name="Theme.Alfred.PopupOverlay" parent="ThemeOverlay.AppCompat.Light" />
+
+    <style name="Widget.Alfred.AutoCompleteTextView" parent="Widget.AppCompat.AutoCompleteTextView">
+        <item name="android:popupBackground">@drawable/bg_dropdown_popup</item>
+    </style>
 </resources>
