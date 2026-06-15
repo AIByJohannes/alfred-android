@@ -21,10 +21,10 @@ import java.io.File
 class OpenRouterTtsClient(
     private val apiKey: String,
     private val model: String = DEFAULT_MODEL,
-    private val voice: String = DEFAULT_VOICE
+    private val voice: String = DEFAULT_VOICE,
+    private val client: HttpClient = createDefaultClient()
 ) : AutoCloseable {
 
-    private val client = HttpClient(OkHttp)
     private val objectMapper = ObjectMapper()
 
     /**
@@ -78,5 +78,17 @@ class OpenRouterTtsClient(
     companion object {
         const val DEFAULT_MODEL = "hexgrad/kokoro-82m"
         const val DEFAULT_VOICE = "af_alloy"
+
+        fun createDefaultClient(): HttpClient {
+            return HttpClient(OkHttp) {
+                engine {
+                    config {
+                        connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                        readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+                        writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+                    }
+                }
+            }
+        }
     }
 }
