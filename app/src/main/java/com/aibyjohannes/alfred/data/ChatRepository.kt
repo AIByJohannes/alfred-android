@@ -8,6 +8,9 @@ import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchClient
 import com.aibyjohannes.alfred.core.model.CoreChatMessage
 import com.aibyjohannes.alfred.core.model.CoreChatMessageKind
 import com.aibyjohannes.alfred.core.search.PerplexitySearchClient
+import com.aibyjohannes.alfred.core.ticktick.TickTickClient
+import com.aibyjohannes.alfred.core.ticktick.TickTickCredentials
+import com.aibyjohannes.alfred.core.ticktick.TickTickCredentialsProvider
 import com.aibyjohannes.alfred.data.api.ChatMessage
 import com.aibyjohannes.alfred.core.audio.OpenRouterAudioClient
 import com.aibyjohannes.alfred.core.audio.OpenRouterTtsClient
@@ -103,6 +106,28 @@ class ChatRepository(
 
     private fun createEngine(apiKey: String, sysInfo: String? = null): ChatEngine {
         val model = apiKeyStore.loadModel()
+
+        val tickTickProvider = object : TickTickCredentialsProvider {
+            override fun getCredentials(): TickTickCredentials? {
+                val clientId = apiKeyStore.loadTickTickClientId() ?: return null
+                val clientSecret = apiKeyStore.loadTickTickClientSecret() ?: return null
+                val accessToken = apiKeyStore.loadTickTickAccessToken() ?: return null
+                val refreshToken = apiKeyStore.loadTickTickRefreshToken() ?: return null
+                return TickTickCredentials(clientId, clientSecret, accessToken, refreshToken)
+            }
+
+            override fun onCredentialsRefreshed(credentials: TickTickCredentials) {
+                apiKeyStore.saveTickTickAccessToken(credentials.accessToken)
+                apiKeyStore.saveTickTickRefreshToken(credentials.refreshToken)
+            }
+        }
+
+        val tickTickClient = if (apiKeyStore.loadTickTickClientId() != null) {
+            TickTickClient(tickTickProvider)
+        } else {
+            null
+        }
+
         return OpenRouterChatEngine(
             apiKey = apiKey,
             model = model,
@@ -111,7 +136,8 @@ class ChatRepository(
                 apiKey = apiKey,
                 model = PERPLEXITY_MODEL
             ),
-            localKnowledgeSearchClient = localKnowledgeSearchClient
+            localKnowledgeSearchClient = localKnowledgeSearchClient,
+            tickTickClient = tickTickClient
         )
     }
 

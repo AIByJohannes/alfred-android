@@ -137,10 +137,99 @@ class ApiKeyStore(context: Context) {
         }
     }
 
+    fun saveTickTickClientId(clientId: String) {
+        try {
+            prefs.edit().putString(KEY_TICKTICK_CLIENT_ID, clientId.trim()).apply()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving TickTick client ID", e)
+        }
+    }
+
+    fun loadTickTickClientId(): String? {
+        return try {
+            prefs.getString(KEY_TICKTICK_CLIENT_ID, null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading TickTick client ID", e)
+            null
+        }
+    }
+
+    fun saveTickTickClientSecret(clientSecret: String) {
+        try {
+            prefs.edit().putString(KEY_TICKTICK_CLIENT_SECRET, clientSecret.trim()).apply()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving TickTick client secret", e)
+        }
+    }
+
+    fun loadTickTickClientSecret(): String? {
+        return try {
+            prefs.getString(KEY_TICKTICK_CLIENT_SECRET, null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading TickTick client secret", e)
+            null
+        }
+    }
+
+    fun saveTickTickAccessToken(token: String) {
+        try {
+            prefs.edit().putString(KEY_TICKTICK_ACCESS_TOKEN, token.trim()).apply()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving TickTick access token", e)
+        }
+    }
+
+    fun loadTickTickAccessToken(): String? {
+        return try {
+            prefs.getString(KEY_TICKTICK_ACCESS_TOKEN, null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading TickTick access token", e)
+            null
+        }
+    }
+
+    fun saveTickTickRefreshToken(token: String) {
+        try {
+            prefs.edit().putString(KEY_TICKTICK_REFRESH_TOKEN, token.trim()).apply()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving TickTick refresh token", e)
+        }
+    }
+
+    fun loadTickTickRefreshToken(): String? {
+        return try {
+            prefs.getString(KEY_TICKTICK_REFRESH_TOKEN, null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading TickTick refresh token", e)
+            null
+        }
+    }
+
+    fun hasTickTickAuth(): Boolean {
+        return !loadTickTickAccessToken().isNullOrBlank()
+    }
+
+    fun clearTickTickCredentials() {
+        try {
+            prefs.edit()
+                .remove(KEY_TICKTICK_CLIENT_ID)
+                .remove(KEY_TICKTICK_CLIENT_SECRET)
+                .remove(KEY_TICKTICK_ACCESS_TOKEN)
+                .remove(KEY_TICKTICK_REFRESH_TOKEN)
+                .apply()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error clearing TickTick credentials", e)
+        }
+    }
+
     companion object {
         private const val TAG = "ApiKeyStore"
         private const val PREFS_FILE_NAME = "alfred_secret_prefs"
         private const val KEY_OPENROUTER_API_KEY = "openrouter_api_key"
+        private const val KEY_TICKTICK_CLIENT_ID = "ticktick_client_id"
+        private const val KEY_TICKTICK_CLIENT_SECRET = "ticktick_client_secret"
+        private const val KEY_TICKTICK_ACCESS_TOKEN = "ticktick_access_token"
+        private const val KEY_TICKTICK_REFRESH_TOKEN = "ticktick_refresh_token"
         private const val KEY_MODEL = "selected_model"
         private const val DEFAULT_MODEL_VAL = "google/gemini-3.5-flash"
         private const val KEY_STT_MODEL = "selected_stt_model"

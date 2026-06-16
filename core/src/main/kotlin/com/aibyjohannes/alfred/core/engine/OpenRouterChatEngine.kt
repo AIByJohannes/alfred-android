@@ -24,6 +24,7 @@ import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchRequest
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchResult
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSource
 import com.aibyjohannes.alfred.core.search.WebSearchClient
+import com.aibyjohannes.alfred.core.ticktick.TickTickClient
 import com.fasterxml.jackson.databind.ObjectMapper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -38,7 +39,8 @@ class OpenRouterChatEngine(
     private val model: String = DEFAULT_MODEL,
     private val prompt: String = SystemPrompts.SYSTEM_PROMPT,
     private val webSearchClient: WebSearchClient,
-    private val localKnowledgeSearchClient: LocalKnowledgeSearchClient? = null
+    private val localKnowledgeSearchClient: LocalKnowledgeSearchClient? = null,
+    private val tickTickClient: TickTickClient? = null
 ) : ChatEngine {
     private val objectMapper = ObjectMapper()
     private val effectiveLocalKnowledgeSearchClient: LocalKnowledgeSearchClient =
@@ -301,6 +303,34 @@ class OpenRouterChatEngine(
                         type = ToolParameterType.Enum(arrayOf("all", "sessions", "memories"))
                     )
                 )
+            ),
+            ToolDescriptor(
+                name = TICKTICK_FUNCTION_NAME,
+                description = "Access and manage the user's TickTick todo list (tasks, subtasks/checklists, projects/folders). Always specify project_id as 'inbox' or a project ID where required.",
+                requiredParameters = listOf(
+                    ToolParameterDescriptor(
+                        name = "action",
+                        description = "The action to perform: list_tasks, get_task, create_task, update_task, complete_task, delete_task, list_projects, create_project, delete_project, list_subtasks, create_subtask, complete_subtask, delete_subtask",
+                        type = ToolParameterType.Enum(arrayOf(
+                            "list_tasks", "get_task", "create_task", "update_task", "complete_task", "delete_task",
+                            "list_projects", "create_project", "delete_project",
+                            "list_subtasks", "create_subtask", "complete_subtask", "delete_subtask"
+                        ))
+                    )
+                ),
+                optionalParameters = listOf(
+                    ToolParameterDescriptor("taskId", "The task ID (required for get_task, update_task, complete_task, delete_task, and subtask actions)", ToolParameterType.String),
+                    ToolParameterDescriptor("projectId", "The project ID (required for get_task, update_task, complete_task, delete_task, and subtask actions. Use 'inbox' or project ID)", ToolParameterType.String),
+                    ToolParameterDescriptor("title", "The task or subtask title (required for create_task, create_subtask)", ToolParameterType.String),
+                    ToolParameterDescriptor("content", "The task description content", ToolParameterType.String),
+                    ToolParameterDescriptor("dueDate", "Due date (e.g. 'today', 'tomorrow', 'yesterday', 'YYYY-MM-DD', or ISO-8601 string)", ToolParameterType.String),
+                    ToolParameterDescriptor("priority", "Task priority: 0 (none), 1 (low), 3 (medium), 5 (high)", ToolParameterType.Integer),
+                    ToolParameterDescriptor("tags", "Comma-separated list of tags", ToolParameterType.String),
+                    ToolParameterDescriptor("newProjectId", "The target project ID to move the task to", ToolParameterType.String),
+                    ToolParameterDescriptor("indexOrTitle", "1-based index or title substring of the checklist/subtask item", ToolParameterType.String),
+                    ToolParameterDescriptor("projectName", "The project name (required for create_project)", ToolParameterType.String),
+                    ToolParameterDescriptor("projectColor", "Hex color code for the project (optional for create_project)", ToolParameterType.String)
+                )
             )
         )
     }
@@ -541,9 +571,137 @@ class OpenRouterChatEngine(
                 }
             }
 
+            TICKTICK_FUNCTION_NAME -> {
+                val client = tickTickClient
+                if (client == null) {
+                    "TickTick integration is not configured. Please configure your TickTick credentials in settings first."
+                } else {
+                    try {
+                        executeTickTickToolCall(client, arguments)
+                    } catch (e: Exception) {
+                        "TickTick failed: ${e.message}"
+                    }
+                }
+            }
+
             else -> {
                 "Unknown tool: $functionName"
             }
+        }
+    }
+
+    private suspend fun executeTickTickToolCall(client: TickTickClient, argumentsJson: String): String {
+        val node = objectMapper.readTree(argumentsJson)
+        val action = node.path("action").asText()
+
+        val taskId = node.path("taskId").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+        val projectId = node.path("projectId").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+        val title = node.path("title").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+        val content = node.path("content").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+        val dueDate = node.path("dueDate").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+        val priority = if (node.has("priority")) node.path("priority").asInt() else null
+        val tagsStr = node.path("tags").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+        val tags = tagsStr?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
+        val newProjectId = node.path("newProjectId").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+        val indexOrTitle = node.path("indexOrTitle").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+        val projectName = node.path("projectName").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+        val projectColor = node.path("projectColor").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+
+        return when (action) {
+            "list_tasks" -> client.getTasks()
+
+            "get_task" -> {
+                if (projectId == null || taskId == null) {
+                    "Error: 'projectId' and 'taskId' are required for get_task"
+                } else {
+                    client.getTask(projectId, taskId)
+                }
+            }
+
+            "create_task" -> {
+                if (title == null) {
+                    "Error: 'title' is required for create_task"
+                } else {
+                    client.createTask(title, projectId, content, dueDate, priority, tags)
+                }
+            }
+
+            "update_task" -> {
+                if (taskId == null || projectId == null) {
+                    "Error: 'taskId' and 'projectId' are required for update_task"
+                } else {
+                    client.updateTask(taskId, projectId, newProjectId, title, content, dueDate, priority, tags)
+                }
+            }
+
+            "complete_task" -> {
+                if (projectId == null || taskId == null) {
+                    "Error: 'projectId' and 'taskId' are required for complete_task"
+                } else {
+                    client.completeTask(projectId, taskId)
+                }
+            }
+
+            "delete_task" -> {
+                if (projectId == null || taskId == null) {
+                    "Error: 'projectId' and 'taskId' are required for delete_task"
+                } else {
+                    client.deleteTask(projectId, taskId)
+                }
+            }
+
+            "list_projects" -> client.getProjects()
+
+            "create_project" -> {
+                if (projectName == null) {
+                    "Error: 'projectName' is required for create_project"
+                } else {
+                    client.createProject(projectName, projectColor)
+                }
+            }
+
+            "delete_project" -> {
+                if (projectId == null) {
+                    "Error: 'projectId' is required for delete_project"
+                } else {
+                    client.deleteProject(projectId)
+                }
+            }
+
+            "list_subtasks" -> {
+                if (projectId == null || taskId == null) {
+                    "Error: 'projectId' and 'taskId' are required for list_subtasks"
+                } else {
+                    val subtasks = client.listSubtasks(projectId, taskId)
+                    objectMapper.writeValueAsString(subtasks)
+                }
+            }
+
+            "create_subtask" -> {
+                if (projectId == null || taskId == null || title == null) {
+                    "Error: 'projectId', 'taskId', and 'title' are required for create_subtask"
+                } else {
+                    client.createSubtask(projectId, taskId, title)
+                }
+            }
+
+            "complete_subtask" -> {
+                if (projectId == null || taskId == null || indexOrTitle == null) {
+                    "Error: 'projectId', 'taskId', and 'indexOrTitle' are required for complete_subtask"
+                } else {
+                    client.completeSubtask(projectId, taskId, indexOrTitle)
+                }
+            }
+
+            "delete_subtask" -> {
+                if (projectId == null || taskId == null || indexOrTitle == null) {
+                    "Error: 'projectId', 'taskId', and 'indexOrTitle' are required for delete_subtask"
+                } else {
+                    client.deleteSubtask(projectId, taskId, indexOrTitle)
+                }
+            }
+
+            else -> "Unknown TickTick action: $action"
         }
     }
 
@@ -605,6 +763,7 @@ class OpenRouterChatEngine(
         const val DEFAULT_MODEL = "google/gemini-3.5-flash"
         const val WEB_SEARCH_FUNCTION_NAME = "WebSearchTool"
         const val LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME = "SearchLocalKnowledgeTool"
+        const val TICKTICK_FUNCTION_NAME = "TickTickTool"
         private const val MAX_AGENT_PASSES = 6
     }
 }

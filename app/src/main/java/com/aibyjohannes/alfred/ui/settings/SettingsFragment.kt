@@ -21,6 +21,14 @@ import com.aibyjohannes.alfred.notifications.NotificationScheduler
 import com.google.android.material.timepicker.MaterialTimePicker
 import com.google.android.material.timepicker.TimeFormat
 import com.google.android.material.snackbar.Snackbar
+import android.content.Intent
+import android.net.Uri
+import androidx.lifecycle.lifecycleScope
+import com.aibyjohannes.alfred.data.ticktick.TickTickOAuthServer
+import com.aibyjohannes.alfred.core.ticktick.TickTickClient
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class SettingsFragment : Fragment() {
 
@@ -31,6 +39,7 @@ class SettingsFragment : Fragment() {
     private lateinit var profilePreferencesStore: ProfilePreferencesStore
     private lateinit var notificationPreferencesStore: NotificationPreferencesStore
     private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
+    private var oauthServer: TickTickOAuthServer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -72,6 +81,8 @@ class SettingsFragment : Fragment() {
         setupNotificationControls()
         updateStatus()
         updateNotificationControls()
+        setupTickTickControls()
+        updateTickTickStatus()
 
         return root
     }
@@ -281,9 +292,121 @@ class SettingsFragment : Fragment() {
         }
     }
 
+    private fun setupTickTickControls() {
+        binding.ticktickClientIdInput.setText(apiKeyStore.loadTickTickClientId())
+        binding.ticktickClientSecretInput.setText(apiKeyStore.loadTickTickClientSecret())
+
+        binding.ticktickConnectButton.setOnClickListener {
+            val clientId = binding.ticktickClientIdInput.text?.toString()?.trim()
+            val clientSecret = binding.ticktickClientSecretInput.text?.toString()?.trim()
+
+            if (clientId.isNullOrBlank() || clientSecret.isNullOrBlank()) {
+                Snackbar.make(binding.root, R.string.ticktick_save_error, Snackbar.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            apiKeyStore.saveTickTickClientId(clientId)
+            apiKeyStore.saveTickTickClientSecret(clientSecret)
+
+            oauthServer?.stop()
+            oauthServer = TickTickOAuthServer(
+                port = 54321,
+                onCodeReceived = { code ->
+                    lifecycleScope.launch {
+                        exchangeCodeForTokens(code)
+                    }
+                },
+                onErrorReceived = { error ->
+                    lifecycleScope.launch {
+                        updateTickTickStatus()
+                        Snackbar.make(binding.root, getString(R.string.ticktick_auth_failed, error), Snackbar.LENGTH_LONG).show()
+                    }
+                }
+            )
+            oauthServer?.start()
+
+            val scope = "tasks:read tasks:write"
+            val redirectUri = "http://localhost:54321/callback"
+            val authUrl = "https://ticktick.com/oauth/authorize" +
+                    "?client_id=$clientId" +
+                    "&redirect_uri=${Uri.encode(redirectUri)}" +
+                    "&response_type=code" +
+                    "&scope=${Uri.encode(scope)}"
+
+            try {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(authUrl))
+                startActivity(intent)
+            } catch (e: Exception) {
+                oauthServer?.stop()
+                Snackbar.make(binding.root, "Failed to open browser: ${e.message}", Snackbar.LENGTH_LONG).show()
+            }
+        }
+
+        binding.ticktickDisconnectButton.setOnClickListener {
+            apiKeyStore.clearTickTickCredentials()
+            binding.ticktickClientIdInput.text?.clear()
+            binding.ticktickClientSecretInput.text?.clear()
+            updateTickTickStatus()
+            Snackbar.make(binding.root, R.string.ticktick_cleared, Snackbar.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun updateTickTickStatus() {
+        if (!::apiKeyStore.isInitialized || _binding == null) return
+
+        val isConnected = apiKeyStore.hasTickTickAuth()
+        if (isConnected) {
+            binding.ticktickStatusChip.setText(R.string.ticktick_status_connected)
+            binding.ticktickStatusChip.chipBackgroundColor = ColorStateList.valueOf(
+                ContextCompat.getColor(requireContext(), R.color.status_configured_bg)
+            )
+            binding.ticktickStatusChip.setTextColor(
+                ContextCompat.getColor(requireContext(), R.color.status_configured_text)
+            )
+            binding.ticktickClientIdInput.isEnabled = false
+            binding.ticktickClientSecretInput.isEnabled = false
+            binding.ticktickConnectButton.isEnabled = false
+            binding.ticktickDisconnectButton.isEnabled = true
+        } else {
+            binding.ticktickStatusChip.setText(R.string.ticktick_status_not_connected)
+            binding.ticktickStatusChip.chipBackgroundColor = ColorStateList.valueOf(
+                ContextCompat.getColor(requireContext(), R.color.status_not_configured_bg)
+            )
+            binding.ticktickStatusChip.setTextColor(
+                ContextCompat.getColor(requireContext(), R.color.status_not_configured_text)
+            )
+            binding.ticktickClientIdInput.isEnabled = true
+            binding.ticktickClientSecretInput.isEnabled = true
+            binding.ticktickConnectButton.isEnabled = true
+            binding.ticktickDisconnectButton.isEnabled = false
+        }
+    }
+
+    private suspend fun exchangeCodeForTokens(code: String) {
+        val clientId = apiKeyStore.loadTickTickClientId() ?: return
+        val clientSecret = apiKeyStore.loadTickTickClientSecret() ?: return
+
+        withContext(Dispatchers.IO) {
+            try {
+                val creds = TickTickClient.exchangeCodeForTokens(clientId, clientSecret, code)
+                withContext(Dispatchers.Main) {
+                    apiKeyStore.saveTickTickAccessToken(creds.accessToken)
+                    apiKeyStore.saveTickTickRefreshToken(creds.refreshToken)
+                    updateTickTickStatus()
+                    Snackbar.make(binding.root, R.string.ticktick_auth_success, Snackbar.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    updateTickTickStatus()
+                    Snackbar.make(binding.root, getString(R.string.ticktick_auth_failed, e.message ?: "Unknown error"), Snackbar.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
     override fun onDestroyView() {
+        oauthServer?.stop()
         super.onDestroyView()
         _binding = null
     }
 }
-

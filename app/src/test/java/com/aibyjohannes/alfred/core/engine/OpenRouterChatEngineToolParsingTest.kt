@@ -41,7 +41,7 @@ class OpenRouterChatEngineToolParsingTest {
     }
 
     @Test
-    fun `tool descriptors include both Alfred tools`() {
+    fun `tool descriptors include all Alfred tools`() {
         val method = OpenRouterChatEngine::class.java.declaredMethods.first { it.name.startsWith("buildAlfredToolDescriptors") }
         method.isAccessible = true
         val tools = method.invoke(buildEngine()) as List<*>
@@ -49,7 +49,8 @@ class OpenRouterChatEngineToolParsingTest {
         assertEquals(
             listOf(
                 OpenRouterChatEngine.WEB_SEARCH_FUNCTION_NAME,
-                OpenRouterChatEngine.LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME
+                OpenRouterChatEngine.LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME,
+                OpenRouterChatEngine.TICKTICK_FUNCTION_NAME
             ),
             tools.map { it?.javaClass?.getMethod("getName")?.invoke(it) }
         )
