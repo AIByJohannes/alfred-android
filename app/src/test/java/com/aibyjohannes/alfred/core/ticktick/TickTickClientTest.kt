@@ -3,13 +3,17 @@ package com.aibyjohannes.alfred.core.ticktick
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.request.HttpRequestData
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.OutgoingContent
 import io.ktor.http.headersOf
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.Assert.fail
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -79,6 +83,7 @@ class TickTickClientTest {
     @Test
     fun `token refresh happens on 401 and request retries`() = runTest {
         var callCount = 0
+        var refreshBody: String? = null
         val mockEngine = MockEngine { request ->
             callCount++
             when {
@@ -89,6 +94,7 @@ class TickTickClientTest {
                     )
                 }
                 request.url.toString() == "https://ticktick.com/oauth/token" -> {
+                    refreshBody = requestBodyText(request)
                     respond(
                         content = "{\"access_token\":\"new-access-token\",\"refresh_token\":\"new-refresh-token\"}",
                         status = HttpStatusCode.OK,
@@ -114,5 +120,89 @@ class TickTickClientTest {
         assertEquals(1, credentialsProvider.refreshCount)
         assertEquals("new-access-token", credentialsProvider.currentCreds?.accessToken)
         assertEquals("new-refresh-token", credentialsProvider.currentCreds?.refreshToken)
+        assertEquals("grant_type=refresh_token&refresh_token=test-refresh-token", refreshBody)
+    }
+
+    @Test
+    fun `exchangeCodeForTokens form encodes authorization code and oauth fields`() = runTest {
+        var tokenBody: String? = null
+        val mockEngine = MockEngine { request ->
+            assertEquals("https://ticktick.com/oauth/token", request.url.toString())
+            tokenBody = requestBodyText(request)
+            respond(
+                content = "{\"access_token\":\"new-access-token\",\"refresh_token\":\"new-refresh-token\"}",
+                status = HttpStatusCode.OK,
+                headers = headersOf("Content-Type", "application/json")
+            )
+        }
+        val httpClient = HttpClient(mockEngine)
+
+        val result = TickTickClient.exchangeCodeForTokens(
+            clientId = "test-client-id",
+            clientSecret = "test-client-secret",
+            code = "abc/def+ghi=jkl",
+            httpClient = httpClient
+        )
+
+        assertEquals("new-access-token", result.accessToken)
+        assertEquals("new-refresh-token", result.refreshToken)
+        assertEquals(
+            "code=abc%2Fdef%2Bghi%3Djkl&grant_type=authorization_code&scope=tasks%3Aread+tasks%3Awrite&redirect_uri=http%3A%2F%2Flocalhost%3A54321%2Fcallback",
+            tokenBody
+        )
+    }
+
+    @Test
+    fun `exchangeCodeForTokens accepts access token without refresh token`() = runTest {
+        val mockEngine = MockEngine {
+            respond(
+                content = "{\"access_token\":\"new-access-token\"}",
+                status = HttpStatusCode.OK,
+                headers = headersOf("Content-Type", "application/json")
+            )
+        }
+        val httpClient = HttpClient(mockEngine)
+
+        val result = TickTickClient.exchangeCodeForTokens(
+            clientId = "test-client-id",
+            clientSecret = "test-client-secret",
+            code = "code",
+            httpClient = httpClient
+        )
+
+        assertEquals("new-access-token", result.accessToken)
+        assertNull(result.refreshToken)
+    }
+
+    @Test
+    fun `exchangeCodeForTokens reports token exchange failure without parsing tokens`() = runTest {
+        val mockEngine = MockEngine {
+            respond(
+                content = "{\"error\":\"invalid_grant\"}",
+                status = HttpStatusCode.BadRequest,
+                headers = headersOf("Content-Type", "application/json")
+            )
+        }
+        val httpClient = HttpClient(mockEngine)
+
+        try {
+            TickTickClient.exchangeCodeForTokens(
+                clientId = "test-client-id",
+                clientSecret = "test-client-secret",
+                code = "code",
+                httpClient = httpClient
+            )
+            fail("Expected token exchange to fail")
+        } catch (e: Exception) {
+            assertTrue(e.message?.contains("Token exchange failed: 400") == true)
+            assertTrue(e.message?.contains("Response missing") != true)
+        }
+    }
+
+    private fun requestBodyText(request: HttpRequestData): String {
+        return when (val body = request.body) {
+            is OutgoingContent.ByteArrayContent -> body.bytes().decodeToString()
+            else -> body.toString()
+        }
     }
 }

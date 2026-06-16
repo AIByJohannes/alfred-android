@@ -4,7 +4,7 @@ data class TickTickCredentials(
     val clientId: String,
     val clientSecret: String,
     val accessToken: String,
-    val refreshToken: String
+    val refreshToken: String?
 )
 
 interface TickTickCredentialsProvider {

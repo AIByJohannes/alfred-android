@@ -10,6 +10,7 @@ import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.formUrlEncode
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -40,7 +41,9 @@ class TickTickClient(
         val response = tryRequest(method, url, creds.accessToken, bodyJson)
 
         if (response.status == HttpStatusCode.Unauthorized) {
-            // Token expired, refresh it
+            if (creds.refreshToken.isNullOrBlank()) {
+                throw Exception("TickTick token expired. Please reconnect TickTick in settings.")
+            }
             val newCreds = refreshToken(creds)
             if (newCreds != null) {
                 val retryResponse = tryRequest(method, url, newCreds.accessToken, bodyJson)
@@ -75,6 +78,7 @@ class TickTickClient(
     }
 
     private suspend fun refreshToken(creds: TickTickCredentials): TickTickCredentials? {
+        val refreshToken = creds.refreshToken ?: return null
         val basicAuth = Base64.getEncoder()
             .encodeToString("${creds.clientId}:${creds.clientSecret}".toByteArray())
 
@@ -83,7 +87,12 @@ class TickTickClient(
                 this.method = HttpMethod.Post
                 header("Authorization", "Basic $basicAuth")
                 header("Content-Type", "application/x-www-form-urlencoded")
-                setBody("grant_type=refresh_token&refresh_token=${creds.refreshToken}")
+                setBody(
+                    listOf(
+                        "grant_type" to "refresh_token",
+                        "refresh_token" to refreshToken
+                    ).formUrlEncode()
+                )
             }
         } catch (e: Exception) {
             return null
@@ -386,6 +395,9 @@ class TickTickClient(
     }
 
     companion object {
+        const val OAUTH_REDIRECT_URI = "http://localhost:54321/callback"
+        const val OAUTH_SCOPE = "tasks:read tasks:write"
+
         fun createDefaultClient(): HttpClient {
             return HttpClient(OkHttp) {
                 engine {
@@ -410,7 +422,14 @@ class TickTickClient(
                 this.method = HttpMethod.Post
                 header("Authorization", "Basic $basicAuth")
                 header("Content-Type", "application/x-www-form-urlencoded")
-                setBody("code=$code&grant_type=authorization_code&scope=tasks:read%20tasks:write&redirect_uri=http://localhost:54321/callback")
+                setBody(
+                    listOf(
+                        "code" to code,
+                        "grant_type" to "authorization_code",
+                        "scope" to OAUTH_SCOPE,
+                        "redirect_uri" to OAUTH_REDIRECT_URI
+                    ).formUrlEncode()
+                )
             }
 
             if (response.status != HttpStatusCode.OK) {
@@ -422,8 +441,8 @@ class TickTickClient(
             val accessToken = node.path("access_token").asText(null)
             val refreshToken = node.path("refresh_token").asText(null)
 
-            if (accessToken.isNullOrBlank() || refreshToken.isNullOrBlank()) {
-                throw Exception("Response missing tokens")
+            if (accessToken.isNullOrBlank()) {
+                throw Exception("Response missing access token")
             }
 
             return TickTickCredentials(clientId, clientSecret, accessToken, refreshToken)

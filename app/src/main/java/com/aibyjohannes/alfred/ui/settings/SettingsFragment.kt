@@ -26,9 +26,12 @@ import android.net.Uri
 import androidx.lifecycle.lifecycleScope
 import com.aibyjohannes.alfred.data.ticktick.TickTickOAuthServer
 import com.aibyjohannes.alfred.core.ticktick.TickTickClient
+import com.aibyjohannes.alfred.core.ticktick.TickTickClient.Companion.OAUTH_REDIRECT_URI
+import com.aibyjohannes.alfred.core.ticktick.TickTickClient.Companion.OAUTH_SCOPE
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 class SettingsFragment : Fragment() {
 
@@ -309,8 +312,10 @@ class SettingsFragment : Fragment() {
             apiKeyStore.saveTickTickClientSecret(clientSecret)
 
             oauthServer?.stop()
+            val oauthState = UUID.randomUUID().toString()
             oauthServer = TickTickOAuthServer(
                 port = 54321,
+                expectedState = oauthState,
                 onCodeReceived = { code ->
                     lifecycleScope.launch {
                         exchangeCodeForTokens(code)
@@ -325,13 +330,17 @@ class SettingsFragment : Fragment() {
             )
             oauthServer?.start()
 
-            val scope = "tasks:read tasks:write"
-            val redirectUri = "http://localhost:54321/callback"
-            val authUrl = "https://ticktick.com/oauth/authorize" +
-                    "?client_id=$clientId" +
-                    "&redirect_uri=${Uri.encode(redirectUri)}" +
-                    "&response_type=code" +
-                    "&scope=${Uri.encode(scope)}"
+            val authUrl = Uri.Builder()
+                .scheme("https")
+                .authority("ticktick.com")
+                .path("/oauth/authorize")
+                .appendQueryParameter("client_id", clientId)
+                .appendQueryParameter("redirect_uri", OAUTH_REDIRECT_URI)
+                .appendQueryParameter("response_type", "code")
+                .appendQueryParameter("scope", OAUTH_SCOPE)
+                .appendQueryParameter("state", oauthState)
+                .build()
+                .toString()
 
             try {
                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse(authUrl))
@@ -391,7 +400,7 @@ class SettingsFragment : Fragment() {
                 val creds = TickTickClient.exchangeCodeForTokens(clientId, clientSecret, code)
                 withContext(Dispatchers.Main) {
                     apiKeyStore.saveTickTickAccessToken(creds.accessToken)
-                    apiKeyStore.saveTickTickRefreshToken(creds.refreshToken)
+                    creds.refreshToken?.let { apiKeyStore.saveTickTickRefreshToken(it) }
                     updateTickTickStatus()
                     Snackbar.make(binding.root, R.string.ticktick_auth_success, Snackbar.LENGTH_LONG).show()
                 }

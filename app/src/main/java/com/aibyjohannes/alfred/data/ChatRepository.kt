@@ -112,13 +112,13 @@ class ChatRepository(
                 val clientId = apiKeyStore.loadTickTickClientId() ?: return null
                 val clientSecret = apiKeyStore.loadTickTickClientSecret() ?: return null
                 val accessToken = apiKeyStore.loadTickTickAccessToken() ?: return null
-                val refreshToken = apiKeyStore.loadTickTickRefreshToken() ?: return null
+                val refreshToken = apiKeyStore.loadTickTickRefreshToken()
                 return TickTickCredentials(clientId, clientSecret, accessToken, refreshToken)
             }
 
             override fun onCredentialsRefreshed(credentials: TickTickCredentials) {
                 apiKeyStore.saveTickTickAccessToken(credentials.accessToken)
-                apiKeyStore.saveTickTickRefreshToken(credentials.refreshToken)
+                credentials.refreshToken?.let { apiKeyStore.saveTickTickRefreshToken(it) }
             }
         }
 

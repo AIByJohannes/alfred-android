@@ -8,14 +8,17 @@ import java.io.OutputStreamWriter
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class TickTickOAuthServer(
     private val port: Int = 54321,
+    private val expectedState: String,
     private val onCodeReceived: (String) -> Unit,
     private val onErrorReceived: (String) -> Unit
 ) {
     private var serverSocket: ServerSocket? = null
     private val executor = Executors.newSingleThreadExecutor()
+    private val callbackHandled = AtomicBoolean(false)
     @Volatile private var isRunning = false
 
     fun start() {
@@ -69,13 +72,33 @@ class TickTickOAuthServer(
                         val uri = Uri.parse("http://localhost$urlPath")
                         val code = uri.getQueryParameter("code")
                         val error = uri.getQueryParameter("error")
+                        val state = uri.getQueryParameter("state")
 
-                        val responseHtml = if (code != null) {
+                        val responseHtml = if (state != expectedState) {
+                            onErrorReceived("OAuth state mismatch. Please try connecting TickTick again.")
+                            """
+                            <html>
+                            <body style="font-family: sans-serif; text-align: center; padding-top: 50px;">
+                                <h1 style="color: #F44336;">Authorization Failed</h1>
+                                <p>OAuth state mismatch. Please return to Alfred Android and try again.</p>
+                            </body>
+                            </html>
+                            """.trimIndent()
+                        } else if (code != null && callbackHandled.compareAndSet(false, true)) {
                             onCodeReceived(code)
                             """
                             <html>
                             <body style="font-family: sans-serif; text-align: center; padding-top: 50px;">
                                 <h1 style="color: #4CAF50;">Authorization Successful!</h1>
+                                <p>You can close this window and return to the Alfred Android app.</p>
+                            </body>
+                            </html>
+                            """.trimIndent()
+                        } else if (code != null) {
+                            """
+                            <html>
+                            <body style="font-family: sans-serif; text-align: center; padding-top: 50px;">
+                                <h1 style="color: #4CAF50;">Authorization Already Received</h1>
                                 <p>You can close this window and return to the Alfred Android app.</p>
                             </body>
                             </html>
