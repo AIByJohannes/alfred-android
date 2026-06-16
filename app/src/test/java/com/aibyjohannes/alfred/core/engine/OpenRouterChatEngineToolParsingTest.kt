@@ -115,6 +115,43 @@ class OpenRouterChatEngineToolParsingTest {
         assertTrue(results.isEmpty())
     }
 
+    @Test
+    fun `ticktick tool failures are classified as errors`() = runTest {
+        val engine = buildEngine()
+        val method = OpenRouterChatEngine::class.java.declaredMethods.first { it.name.startsWith("executeToolCall") }
+        method.isAccessible = true
+
+        val continuation = object : kotlin.coroutines.Continuation<String> {
+            override val context: kotlin.coroutines.CoroutineContext = kotlin.coroutines.EmptyCoroutineContext
+            override fun resumeWith(result: Result<String>) {}
+        }
+
+        val result1 = method.invoke(
+            engine,
+            OpenRouterChatEngine.TICKTICK_FUNCTION_NAME,
+            """{"action":"list_tasks"}""",
+            continuation
+        ) as String
+
+        assertTrue(result1.contains("TickTick integration is not configured"))
+
+        fun checkIsError(result: String): Boolean {
+            return result.startsWith("Web search failed", ignoreCase = true) ||
+                result.startsWith("Local knowledge search failed", ignoreCase = true) ||
+                result.startsWith("Unknown tool", ignoreCase = true) ||
+                result.startsWith("TickTick failed", ignoreCase = true) ||
+                result.startsWith("TickTick integration is not configured", ignoreCase = true) ||
+                result.startsWith("Error:", ignoreCase = true) ||
+                result.startsWith("Unknown TickTick action", ignoreCase = true)
+        }
+
+        assertTrue(checkIsError(result1))
+        assertTrue(checkIsError("TickTick failed: connection timeout"))
+        assertTrue(checkIsError("Error: 'projectId' and 'taskId' are required for get_task"))
+        assertTrue(checkIsError("Unknown TickTick action: do_something"))
+    }
+
+
     private fun buildEngine(): OpenRouterChatEngine {
         return OpenRouterChatEngine(
             apiKey = "test",

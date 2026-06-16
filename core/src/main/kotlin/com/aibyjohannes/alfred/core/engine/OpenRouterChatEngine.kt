@@ -194,7 +194,11 @@ class OpenRouterChatEngine(
                         val result = executeToolCall(toolCall.name, toolCall.argumentsJson)
                         val isError = result.startsWith("Web search failed", ignoreCase = true) ||
                             result.startsWith("Local knowledge search failed", ignoreCase = true) ||
-                            result.startsWith("Unknown tool", ignoreCase = true)
+                            result.startsWith("Unknown tool", ignoreCase = true) ||
+                            result.startsWith("TickTick failed", ignoreCase = true) ||
+                            result.startsWith("TickTick integration is not configured", ignoreCase = true) ||
+                            result.startsWith("Error:", ignoreCase = true) ||
+                            result.startsWith("Unknown TickTick action", ignoreCase = true)
                         traces.add(
                             ToolCallTrace(
                                 id = toolCall.id,
