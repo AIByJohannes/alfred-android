@@ -244,11 +244,18 @@ class HomeViewModel : ViewModel() {
 
                         is ChatStreamEvent.ReasoningComplete -> {
                             val id = event.id ?: "reasoning-${event.passIndex}"
-                            val content = event.summary.joinToString("\n").ifBlank {
+                            val completedContent = event.summary.joinToString("\n").ifBlank {
                                 event.content.joinToString("\n")
                             }.ifBlank {
                                 if (event.encrypted.isNullOrBlank()) "" else "Reasoning preserved for continuity."
                             }
+                            val existingContent = traceItems
+                                .firstOrNull { it.id == id && it.kind == UiTraceKind.REASONING }
+                                ?.content
+                            val content = preferFullerTraceContent(
+                                existingContent = existingContent,
+                                completedContent = completedContent
+                            )
                             if (content.isNotBlank()) {
                                 upsertTraceItem(
                                     messageId = assistantMessageId,
@@ -689,6 +696,18 @@ class HomeViewModel : ViewModel() {
             showTypingDots = false
         )
         return timestampMs
+    }
+
+    private fun preferFullerTraceContent(existingContent: String?, completedContent: String): String {
+        val existing = existingContent?.takeIf { it.isNotBlank() } ?: return completedContent
+        if (completedContent.isBlank()) {
+            return existing
+        }
+        return if (existing.trim().length > completedContent.trim().length) {
+            existing
+        } else {
+            completedContent
+        }
     }
 
     private fun upsertTraceItem(

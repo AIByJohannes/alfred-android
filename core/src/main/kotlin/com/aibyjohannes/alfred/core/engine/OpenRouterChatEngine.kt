@@ -463,20 +463,29 @@ class OpenRouterChatEngine(
                 }
 
                 is StreamFrame.ReasoningComplete -> {
+                    val key = "reasoning-$passIndex"
+                    val content = preferFullerReasoning(
+                        completedParts = frame.content.orEmpty(),
+                        streamedText = reasoningTextById[key]?.toString()
+                    )
+                    val summary = preferFullerReasoning(
+                        completedParts = frame.summary.orEmpty(),
+                        streamedText = reasoningSummaryById[key]?.toString()
+                    )
                     reasoningParts.add(
                         ReasoningPart(
-                            id = "reasoning-$passIndex",
-                            content = frame.content.orEmpty(),
-                            summary = frame.summary.orEmpty(),
+                            id = key,
+                            content = content,
+                            summary = summary,
                             encrypted = frame.encrypted
                         )
                     )
                     onEvent(
                         ChatStreamEvent.ReasoningComplete(
                             passIndex = passIndex,
-                            id = "reasoning-$passIndex",
-                            content = frame.content.orEmpty(),
-                            summary = frame.summary.orEmpty(),
+                            id = key,
+                            content = content,
+                            summary = summary,
                             encrypted = frame.encrypted
                         )
                     )
@@ -761,6 +770,22 @@ class OpenRouterChatEngine(
                 appendLine(result.snippet)
             }
         }.trim()
+    }
+
+    internal fun preferFullerReasoning(completedParts: List<String>, streamedText: String?): List<String> {
+        val streamed = streamedText?.takeIf { it.isNotBlank() } ?: return completedParts
+        val completedText = completedParts.joinToString("\n")
+        if (completedText.isBlank()) {
+            return listOf(streamed)
+        }
+
+        val streamedComparable = streamed.trim()
+        val completedComparable = completedText.trim()
+        return if (streamedComparable.length > completedComparable.length) {
+            listOf(streamed)
+        } else {
+            completedParts
+        }
     }
 
     companion object {

@@ -99,6 +99,22 @@ class OpenRouterChatEngineToolParsingTest {
     }
 
     @Test
+    fun `reasoning merge keeps streamed text when completion is partial`() {
+        val method = OpenRouterChatEngine::class.java.declaredMethods.first {
+            it.name.startsWith("preferFullerReasoning")
+        }
+        method.isAccessible = true
+
+        val output = method.invoke(
+            buildEngine(),
+            listOf("this."),
+            "Thinking about this."
+        ) as List<*>
+
+        assertEquals(listOf("Thinking about this."), output)
+    }
+
+    @Test
     fun `local knowledge tool has empty fallback when client is absent`() = runTest {
         val engine = OpenRouterChatEngine(
             apiKey = "test",

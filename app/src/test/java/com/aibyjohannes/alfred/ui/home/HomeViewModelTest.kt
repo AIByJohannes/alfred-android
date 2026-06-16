@@ -449,6 +449,65 @@ class HomeViewModelTest {
     }
 
     @Test
+    fun `sendMessage preserves accumulated reasoning when completion contains only final chunk`() = runTest {
+        val conversation = ConversationSummary(1L, null, System.currentTimeMillis())
+
+        every { apiKeyStore.hasApiKey() } returns true
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
+        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.listConversations() } returns listOf(conversation)
+        every { repository.streamMessage(any(), any(), any()) } returns flowOf(
+            ChatStreamEvent.PassStarted(0),
+            ChatStreamEvent.ReasoningDelta(
+                passIndex = 0,
+                id = "reasoning-0",
+                textChunk = "Thinking ",
+                summaryChunk = null
+            ),
+            ChatStreamEvent.ReasoningDelta(
+                passIndex = 0,
+                id = "reasoning-0",
+                textChunk = "about ",
+                summaryChunk = null
+            ),
+            ChatStreamEvent.ReasoningDelta(
+                passIndex = 0,
+                id = "reasoning-0",
+                textChunk = "this.",
+                summaryChunk = null
+            ),
+            ChatStreamEvent.ReasoningComplete(
+                passIndex = 0,
+                id = "reasoning-0",
+                content = listOf("this."),
+                summary = emptyList(),
+                encrypted = null
+            ),
+            ChatStreamEvent.TextDelta(0, "Done."),
+            ChatStreamEvent.Completed(
+                ChatTurnResult(
+                    content = "Done.",
+                    toolCalls = emptyList(),
+                    intermediateMessages = emptyList()
+                )
+            )
+        )
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.sendMessage("Test DeepSeek reasoning completion")
+        testScheduler.advanceUntilIdle()
+
+        val assistant = viewModel.messages.value.orEmpty().last()
+        val reasoningTrace = assistant.traceItems.single { it.kind == UiTraceKind.REASONING }
+
+        assert(reasoningTrace.content == "Thinking about this.") {
+            "Expected accumulated reasoning content, but was ${reasoningTrace.content}"
+        }
+    }
+
+    @Test
     fun `sendMessage groups tool call chunks into a single trace item even if subsequent chunks have null ids`() = runTest {
         val conversation = ConversationSummary(1L, null, System.currentTimeMillis())
 
@@ -681,4 +740,3 @@ class HomeViewModelTest {
         assert(messages[0].content == inputMessageText) { "User message was blanked out after ToolCallRequested" }
     }
 }
-
