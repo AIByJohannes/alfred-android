@@ -198,7 +198,8 @@ class OpenRouterChatEngine(
                             result.startsWith("TickTick failed", ignoreCase = true) ||
                             result.startsWith("TickTick integration is not configured", ignoreCase = true) ||
                             result.startsWith("Error:", ignoreCase = true) ||
-                            result.startsWith("Unknown TickTick action", ignoreCase = true)
+                            result.startsWith("Unknown TickTick action", ignoreCase = true) ||
+                            result.startsWith("Smart model delegation failed", ignoreCase = true)
                         traces.add(
                             ToolCallTrace(
                                 id = toolCall.id,
@@ -334,6 +335,24 @@ class OpenRouterChatEngine(
                     ToolParameterDescriptor("indexOrTitle", "1-based index or title substring of the checklist/subtask item", ToolParameterType.String),
                     ToolParameterDescriptor("projectName", "The project name (required for create_project)", ToolParameterType.String),
                     ToolParameterDescriptor("projectColor", "Hex color code for the project (optional for create_project)", ToolParameterType.String)
+                )
+            ),
+            ToolDescriptor(
+                name = ASK_SMART_MODEL_FUNCTION_NAME,
+                description = "Delegate complex planning, logical reasoning, or step-by-step structuring tasks to a stronger reasoning model (DeepSeek Version 4 Pro). Use this to get strategic directions, break down problems, or create detailed plans.",
+                requiredParameters = listOf(
+                    ToolParameterDescriptor(
+                        name = "task_details",
+                        description = "The specific complex task, problem, or objective that needs planning, reasoning, or direction",
+                        type = ToolParameterType.String
+                    )
+                ),
+                optionalParameters = listOf(
+                    ToolParameterDescriptor(
+                        name = "context",
+                        description = "Additional background information or constraint details to help the planning model",
+                        type = ToolParameterType.String
+                    )
                 )
             )
         )
@@ -601,6 +620,21 @@ class OpenRouterChatEngine(
                 }
             }
 
+            ASK_SMART_MODEL_FUNCTION_NAME -> {
+                val details = extractSmartModelDelegationDetails(arguments)
+                if (details == null) {
+                    "Smart model delegation failed: missing required 'task_details' argument."
+                } else {
+                    try {
+                        createOpenRouterClient().use { client ->
+                            executeSmartModelDelegation(client, details)
+                        }
+                    } catch (e: Exception) {
+                        "Smart model delegation failed: ${e.message}"
+                    }
+                }
+            }
+
             else -> {
                 "Unknown tool: $functionName"
             }
@@ -776,6 +810,70 @@ class OpenRouterChatEngine(
         }.trim()
     }
 
+    data class SmartModelDelegationDetails(
+        val taskDetails: String,
+        val context: String?
+    )
+
+    internal fun extractSmartModelDelegationDetails(argumentsJson: String): SmartModelDelegationDetails? {
+        return try {
+            val node = objectMapper.readTree(argumentsJson)
+            val taskDetails = node.path("task_details").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+                ?: return null
+            val context = node.path("context").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+            SmartModelDelegationDetails(taskDetails, context)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private suspend fun executeSmartModelDelegation(
+        client: OpenRouterLLMClient,
+        details: SmartModelDelegationDetails
+    ): String {
+        val smartModel = LLModel(
+            provider = LLMProvider.OpenRouter,
+            id = "deepseek/deepseek-v4-pro",
+            capabilities = listOf(
+                LLMCapability.Completion,
+                LLMCapability.Temperature
+            )
+        )
+        val delegationPrompt = prompt("smart-model-delegation") {
+            system("You are a super-intelligent reasoning model. Your task is to provide detailed, structured instructions, direction, and step-by-step guidance to help another AI agent execute a complex task. Focus on clarity, logical progression, edge cases, and best practices. Do not execute the task yourself, but write a precise plan.")
+            user(
+                buildString {
+                    append("Task Details:\n")
+                    append(details.taskDetails)
+                    if (!details.context.isNullOrBlank()) {
+                        append("\n\nAdditional Context:\n")
+                        append(details.context)
+                    }
+                }
+            )
+        }
+
+        val resultText = StringBuilder()
+        client.executeStreaming(delegationPrompt, smartModel, emptyList()).collect { frame ->
+            when (frame) {
+                is StreamFrame.TextDelta -> {
+                    resultText.append(frame.text)
+                }
+                is StreamFrame.TextComplete -> {
+                    if (frame.text.isNotBlank()) {
+                        resultText.clear().append(frame.text)
+                    }
+                }
+                else -> Unit
+            }
+        }
+        val finalResult = resultText.toString()
+        if (finalResult.isBlank()) {
+            throw Exception("Empty response from smart model")
+        }
+        return finalResult
+    }
+
     internal fun preferFullerReasoning(completedParts: List<String>, streamedText: String?): List<String> {
         val streamed = streamedText?.takeIf { it.isNotBlank() } ?: return completedParts
         val completedText = completedParts.joinToString("\n")
@@ -797,6 +895,7 @@ class OpenRouterChatEngine(
         const val WEB_SEARCH_FUNCTION_NAME = "WebSearchTool"
         const val LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME = "SearchLocalKnowledgeTool"
         const val TICKTICK_FUNCTION_NAME = "TickTickTool"
+        const val ASK_SMART_MODEL_FUNCTION_NAME = "AskSmartModelTool"
         private const val MAX_AGENT_PASSES = 6
     }
 }

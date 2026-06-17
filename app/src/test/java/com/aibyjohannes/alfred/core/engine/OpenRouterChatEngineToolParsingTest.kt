@@ -57,7 +57,8 @@ class OpenRouterChatEngineToolParsingTest {
             listOf(
                 OpenRouterChatEngine.WEB_SEARCH_FUNCTION_NAME,
                 OpenRouterChatEngine.LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME,
-                OpenRouterChatEngine.TICKTICK_FUNCTION_NAME
+                OpenRouterChatEngine.TICKTICK_FUNCTION_NAME,
+                OpenRouterChatEngine.ASK_SMART_MODEL_FUNCTION_NAME
             ),
             tools.map { it?.javaClass?.getMethod("getName")?.invoke(it) }
         )
@@ -165,13 +166,15 @@ class OpenRouterChatEngineToolParsingTest {
                 result.startsWith("TickTick failed", ignoreCase = true) ||
                 result.startsWith("TickTick integration is not configured", ignoreCase = true) ||
                 result.startsWith("Error:", ignoreCase = true) ||
-                result.startsWith("Unknown TickTick action", ignoreCase = true)
+                result.startsWith("Unknown TickTick action", ignoreCase = true) ||
+                result.startsWith("Smart model delegation failed", ignoreCase = true)
         }
 
         assertTrue(checkIsError(result1))
         assertTrue(checkIsError("TickTick failed: connection timeout"))
         assertTrue(checkIsError("Error: 'projectId' and 'taskId' are required for get_task"))
         assertTrue(checkIsError("Unknown TickTick action: do_something"))
+        assertTrue(checkIsError("Smart model delegation failed: API error"))
     }
 
     @Test
@@ -224,5 +227,38 @@ class OpenRouterChatEngineToolParsingTest {
         }
         method.isAccessible = true
         return method.invoke(engine, argumentsJson) as LocalKnowledgeSearchRequest?
+    }
+
+    @Test
+    fun `smart model delegation tool arguments are parsed correctly`() {
+        val details = extractSmartModelDelegationDetails(
+            buildEngine(),
+            """{"task_details":"Write a plan to fix build","context":"Use gradle wrapper"}"""
+        )
+
+        requireNotNull(details)
+        assertEquals("Write a plan to fix build", details.taskDetails)
+        assertEquals("Use gradle wrapper", details.context)
+    }
+
+    @Test
+    fun `smart model delegation tool arguments rejection on missing task_details`() {
+        val details = extractSmartModelDelegationDetails(
+            buildEngine(),
+            """{"context":"Only context is provided"}"""
+        )
+
+        assertNull(details)
+    }
+
+    private fun extractSmartModelDelegationDetails(
+        engine: OpenRouterChatEngine,
+        argumentsJson: String
+    ): OpenRouterChatEngine.SmartModelDelegationDetails? {
+        val method = OpenRouterChatEngine::class.java.declaredMethods.first {
+            it.name.startsWith("extractSmartModelDelegationDetails")
+        }
+        method.isAccessible = true
+        return method.invoke(engine, argumentsJson) as OpenRouterChatEngine.SmartModelDelegationDetails?
     }
 }

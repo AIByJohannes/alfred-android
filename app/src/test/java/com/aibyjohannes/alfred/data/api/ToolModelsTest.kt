@@ -43,6 +43,23 @@ class ToolModelsTest {
     }
 
     @Test
+    fun `AskSmartModelTool can be instantiated`() {
+        val tool = ChatRepository.AskSmartModelTool()
+        assertNull(tool.task_details)
+        assertNull(tool.context)
+    }
+
+    @Test
+    fun `AskSmartModelTool fields can be set`() {
+        val tool = ChatRepository.AskSmartModelTool()
+        tool.task_details = "Plan my study schedule"
+        tool.context = "Target 2 hours daily"
+
+        assertEquals("Plan my study schedule", tool.task_details)
+        assertEquals("Target 2 hours daily", tool.context)
+    }
+
+    @Test
     fun `DEFAULT_MODEL constant is non-empty`() {
         assertTrue(ChatRepository.DEFAULT_MODEL.isNotBlank())
     }

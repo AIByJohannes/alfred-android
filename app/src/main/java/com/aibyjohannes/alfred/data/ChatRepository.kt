@@ -160,6 +160,15 @@ class ChatRepository(
         var source: String? = null
     }
 
+    @JsonClassDescription("Delegate complex planning, logical reasoning, or step-by-step structuring tasks to a stronger reasoning model (DeepSeek Version 4 Pro).")
+    class AskSmartModelTool {
+        @JsonPropertyDescription("The specific complex task, problem, or objective that needs planning, reasoning, or direction")
+        var task_details: String? = null
+
+        @JsonPropertyDescription("Additional background information or constraint details to help the planning model")
+        var context: String? = null
+    }
+
     companion object {
         const val DEFAULT_MODEL = OpenRouterChatEngine.DEFAULT_MODEL
         const val PERPLEXITY_MODEL = PerplexitySearchClient.DEFAULT_MODEL

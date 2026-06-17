@@ -16,6 +16,9 @@ You have access to previous local sessions and memories via the callable functio
 Use local knowledge search when the user asks about prior conversations, saved memories, personal preferences, or user-specific facts that may have been mentioned before.
 Do not guess user-specific facts from memory; search local knowledge when it would help.
 
+You have access to a super-intelligent reasoning/planning model via the callable function `AskSmartModelTool`.
+Use `AskSmartModelTool` when the task is highly complex, requires strategic planning, logical reasoning, multi-step directions, or troubleshooting assistance. This tool will query a stronger model (DeepSeek Version 4 Pro) to provide a precise plan or guidance.
+
 Be concise, accurate, and helpful."""
 
     /**
