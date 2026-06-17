@@ -3,22 +3,34 @@
     <string-array name="model_labels">
         <item>Gemini 3.5 Flash (Default)</item>
         <item>DeepSeek V4 Flash</item>
-        <item>DeepSeek V4 Pro</item>
+        <item>Gemma 4 31B (Free)</item>
+        <item>Gemma 4 26B MoE (Free)</item>
+        <item>Qwen 3 Next 80B (Free)</item>
+        <item>OpenRouter Free Router</item>
     </string-array>
     <string-array name="model_short_labels">
         <item>Gemini 3.5</item>
         <item>DeepSeek V4 Flash</item>
-        <item>DeepSeek V4 Pro</item>
+        <item>Gemma 4 31B (Free)</item>
+        <item>Gemma 4 26B (Free)</item>
+        <item>Qwen 3 Next (Free)</item>
+        <item>OR Free Router</item>
     </string-array>
     <string-array name="model_toolbar_labels">
         <item>3.5 Flash</item>
         <item>DS V4 Flash</item>
-        <item>DS V4 Pro</item>
+        <item>G4 31B Free</item>
+        <item>G4 26B Free</item>
+        <item>Qwen3 Free</item>
+        <item>OR Free</item>
     </string-array>
     <string-array name="model_values">
         <item>google/gemini-3.5-flash</item>
         <item>deepseek/deepseek-v4-flash</item>
-        <item>deepseek/deepseek-v4-pro</item>
+        <item>google/gemma-4-31b-it:free</item>
+        <item>google/gemma-4-26b-a4b-it:free</item>
+        <item>qwen/qwen3-next-80b-a3b-instruct:free</item>
+        <item>openrouter/free</item>
     </string-array>
 
     <string-array name="stt_model_labels">
