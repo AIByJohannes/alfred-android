@@ -255,7 +255,7 @@ class OpenRouterChatEngine(
         send(ChatStreamEvent.Completed(finalResult))
     }
 
-    internal fun createOpenRouterClient(): OpenRouterLLMClient {
+    fun createOpenRouterClient(): OpenRouterLLMClient {
         return OpenRouterLLMClient(apiKey, OpenRouterClientSettings(), KtorKoogHttpClient.Factory())
     }
 
@@ -472,14 +472,18 @@ class OpenRouterChatEngine(
                         completedParts = frame.summary.orEmpty(),
                         streamedText = reasoningSummaryById[key]?.toString()
                     )
-                    reasoningParts.add(
-                        ReasoningPart(
-                            id = key,
-                            content = content,
-                            summary = summary,
-                            encrypted = frame.encrypted
-                        )
+                    val newPart = ReasoningPart(
+                        id = key,
+                        content = content,
+                        summary = summary,
+                        encrypted = frame.encrypted
                     )
+                    val existingIndex = reasoningParts.indexOfFirst { it.id == key }
+                    if (existingIndex >= 0) {
+                        reasoningParts[existingIndex] = newPart
+                    } else {
+                        reasoningParts.add(newPart)
+                    }
                     onEvent(
                         ChatStreamEvent.ReasoningComplete(
                             passIndex = passIndex,

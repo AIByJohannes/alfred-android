@@ -88,6 +88,8 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
+    testImplementation(libs.koog.openrouter.client.jvm)
+    testImplementation(libs.koog.http.client.ktor)
     testImplementation(libs.coroutines.test)
     testImplementation(libs.arch.core.testing)
     testImplementation(libs.ktor.client.mock)

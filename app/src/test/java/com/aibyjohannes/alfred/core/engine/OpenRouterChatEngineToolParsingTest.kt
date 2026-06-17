@@ -1,10 +1,17 @@
 package com.aibyjohannes.alfred.core.engine
 
+import ai.koog.prompt.executor.clients.openrouter.OpenRouterLLMClient
+import ai.koog.prompt.streaming.StreamFrame
+import com.aibyjohannes.alfred.core.model.ChatStreamEvent
+import com.aibyjohannes.alfred.core.model.CoreChatMessageKind
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchClient
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchRequest
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchResult
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSource
 import com.aibyjohannes.alfred.core.search.WebSearchClient
+import io.mockk.*
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -167,6 +174,32 @@ class OpenRouterChatEngineToolParsingTest {
         assertTrue(checkIsError("Unknown TickTick action: do_something"))
     }
 
+    @Test
+    fun `streamSingleCompletion deduplicates multiple ReasoningComplete frames`() = runTest {
+        val client = mockk<OpenRouterLLMClient>(relaxed = true)
+        val engine = spyk(buildEngine()) {
+            every { createOpenRouterClient() } returns client
+        }
+
+        coEvery { client.executeStreaming(any(), any(), any()) } returns flowOf(
+            StreamFrame.ReasoningDelta(text = "Thinking...", summary = null),
+            StreamFrame.ReasoningComplete(id = "reasoning-0", content = listOf("Thinking..."), summary = emptyList(), encrypted = null),
+            StreamFrame.ReasoningComplete(id = "reasoning-0", content = listOf("Thinking... More thinking..."), summary = emptyList(), encrypted = null),
+            StreamFrame.TextDelta(text = "Final answer")
+        )
+
+        val events = mutableListOf<ChatStreamEvent>()
+        engine.streamMessage("hello", emptyList()).toList(events)
+
+        val completed = events.filterIsInstance<ChatStreamEvent.Completed>().firstOrNull()
+        requireNotNull(completed)
+
+        val intermediateMessages = completed.result.intermediateMessages
+        val reasoningMessages = intermediateMessages.filter { it.kind == CoreChatMessageKind.REASONING }
+
+        assertEquals("Should only have one reasoning message due to deduplication", 1, reasoningMessages.size)
+        assertEquals("Thinking... More thinking...", reasoningMessages.first().content)
+    }
 
     private fun buildEngine(): OpenRouterChatEngine {
         return OpenRouterChatEngine(
