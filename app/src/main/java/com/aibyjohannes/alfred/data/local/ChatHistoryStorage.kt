@@ -2,6 +2,7 @@ package com.aibyjohannes.alfred.data.local
 
 import android.content.Context
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
 
@@ -105,15 +106,15 @@ class DocumentChatHistoryStorage private constructor(
         require(path.isNotEmpty()) { "Path must not be empty" }
         var current = rootDirectory
         for (segment in path.dropLast(1)) {
-            current = current.findFile(segment)?.takeIf { it.isDirectory } ?: return null
+            current = findChild(context, current, segment)?.takeIf { it.isDirectory } ?: return null
         }
-        return current.findFile(path.last())
+        return findChild(context, current, path.last())
     }
 
     private fun getOrCreateFile(path: List<String>, mimeType: String): DocumentFile {
         require(path.isNotEmpty()) { "Path must not be empty" }
         val current = getOrCreateDirectory(path.dropLast(1))
-        return current.findFile(path.last())?.takeIf { it.isFile }
+        return findChild(context, current, path.last())?.takeIf { it.isFile }
             ?: current.createFile(mimeType, path.last())
             ?: throw IllegalStateException("Could not create file ${path.last()}")
     }
@@ -121,7 +122,7 @@ class DocumentChatHistoryStorage private constructor(
     private fun getOrCreateDirectory(path: List<String>): DocumentFile {
         var current = rootDirectory
         for (segment in path) {
-            current = current.findFile(segment)?.takeIf { it.isDirectory }
+            current = findChild(context, current, segment)?.takeIf { it.isDirectory }
                 ?: current.createDirectory(segment)
                 ?: throw IllegalStateException("Could not create folder $segment")
         }
@@ -134,10 +135,71 @@ class DocumentChatHistoryStorage private constructor(
         fun fromParentUri(context: Context, parentUri: Uri): DocumentChatHistoryStorage {
             val parent = DocumentFile.fromTreeUri(context, parentUri)
                 ?: throw IllegalArgumentException("Invalid chat history folder")
-            val root = parent.findFile(APP_FOLDER_NAME)?.takeIf { it.isDirectory }
-                ?: parent.createDirectory(APP_FOLDER_NAME)
-                ?: throw IllegalStateException("Could not create $APP_FOLDER_NAME folder")
+            
+            val isAlreadyRoot = parent.name?.equals(APP_FOLDER_NAME, ignoreCase = true) == true ||
+                    hasMetadataFile(context, parent)
+
+            val root = if (isAlreadyRoot) {
+                parent
+            } else {
+                val existing = findChild(context, parent, APP_FOLDER_NAME)
+                existing?.takeIf { it.isDirectory }
+                    ?: parent.createDirectory(APP_FOLDER_NAME)
+                    ?: throw IllegalStateException("Could not create $APP_FOLDER_NAME folder")
+            }
             return DocumentChatHistoryStorage(context.applicationContext, root)
+        }
+
+        private fun hasMetadataFile(context: Context, parent: DocumentFile): Boolean {
+            return findChild(context, parent, "metadata.json") != null
+        }
+
+        private fun findChild(context: Context, parent: DocumentFile, displayName: String): DocumentFile? {
+            try {
+                val file = parent.findFile(displayName)
+                if (file != null) return file
+            } catch (e: Exception) {
+                // Ignore and fall back to direct content resolver query
+            }
+
+            val resolver = context.contentResolver
+            try {
+                val parentDocId = DocumentsContract.getDocumentId(parent.uri)
+                val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+                    parent.uri,
+                    parentDocId
+                )
+                resolver.query(
+                    childrenUri,
+                    arrayOf(
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                        DocumentsContract.Document.COLUMN_MIME_TYPE
+                    ),
+                    null, null, null
+                )?.use { cursor ->
+                    val idIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                    val nameIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                    val mimeIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                    while (cursor.moveToNext()) {
+                        val name = cursor.getString(nameIndex)
+                        if (displayName.equals(name, ignoreCase = true)) {
+                            val docId = cursor.getString(idIndex)
+                            val mimeType = cursor.getString(mimeIndex)
+                            val isDir = DocumentsContract.Document.MIME_TYPE_DIR == mimeType
+                            val fileUri = DocumentsContract.buildDocumentUriUsingTree(parent.uri, docId)
+                            return if (isDir) {
+                                DocumentFile.fromTreeUri(context, fileUri)
+                            } else {
+                                DocumentFile.fromSingleUri(context, fileUri)
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // Ignore
+            }
+            return null
         }
     }
 }
