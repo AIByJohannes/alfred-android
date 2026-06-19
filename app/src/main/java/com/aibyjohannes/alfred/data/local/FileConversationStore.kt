@@ -263,23 +263,124 @@ class FileConversationStore private constructor(
         }
         state.activeConversationIdsByWorkspace[workspaceKey(workspace.id)] = id
         state.conversations.add(conversation)
-        storage.writeText(messagePath(conversation), "", JSONL_MIME_TYPE)
-        writeState(state)
+        val path = messagePath(conversation)
+        storage.createFileExclusive(path, JSONL_MIME_TYPE)
+        try {
+            writeState(state)
+        } catch (error: Exception) {
+            runCatching { storage.delete(path) }
+            throw error
+        }
         return conversation.toSummary()
     }
 
     private fun readState(): StoreState {
-        val raw = storage.readText(METADATA_PATH)
-        val state = if (raw.isNullOrBlank()) {
-            StoreState()
-        } else {
-            objectMapper.readValue(raw, StoreState::class.java)
+        val readResult = storage.readText(METADATA_PATH)
+        val metadataMissing = readResult is StorageReadResult.Missing
+        val state = when (readResult) {
+            StorageReadResult.Missing -> StoreState()
+            is StorageReadResult.Found -> {
+                check(readResult.text.isNotBlank()) { "Chat history metadata is empty" }
+                objectMapper.readValue(readResult.text, StoreState::class.java)
+            }
         }
+        val recovered = recoverUnindexedConversations(state)
         val changed = normalizeState(state)
-        if (changed || raw.isNullOrBlank()) {
+        if (changed || recovered || metadataMissing) {
             writeState(state)
         }
         return state
+    }
+
+    private fun recoverUnindexedConversations(state: StoreState): Boolean {
+        if (state.conversations.size > 1) return false
+
+        val indexedPaths = state.conversations.map { messagePath(it).joinToString("/") }.toSet()
+        val workspaceEntries = storage.listChildren(emptyList()).filter {
+            it.isDirectory && WORKSPACE_FOLDER_REGEX.matches(it.name)
+        }
+        var recovered = false
+        var maxMessageId = state.nextMessageId - 1L
+
+        for (workspaceEntry in workspaceEntries) {
+            val match = WORKSPACE_FOLDER_REGEX.matchEntire(workspaceEntry.name) ?: continue
+            val workspaceId = match.groupValues[1].toLongOrNull() ?: continue
+            val workspace = state.workspaces.firstOrNull { it.id == workspaceId }
+                ?: WorkspaceRecord().apply {
+                    id = workspaceId
+                    name = workspaceNameFromFolder(match.groupValues[2], workspaceId)
+                    folderName = workspaceEntry.name
+                }.also {
+                    state.workspaces.add(it)
+                    recovered = true
+                }
+
+            val conversationEntries = storage.listChildren(listOf(workspaceEntry.name)).filter {
+                !it.isDirectory && CONVERSATION_FILE_REGEX.matches(it.name)
+            }
+            for (entry in conversationEntries) {
+                val path = listOf(workspaceEntry.name, entry.name)
+                if (path.joinToString("/") in indexedPaths) continue
+                val conversationId = CONVERSATION_FILE_REGEX.matchEntire(entry.name)
+                    ?.groupValues?.get(1)?.toLongOrNull() ?: continue
+                if (state.conversations.any { it.id == conversationId }) continue
+
+                val messages = when (val result = storage.readText(path)) {
+                    StorageReadResult.Missing -> throw IllegalStateException(
+                        "Chat file disappeared during recovery: ${path.joinToString("/")}"
+                    )
+                    is StorageReadResult.Found -> parseRecoverableMessages(result.text)
+                }
+                if (messages.isEmpty()) continue
+
+                val createdAt = messages.minOf { it.createdAtEpochMs }
+                val updatedAt = messages.maxOf { it.createdAtEpochMs }
+                workspace.createdAtEpochMs = when {
+                    workspace.createdAtEpochMs == 0L -> createdAt
+                    else -> minOf(workspace.createdAtEpochMs, createdAt)
+                }
+                state.conversations.add(
+                    ConversationRecord().apply {
+                        id = conversationId
+                        title = messages.firstOrNull { it.role == ChatMessage.ROLE_USER }
+                            ?.content?.let(::buildConversationTitle)
+                        createdAtEpochMs = createdAt
+                        updatedAtEpochMs = updatedAt
+                        this.workspaceId = workspaceId
+                        workspaceFolderName = workspaceEntry.name
+                        fileName = entry.name
+                    }
+                )
+                maxMessageId = maxOf(maxMessageId, messages.maxOf { it.id })
+                recovered = true
+            }
+        }
+
+        if (recovered) {
+            state.nextWorkspaceId = maxOf(state.nextWorkspaceId, (state.workspaces.maxOfOrNull { it.id } ?: 0L) + 1L)
+            state.nextConversationId = maxOf(
+                state.nextConversationId,
+                (state.conversations.maxOfOrNull { it.id } ?: 0L) + 1L
+            )
+            state.nextMessageId = maxOf(state.nextMessageId, maxMessageId + 1L)
+        }
+        return recovered
+    }
+
+    private fun parseRecoverableMessages(raw: String): List<MessageRecord> {
+        return runCatching {
+            raw.lineSequence()
+                .filter { it.isNotBlank() }
+                .map { objectMapper.readValue(it, MessageRecord::class.java) }
+                .toList()
+        }.getOrElse { emptyList() }
+    }
+
+    private fun workspaceNameFromFolder(slug: String, workspaceId: Long): String {
+        return slug.split('-')
+            .filter { it.isNotBlank() }
+            .joinToString(" ") { part -> part.replaceFirstChar { it.titlecase(Locale.US) } }
+            .ifBlank { "Recovered Workspace $workspaceId" }
     }
 
     private fun normalizeState(state: StoreState): Boolean {
@@ -357,7 +458,13 @@ class FileConversationStore private constructor(
     }
 
     private fun readMessages(conversation: ConversationRecord): List<MessageRecord> {
-        val raw = storage.readText(messagePath(conversation)) ?: return emptyList()
+        val path = messagePath(conversation)
+        val raw = when (val result = storage.readText(path)) {
+            StorageReadResult.Missing -> throw IllegalStateException(
+                "Chat file is missing: ${path.joinToString("/")}"
+            )
+            is StorageReadResult.Found -> result.text
+        }
         return raw.lineSequence()
             .filter { it.isNotBlank() }
             .map { objectMapper.readValue(it, MessageRecord::class.java) }
@@ -484,6 +591,8 @@ class FileConversationStore private constructor(
 
     companion object {
         private val METADATA_PATH = listOf("metadata.json")
+        private val WORKSPACE_FOLDER_REGEX = Regex("workspace-(\\d+)-(.*)")
+        private val CONVERSATION_FILE_REGEX = Regex("conversation-(\\d+)\\.jsonl")
         private const val JSON_MIME_TYPE = "application/json"
         private const val JSONL_MIME_TYPE = "application/x-ndjson"
     }

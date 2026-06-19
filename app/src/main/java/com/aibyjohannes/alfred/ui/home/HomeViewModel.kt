@@ -98,6 +98,9 @@ class HomeViewModel : ViewModel() {
     private val _needsApiKey = MutableLiveData(false)
     val needsApiKey: LiveData<Boolean> = _needsApiKey
 
+    private val _storageError = MutableLiveData<String?>(null)
+    val storageError: LiveData<String?> = _storageError
+
     private val _voiceModeState = MutableLiveData(VoiceModeState.IDLE)
     val voiceModeState: LiveData<VoiceModeState> = _voiceModeState
 
@@ -136,6 +139,14 @@ class HomeViewModel : ViewModel() {
 
     fun checkApiKey() {
         _needsApiKey.value = apiKeyStore?.hasApiKey() != true
+    }
+
+    fun retryChatHistoryLoad() {
+        loadWorkspacesAndActiveConversation()
+    }
+
+    fun consumeStorageError() {
+        _storageError.value = null
     }
 
     suspend fun transcribeAudio(audioFile: java.io.File): Result<String> {
@@ -560,15 +571,20 @@ class HomeViewModel : ViewModel() {
     private fun loadWorkspacesAndActiveConversation() {
         val store = conversationStore ?: return
         viewModelScope.launch {
-            val activeWs = store.getOrCreateActiveWorkspace()
-            _activeWorkspaceId.value = activeWs.id
-            
-            val wsList = store.listWorkspaces().map { UiWorkspace(it.id, it.name) }
-            _workspaces.value = wsList
+            try {
+                val activeWs = store.getOrCreateActiveWorkspace()
+                _activeWorkspaceId.value = activeWs.id
 
-            val activeConversation = store.getOrCreateActiveConversation()
-            loadConversation(activeConversation)
-            refreshConversationList()
+                val wsList = store.listWorkspaces().map { UiWorkspace(it.id, it.name) }
+                _workspaces.value = wsList
+
+                val activeConversation = store.getOrCreateActiveConversation()
+                loadConversation(activeConversation)
+                refreshConversationList()
+                _storageError.value = null
+            } catch (error: Exception) {
+                _storageError.value = error.message ?: "Chat history is temporarily unavailable"
+            }
         }
     }
 

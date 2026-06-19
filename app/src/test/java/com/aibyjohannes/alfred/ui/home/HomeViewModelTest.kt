@@ -52,6 +52,35 @@ class HomeViewModelTest {
     }
 
     @Test
+    fun `chat history load failure is retryable without replacing current state`() = runTest {
+        val workspace = WorkspaceSummary(1L, "Personal")
+        val conversation = ConversationSummary(1L, "Recovered", System.currentTimeMillis())
+        coEvery { conversationStore.getOrCreateActiveWorkspace() } throws
+            IllegalStateException("Provider temporarily unavailable")
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        assert(viewModel.storageError.value == "Provider temporarily unavailable")
+        assert(viewModel.conversations.value.orEmpty().isEmpty())
+
+        coEvery { conversationStore.getOrCreateActiveWorkspace() } returns workspace
+        coEvery { conversationStore.listWorkspaces() } returns listOf(workspace)
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
+        coEvery { conversationStore.loadMessages(1L) } returns listOf(
+            StoredChatMessage(1L, ChatMessage.ROLE_USER, "Still here")
+        )
+        coEvery { conversationStore.listConversations() } returns listOf(conversation)
+
+        viewModel.retryChatHistoryLoad()
+        testScheduler.advanceUntilIdle()
+
+        assert(viewModel.storageError.value == null)
+        assert(viewModel.activeConversationId.value == 1L)
+        assert(viewModel.messages.value.orEmpty().single().content == "Still here")
+    }
+
+    @Test
     fun `createConversationAndSwitch creates new conversation if current is non-empty`() = runTest {
         // Arrange
         val initialConversation = ConversationSummary(1L, "First Chat", System.currentTimeMillis())

@@ -9,11 +9,24 @@ import java.io.File
 interface ChatHistoryStorage {
     fun ensureReady()
     fun ensureDirectory(path: List<String>)
-    fun readText(path: List<String>): String?
+    fun readText(path: List<String>): StorageReadResult
+    fun listChildren(path: List<String>): List<StorageEntry>
+    fun createFileExclusive(path: List<String>, mimeType: String = "text/plain")
     fun writeText(path: List<String>, text: String, mimeType: String = "text/plain")
     fun appendLine(path: List<String>, line: String, mimeType: String = "text/plain")
     fun delete(path: List<String>)
 }
+
+sealed interface StorageReadResult {
+    data class Found(val text: String) : StorageReadResult
+    data object Missing : StorageReadResult
+}
+
+data class StorageEntry(
+    val name: String,
+    val isDirectory: Boolean,
+    val size: Long
+)
 
 class FileChatHistoryStorage(
     private val rootDir: File
@@ -26,9 +39,28 @@ class FileChatHistoryStorage(
         directoryAt(path).mkdirs()
     }
 
-    override fun readText(path: List<String>): String? {
+    override fun readText(path: List<String>): StorageReadResult {
         val file = fileAt(path)
-        return if (file.exists()) file.readText() else null
+        return if (file.exists()) {
+            StorageReadResult.Found(file.readText())
+        } else {
+            StorageReadResult.Missing
+        }
+    }
+
+    override fun listChildren(path: List<String>): List<StorageEntry> {
+        val directory = if (path.isEmpty()) rootDir else directoryAt(path)
+        if (!directory.exists()) return emptyList()
+        check(directory.isDirectory) { "Not a directory: ${path.joinToString("/")}" }
+        return directory.listFiles().orEmpty().map { child ->
+            StorageEntry(child.name, child.isDirectory, if (child.isFile) child.length() else 0L)
+        }
+    }
+
+    override fun createFileExclusive(path: List<String>, mimeType: String) {
+        val file = fileAt(path)
+        file.parentFile?.mkdirs()
+        check(file.createNewFile()) { "File already exists: ${path.joinToString("/")}" }
     }
 
     override fun writeText(path: List<String>, text: String, mimeType: String) {
@@ -45,11 +77,13 @@ class FileChatHistoryStorage(
 
     override fun delete(path: List<String>) {
         val file = fileAt(path)
-        if (file.isDirectory) {
+        if (!file.exists()) return
+        val deleted = if (file.isDirectory) {
             file.deleteRecursively()
         } else {
             file.delete()
         }
+        check(deleted) { "Could not delete ${path.joinToString("/")}" }
     }
 
     private fun fileAt(path: List<String>): File {
@@ -76,9 +110,28 @@ class DocumentChatHistoryStorage private constructor(
         getOrCreateDirectory(path)
     }
 
-    override fun readText(path: List<String>): String? {
-        val file = findFile(path) ?: return null
-        return context.contentResolver.openInputStream(file.uri)?.bufferedReader()?.use { it.readText() }
+    override fun readText(path: List<String>): StorageReadResult {
+        val file = findFile(path) ?: return StorageReadResult.Missing
+        val stream = context.contentResolver.openInputStream(file.uri)
+            ?: throw IllegalStateException("Could not open ${path.last()} for reading")
+        return StorageReadResult.Found(stream.bufferedReader().use { it.readText() })
+    }
+
+    override fun listChildren(path: List<String>): List<StorageEntry> {
+        val directory = if (path.isEmpty()) rootDirectory else findFile(path)
+            ?: return emptyList()
+        check(directory.isDirectory) { "Not a directory: ${path.joinToString("/")}" }
+        return queryChildren(context, directory)
+    }
+
+    override fun createFileExclusive(path: List<String>, mimeType: String) {
+        require(path.isNotEmpty()) { "Path must not be empty" }
+        val current = getOrCreateDirectory(path.dropLast(1))
+        check(findChild(context, current, path.last()) == null) {
+            "File already exists: ${path.joinToString("/")}"
+        }
+        current.createFile(mimeType, path.last())
+            ?: throw IllegalStateException("Could not create file ${path.last()}")
     }
 
     override fun writeText(path: List<String>, text: String, mimeType: String) {
@@ -99,7 +152,8 @@ class DocumentChatHistoryStorage private constructor(
     }
 
     override fun delete(path: List<String>) {
-        findFile(path)?.delete()
+        val file = findFile(path) ?: return
+        check(file.delete()) { "Could not delete ${path.joinToString("/")}" }
     }
 
     private fun findFile(path: List<String>): DocumentFile? {
@@ -158,48 +212,71 @@ class DocumentChatHistoryStorage private constructor(
             try {
                 val file = parent.findFile(displayName)
                 if (file != null) return file
-            } catch (e: Exception) {
-                // Ignore and fall back to direct content resolver query
+            } catch (_: Exception) {
+                // Fall back to a direct provider query, which either succeeds or throws.
             }
 
-            val resolver = context.contentResolver
-            try {
-                val parentDocId = DocumentsContract.getDocumentId(parent.uri)
-                val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
-                    parent.uri,
-                    parentDocId
-                )
-                resolver.query(
-                    childrenUri,
-                    arrayOf(
-                        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                        DocumentsContract.Document.COLUMN_MIME_TYPE
-                    ),
-                    null, null, null
-                )?.use { cursor ->
-                    val idIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-                    val nameIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                    val mimeIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
-                    while (cursor.moveToNext()) {
-                        val name = cursor.getString(nameIndex)
-                        if (displayName.equals(name, ignoreCase = true)) {
-                            val docId = cursor.getString(idIndex)
-                            val mimeType = cursor.getString(mimeIndex)
-                            val isDir = DocumentsContract.Document.MIME_TYPE_DIR == mimeType
-                            val fileUri = DocumentsContract.buildDocumentUriUsingTree(parent.uri, docId)
-                            return if (isDir) {
-                                DocumentFile.fromTreeUri(context, fileUri)
-                            } else {
-                                DocumentFile.fromSingleUri(context, fileUri)
-                            }
+            val parentDocId = DocumentsContract.getDocumentId(parent.uri)
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(parent.uri, parentDocId)
+            val cursor = context.contentResolver.query(
+                childrenUri,
+                arrayOf(
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE
+                ),
+                null, null, null
+            ) ?: throw IllegalStateException("Could not query children of ${parent.name}")
+            cursor.use {
+                val idIndex = it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameIndex = it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val mimeIndex = it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                while (it.moveToNext()) {
+                    val name = it.getString(nameIndex)
+                    if (displayName.equals(name, ignoreCase = true)) {
+                        val docId = it.getString(idIndex)
+                        val mimeType = it.getString(mimeIndex)
+                        val isDir = DocumentsContract.Document.MIME_TYPE_DIR == mimeType
+                        val fileUri = DocumentsContract.buildDocumentUriUsingTree(parent.uri, docId)
+                        return if (isDir) {
+                            DocumentFile.fromTreeUri(context, fileUri)
+                        } else {
+                            DocumentFile.fromSingleUri(context, fileUri)
                         }
                     }
                 }
-            } catch (e: Exception) {
-                // Ignore
             }
             return null
+        }
+
+        private fun queryChildren(context: Context, parent: DocumentFile): List<StorageEntry> {
+            val parentDocId = DocumentsContract.getDocumentId(parent.uri)
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(parent.uri, parentDocId)
+            val cursor = context.contentResolver.query(
+                childrenUri,
+                arrayOf(
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE,
+                    DocumentsContract.Document.COLUMN_SIZE
+                ),
+                null, null, null
+            ) ?: throw IllegalStateException("Could not query children of ${parent.name}")
+            return cursor.use {
+                val nameIndex = it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val mimeIndex = it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                val sizeIndex = it.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+                buildList {
+                    while (it.moveToNext()) {
+                        add(
+                            StorageEntry(
+                                name = it.getString(nameIndex),
+                                isDirectory = it.getString(mimeIndex) == DocumentsContract.Document.MIME_TYPE_DIR,
+                                size = if (sizeIndex >= 0 && !it.isNull(sizeIndex)) it.getLong(sizeIndex) else 0L
+                            )
+                        )
+                    }
+                }
+            }
         }
     }
 }

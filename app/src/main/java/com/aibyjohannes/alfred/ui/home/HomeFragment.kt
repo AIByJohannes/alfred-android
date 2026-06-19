@@ -470,6 +470,17 @@ class HomeFragment : Fragment() {
             binding.apiKeyWarning.isVisible = needsKey
         }
 
+        homeViewModel.storageError.observe(viewLifecycleOwner) { detail ->
+            if (!detail.isNullOrBlank()) {
+                Toast.makeText(
+                    context,
+                    getString(R.string.chat_history_temporarily_unavailable, detail),
+                    Toast.LENGTH_LONG
+                ).show()
+                homeViewModel.consumeStorageError()
+            }
+        }
+
         homeViewModel.ttsAudioFile.observe(viewLifecycleOwner) { file ->
             if (file != null && isInVoiceMode) {
                 playTtsFile(file)

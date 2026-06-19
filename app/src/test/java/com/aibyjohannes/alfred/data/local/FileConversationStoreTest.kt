@@ -9,6 +9,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.util.LinkedHashMap
 
 class FileConversationStoreTest {
     @get:Rule
@@ -186,5 +187,144 @@ class FileConversationStoreTest {
 
         val visibleHits = store.searchSessionMessages("Kotlin release", limit = 10)
         assertTrue(visibleHits.isNotEmpty())
+    }
+
+    @Test
+    fun `transient metadata read failure never overwrites the index or chat files`() = runTest {
+        val storage = FaultInjectingStorage()
+        val store = FileConversationStore(storage)
+        val first = store.getOrCreateActiveConversation()
+        store.appendMessage(first.id, ChatMessage.ROLE_USER, "First chat")
+        val second = store.createConversation()
+        store.appendMessage(second.id, ChatMessage.ROLE_USER, "Second chat")
+        val filesBeforeFailure = storage.files.toMap()
+
+        storage.failNextMetadataRead = true
+        val failure = runCatching { store.getOrCreateActiveWorkspace() }
+
+        assertTrue("A transient read must fail closed", failure.isFailure)
+        assertEquals(filesBeforeFailure, storage.files)
+        assertEquals(2, FileConversationStore(storage).listConversations().size)
+    }
+
+    @Test
+    fun `existing orphan file is never truncated when metadata is missing`() = runTest {
+        val storage = FaultInjectingStorage()
+        storage.files["workspace-1-personal/conversation-1.jsonl"] =
+            """{"id":1,"conversationId":1,"role":"user","content":"Keep me","createdAtEpochMs":123}""" + "\n"
+
+        val result = runCatching { FileConversationStore(storage).getOrCreateActiveConversation() }
+
+        assertTrue("The existing chat should be recovered", result.isSuccess)
+        assertEquals("Keep me", FileConversationStore(storage).loadMessages(1L).single().content)
+        assertTrue(storage.files.getValue("workspace-1-personal/conversation-1.jsonl").isNotBlank())
+    }
+
+    @Test
+    fun `surviving orphan is recovered from an already reset index`() = runTest {
+        val original = FaultInjectingStorage()
+        val originalStore = FileConversationStore(original)
+        val first = originalStore.getOrCreateActiveConversation()
+        originalStore.appendMessage(first.id, ChatMessage.ROLE_USER, "First chat")
+        val second = originalStore.createConversation()
+        originalStore.appendMessage(second.id, ChatMessage.ROLE_USER, "Second chat survives")
+        val survivingSecondChat = original.files.getValue("workspace-1-personal/conversation-2.jsonl")
+
+        val reset = FaultInjectingStorage()
+        FileConversationStore(reset).getOrCreateActiveConversation()
+        reset.files["workspace-1-personal/conversation-2.jsonl"] = survivingSecondChat
+
+        val recoveredStore = FileConversationStore(reset)
+
+        assertEquals(2, recoveredStore.listConversations().size)
+        assertEquals("Second chat survives", recoveredStore.loadMessages(2L).single().content)
+        assertTrue(reset.files.getValue("workspace-1-personal/conversation-2.jsonl").isNotBlank())
+    }
+
+    @Test
+    fun `blank metadata is treated as corruption and is not overwritten`() = runTest {
+        val storage = FaultInjectingStorage().apply {
+            files["metadata.json"] = ""
+        }
+
+        val failure = runCatching { FileConversationStore(storage).listConversations() }
+
+        assertTrue(failure.isFailure)
+        assertEquals("", storage.files.getValue("metadata.json"))
+    }
+
+    @Test
+    fun `failed chat file deletion keeps metadata indexed`() = runTest {
+        val storage = FaultInjectingStorage()
+        val store = FileConversationStore(storage)
+        val conversation = store.getOrCreateActiveConversation()
+        store.appendMessage(conversation.id, ChatMessage.ROLE_USER, "Do not lose me")
+        val metadataBeforeDelete = storage.files.getValue("metadata.json")
+        storage.failDelete = true
+
+        val failure = runCatching { store.deleteConversation(conversation.id) }
+
+        assertTrue(failure.isFailure)
+        assertEquals(metadataBeforeDelete, storage.files.getValue("metadata.json"))
+        assertEquals(1, FileConversationStore(storage).listConversations().size)
+    }
+
+    private class FaultInjectingStorage : ChatHistoryStorage {
+        val files = LinkedHashMap<String, String>()
+        var failNextMetadataRead = false
+        var failDelete = false
+
+        override fun ensureReady() = Unit
+
+        override fun ensureDirectory(path: List<String>) = Unit
+
+        override fun readText(path: List<String>): StorageReadResult {
+            val key = path.joinToString("/")
+            if (key == "metadata.json" && failNextMetadataRead) {
+                failNextMetadataRead = false
+                throw IllegalStateException("Transient provider failure")
+            }
+            return files[key]?.let(StorageReadResult::Found) ?: StorageReadResult.Missing
+        }
+
+        override fun listChildren(path: List<String>): List<StorageEntry> {
+            val prefix = path.joinToString("/").let { if (it.isBlank()) "" else "$it/" }
+            return files.keys
+                .asSequence()
+                .filter { it.startsWith(prefix) }
+                .map { it.removePrefix(prefix) }
+                .filter { it.isNotBlank() }
+                .map { it.substringBefore('/') }
+                .distinct()
+                .map { name ->
+                    val key = "$prefix$name"
+                    val isDirectory = files.keys.any { it.startsWith("$key/") }
+                    StorageEntry(name, isDirectory, if (isDirectory) 0L else files[key]?.length?.toLong() ?: 0L)
+                }
+                .toList()
+        }
+
+        override fun createFileExclusive(path: List<String>, mimeType: String) {
+            val key = path.joinToString("/")
+            check(!files.containsKey(key)) { "File already exists: $key" }
+            files[key] = ""
+        }
+
+        override fun writeText(path: List<String>, text: String, mimeType: String) {
+            files[path.joinToString("/")] = text
+        }
+
+        override fun appendLine(path: List<String>, line: String, mimeType: String) {
+            files.merge(path.joinToString("/"), "$line\n", String::plus)
+        }
+
+        override fun delete(path: List<String>) {
+            if (failDelete) {
+                failDelete = false
+                throw IllegalStateException("Delete failed")
+            }
+            val key = path.joinToString("/")
+            files.keys.removeAll { it == key || it.startsWith("$key/") }
+        }
     }
 }
