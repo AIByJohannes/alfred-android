@@ -15,9 +15,11 @@ import com.aibyjohannes.alfred.data.ApiKeyStore
 import com.aibyjohannes.alfred.data.ChatRepository
 import com.aibyjohannes.alfred.data.ProfilePreferencesStore
 import com.aibyjohannes.alfred.data.local.ChatHistoryLocationStore
+import com.aibyjohannes.alfred.data.local.DocumentObsidianClient
 import com.aibyjohannes.alfred.data.local.FileConversationStore
 import com.aibyjohannes.alfred.data.local.FileLocalKnowledgeSearchClient
 import com.aibyjohannes.alfred.data.local.FileMemorySearchSource
+import com.aibyjohannes.alfred.data.local.ObsidianVaultStore
 import com.aibyjohannes.alfred.ui.home.ConversationAdapter
 import com.aibyjohannes.alfred.ui.home.HomeViewModel
 import com.aibyjohannes.alfred.ui.home.UiConversation
@@ -121,7 +123,13 @@ class MainActivity : AppCompatActivity() {
             conversationStore = conversationStore,
             memorySearchSource = FileMemorySearchSource(filesDir.resolve("memories.jsonl"))
         )
-        val repository = ChatRepository(apiKeyStore, localKnowledgeSearchClient)
+        val obsidianVaultStore = ObsidianVaultStore(this)
+        val obsidianClient = if (obsidianVaultStore.hasUsableFolder()) {
+            DocumentObsidianClient(this, obsidianVaultStore.parentFolderUri!!)
+        } else {
+            null
+        }
+        val repository = ChatRepository(apiKeyStore, localKnowledgeSearchClient, obsidianClient)
         val sysInfoProvider = SysInfoProvider(this)
         homeViewModel.initialize(
             apiKeyStore = apiKeyStore,

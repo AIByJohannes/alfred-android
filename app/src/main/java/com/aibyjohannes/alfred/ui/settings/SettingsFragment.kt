@@ -15,6 +15,7 @@ import androidx.fragment.app.Fragment
 import com.aibyjohannes.alfred.R
 import com.aibyjohannes.alfred.data.ApiKeyStore
 import com.aibyjohannes.alfred.data.ProfilePreferencesStore
+import com.aibyjohannes.alfred.data.local.ObsidianVaultStore
 import com.aibyjohannes.alfred.databinding.FragmentSettingsBinding
 import com.aibyjohannes.alfred.notifications.NotificationPreferencesStore
 import com.aibyjohannes.alfred.notifications.NotificationScheduler
@@ -42,6 +43,8 @@ class SettingsFragment : Fragment() {
     private lateinit var profilePreferencesStore: ProfilePreferencesStore
     private lateinit var notificationPreferencesStore: NotificationPreferencesStore
     private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
+    private lateinit var obsidianVaultStore: ObsidianVaultStore
+    private lateinit var obsidianFolderLauncher: ActivityResultLauncher<Uri?>
     private var oauthServer: TickTickOAuthServer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,6 +64,20 @@ class SettingsFragment : Fragment() {
                 }
             }
         }
+
+        obsidianFolderLauncher = registerForActivityResult(
+            ActivityResultContracts.OpenDocumentTree()
+        ) { uri ->
+            if (uri != null) {
+                try {
+                    obsidianVaultStore.persistFolder(uri)
+                    updateObsidianStatus()
+                    Snackbar.make(binding.root, R.string.obsidian_connected_success, Snackbar.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    Snackbar.make(binding.root, "Failed to connect vault: ${e.message}", Snackbar.LENGTH_LONG).show()
+                }
+            }
+        }
     }
 
     override fun onCreateView(
@@ -74,6 +91,7 @@ class SettingsFragment : Fragment() {
         apiKeyStore = ApiKeyStore(requireContext())
         profilePreferencesStore = ProfilePreferencesStore(requireContext())
         notificationPreferencesStore = NotificationPreferencesStore(requireContext())
+        obsidianVaultStore = ObsidianVaultStore(requireContext())
 
         setupButtons()
         setupProfileControls()
@@ -86,6 +104,8 @@ class SettingsFragment : Fragment() {
         updateNotificationControls()
         setupTickTickControls()
         updateTickTickStatus()
+        setupObsidianControls()
+        updateObsidianStatus()
 
         return root
     }
@@ -410,6 +430,44 @@ class SettingsFragment : Fragment() {
                     Snackbar.make(binding.root, getString(R.string.ticktick_auth_failed, e.message ?: "Unknown error"), Snackbar.LENGTH_LONG).show()
                 }
             }
+        }
+    }
+
+    private fun setupObsidianControls() {
+        binding.obsidianConnectButton.setOnClickListener {
+            obsidianFolderLauncher.launch(null)
+        }
+        binding.obsidianDisconnectButton.setOnClickListener {
+            obsidianVaultStore.clearFolder()
+            updateObsidianStatus()
+            Snackbar.make(binding.root, R.string.obsidian_cleared, Snackbar.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun updateObsidianStatus() {
+        if (!::obsidianVaultStore.isInitialized || _binding == null) return
+
+        val isConnected = obsidianVaultStore.hasUsableFolder()
+        if (isConnected) {
+            binding.obsidianStatusChip.setText(R.string.obsidian_status_connected)
+            binding.obsidianStatusChip.chipBackgroundColor = ColorStateList.valueOf(
+                ContextCompat.getColor(requireContext(), R.color.status_configured_bg)
+            )
+            binding.obsidianStatusChip.setTextColor(
+                ContextCompat.getColor(requireContext(), R.color.status_configured_text)
+            )
+            binding.obsidianConnectButton.isEnabled = false
+            binding.obsidianDisconnectButton.isEnabled = true
+        } else {
+            binding.obsidianStatusChip.setText(R.string.obsidian_status_not_connected)
+            binding.obsidianStatusChip.chipBackgroundColor = ColorStateList.valueOf(
+                ContextCompat.getColor(requireContext(), R.color.status_not_configured_bg)
+            )
+            binding.obsidianStatusChip.setTextColor(
+                ContextCompat.getColor(requireContext(), R.color.status_not_configured_text)
+            )
+            binding.obsidianConnectButton.isEnabled = true
+            binding.obsidianDisconnectButton.isEnabled = false
         }
     }
 

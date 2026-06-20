@@ -23,6 +23,7 @@ import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchClient
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchRequest
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchResult
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSource
+import com.aibyjohannes.alfred.core.search.ObsidianClient
 import com.aibyjohannes.alfred.core.search.WebSearchClient
 import com.aibyjohannes.alfred.core.ticktick.TickTickClient
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -40,7 +41,8 @@ class OpenRouterChatEngine(
     private val prompt: String = SystemPrompts.SYSTEM_PROMPT,
     private val webSearchClient: WebSearchClient,
     private val localKnowledgeSearchClient: LocalKnowledgeSearchClient? = null,
-    private val tickTickClient: TickTickClient? = null
+    private val tickTickClient: TickTickClient? = null,
+    private val obsidianClient: ObsidianClient? = null
 ) : ChatEngine {
     private val objectMapper = ObjectMapper()
     private val effectiveLocalKnowledgeSearchClient: LocalKnowledgeSearchClient =
@@ -200,7 +202,11 @@ class OpenRouterChatEngine(
                             result.startsWith("TickTick integration is not configured", ignoreCase = true) ||
                             result.startsWith("Error:", ignoreCase = true) ||
                             result.startsWith("Unknown TickTick action", ignoreCase = true) ||
-                            result.startsWith("Smart model delegation failed", ignoreCase = true)
+                            result.startsWith("Smart model delegation failed", ignoreCase = true) ||
+                            result.startsWith("Obsidian search failed", ignoreCase = true) ||
+                            result.startsWith("Obsidian read failed", ignoreCase = true) ||
+                            result.startsWith("Obsidian write failed", ignoreCase = true) ||
+                            result.startsWith("Obsidian integration is not configured", ignoreCase = true)
                         traces.add(
                             ToolCallTrace(
                                 id = toolCall.id,
@@ -275,7 +281,7 @@ class OpenRouterChatEngine(
     }
 
     internal fun buildAlfredToolDescriptors(mcpTools: List<ToolDescriptor> = emptyList()): List<ToolDescriptor> {
-        return listOf(
+        val alfredTools = mutableListOf(
             ToolDescriptor(
                 name = WEB_SEARCH_FUNCTION_NAME,
                 description = "Search the web for current information.",
@@ -328,7 +334,63 @@ class OpenRouterChatEngine(
                     )
                 )
             )
-        ) + mcpTools
+        )
+
+        if (obsidianClient != null) {
+            alfredTools.add(
+                ToolDescriptor(
+                    name = OBSIDIAN_SEARCH_TOOL,
+                    description = "Search for notes in the Obsidian vault by matching keywords in filenames or note content.",
+                    requiredParameters = listOf(
+                        ToolParameterDescriptor(
+                            name = "query",
+                            description = "The search query/terms to look up in the notes",
+                            type = ToolParameterType.String
+                        )
+                    )
+                )
+            )
+            alfredTools.add(
+                ToolDescriptor(
+                    name = OBSIDIAN_READ_TOOL,
+                    description = "Read the full content of an Obsidian note by its relative path.",
+                    requiredParameters = listOf(
+                        ToolParameterDescriptor(
+                            name = "path",
+                            description = "The relative path of the note within the vault (e.g. 'Project/Planning.md')",
+                            type = ToolParameterType.String
+                        )
+                    )
+                )
+            )
+            alfredTools.add(
+                ToolDescriptor(
+                    name = OBSIDIAN_WRITE_TOOL,
+                    description = "Write or append content to an Obsidian note at the specified relative path.",
+                    requiredParameters = listOf(
+                        ToolParameterDescriptor(
+                            name = "path",
+                            description = "The relative path of the note within the vault (e.g. 'Project/Planning.md')",
+                            type = ToolParameterType.String
+                        ),
+                        ToolParameterDescriptor(
+                            name = "content",
+                            description = "The text content to write or append to the note",
+                            type = ToolParameterType.String
+                        )
+                    ),
+                    optionalParameters = listOf(
+                        ToolParameterDescriptor(
+                            name = "append",
+                            description = "If true, appends the content to the end of the note instead of overwriting. Defaults to false.",
+                            type = ToolParameterType.Boolean
+                        )
+                    )
+                )
+            )
+        }
+
+        return alfredTools + mcpTools
     }
 
     private fun buildConversationPrompt(
@@ -595,6 +657,42 @@ class OpenRouterChatEngine(
                 }
             }
 
+            OBSIDIAN_SEARCH_TOOL -> {
+                val query = extractObsidianSearchQuery(arguments)
+                if (query.isNullOrBlank()) {
+                    "Obsidian search failed: missing required 'query' argument."
+                } else {
+                    obsidianClient?.search(query)?.fold(
+                        onSuccess = { it },
+                        onFailure = { "Obsidian search failed: ${it.message}" }
+                    ) ?: "Obsidian integration is not configured."
+                }
+            }
+
+            OBSIDIAN_READ_TOOL -> {
+                val path = extractObsidianReadPath(arguments)
+                if (path.isNullOrBlank()) {
+                    "Obsidian read failed: missing required 'path' argument."
+                } else {
+                    obsidianClient?.read(path)?.fold(
+                        onSuccess = { it },
+                        onFailure = { "Obsidian read failed: ${it.message}" }
+                    ) ?: "Obsidian integration is not configured."
+                }
+            }
+
+            OBSIDIAN_WRITE_TOOL -> {
+                val request = extractObsidianWriteRequest(arguments)
+                if (request == null || request.path.isBlank() || request.content.isBlank()) {
+                    "Obsidian write failed: missing required 'path' or 'content' argument."
+                } else {
+                    obsidianClient?.write(request.path, request.content, request.append)?.fold(
+                        onSuccess = { it },
+                        onFailure = { "Obsidian write failed: ${it.message}" }
+                    ) ?: "Obsidian integration is not configured."
+                }
+            }
+
             else -> {
                 val client = tickTickClient
                 if (client == null) {
@@ -728,6 +826,42 @@ class OpenRouterChatEngine(
         return finalResult
     }
 
+    data class ObsidianWriteRequest(
+        val path: String,
+        val content: String,
+        val append: Boolean
+    )
+
+    internal fun extractObsidianSearchQuery(argumentsJson: String): String? {
+        return try {
+            val node = objectMapper.readTree(argumentsJson)
+            node.path("query").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    internal fun extractObsidianReadPath(argumentsJson: String): String? {
+        return try {
+            val node = objectMapper.readTree(argumentsJson)
+            node.path("path").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    internal fun extractObsidianWriteRequest(argumentsJson: String): ObsidianWriteRequest? {
+        return try {
+            val node = objectMapper.readTree(argumentsJson)
+            val path = node.path("path").asText(null)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            val content = node.path("content").asText(null)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            val append = node.path("append").asBoolean(false)
+            ObsidianWriteRequest(path, content, append)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     internal fun preferFullerReasoning(completedParts: List<String>, streamedText: String?): List<String> {
         val streamed = streamedText?.takeIf { it.isNotBlank() } ?: return completedParts
         val completedText = completedParts.joinToString("\n")
@@ -750,6 +884,9 @@ class OpenRouterChatEngine(
         const val LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME = "SearchLocalKnowledgeTool"
         const val TICKTICK_FUNCTION_NAME = "TickTickTool"
         const val ASK_SMART_MODEL_FUNCTION_NAME = "AskSmartModelTool"
+        const val OBSIDIAN_SEARCH_TOOL = "SearchObsidianVaultTool"
+        const val OBSIDIAN_READ_TOOL = "ReadObsidianNoteTool"
+        const val OBSIDIAN_WRITE_TOOL = "WriteObsidianNoteTool"
         private const val MAX_AGENT_PASSES = 6
     }
 }

@@ -118,4 +118,13 @@
     <string name="ticktick_auth_success">TickTick MCP authenticated successfully</string>
     <string name="ticktick_auth_failed">TickTick MCP authentication failed: %1$s</string>
     <string name="ticktick_cleared">TickTick MCP credentials disconnected</string>
+    <!-- Obsidian Settings -->
+    <string name="obsidian_title">Obsidian Vault Connection</string>
+    <string name="obsidian_description">Connect to an Obsidian vault folder to enable the local notes search and write tools.</string>
+    <string name="obsidian_connect">Choose Vault Folder</string>
+    <string name="obsidian_disconnect">Disconnect Vault</string>
+    <string name="obsidian_status_connected">Connected</string>
+    <string name="obsidian_status_not_connected">Not Connected</string>
+    <string name="obsidian_cleared">Obsidian vault disconnected</string>
+    <string name="obsidian_connected_success">Obsidian vault connected successfully</string>
 </resources>

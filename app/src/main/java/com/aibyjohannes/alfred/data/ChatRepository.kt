@@ -5,6 +5,7 @@ import com.aibyjohannes.alfred.core.engine.ChatEngine
 import com.aibyjohannes.alfred.core.engine.OpenRouterChatEngine
 import com.aibyjohannes.alfred.core.model.ChatStreamEvent
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchClient
+import com.aibyjohannes.alfred.core.search.ObsidianClient
 import com.aibyjohannes.alfred.core.model.CoreChatMessage
 import com.aibyjohannes.alfred.core.model.CoreChatMessageKind
 import com.aibyjohannes.alfred.core.search.PerplexitySearchClient
@@ -21,7 +22,8 @@ import java.io.File
 
 class ChatRepository(
     private val apiKeyStore: ApiKeyStore,
-    private val localKnowledgeSearchClient: LocalKnowledgeSearchClient? = null
+    private val localKnowledgeSearchClient: LocalKnowledgeSearchClient? = null,
+    private val obsidianClient: ObsidianClient? = null
 ) {
     suspend fun transcribeAudio(audioFile: java.io.File): Result<String> {
         val apiKey = apiKeyStore.loadOpenRouterKey()
@@ -137,7 +139,8 @@ class ChatRepository(
                 model = PERPLEXITY_MODEL
             ),
             localKnowledgeSearchClient = localKnowledgeSearchClient,
-            tickTickClient = tickTickClient
+            tickTickClient = tickTickClient,
+            obsidianClient = obsidianClient
         )
     }
 
