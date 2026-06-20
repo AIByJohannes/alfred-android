@@ -3,6 +3,12 @@ plugins {
     alias(libs.plugins.android.application) apply false
     alias(libs.plugins.kotlin.android) apply false
     alias(libs.plugins.kotlin.jvm) apply false
+    alias(libs.plugins.kover)
+}
+
+dependencies {
+    kover(project(":app"))
+    kover(project(":core"))
 }
 
 tasks.register("evalSmoke") {
@@ -27,4 +33,19 @@ tasks.register("evalFullStrict") {
     group = "verification"
     description = "Runs full LLM evals in strict mode."
     dependsOn(":evals:fullEvalStrict")
+}
+
+kover {
+    reports {
+        filters {
+            excludes {
+                classes(
+                    "*.R",
+                    "*.R$*",
+                    "*.BuildConfig",
+                    "com.aibyjohannes.alfred.databinding.*"
+                )
+            }
+        }
+    }
 }

@@ -25,6 +25,7 @@ coroutinesTest = "1.10.2"
 archCoreTesting = "2.2.0"
 openaiJava = "4.23.0"
 koog = "1.0.0"
+kover = "0.9.8"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -65,3 +66,4 @@ koog-http-client-ktor = { group = "ai.koog", name = "http-client-ktor", version.
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }
