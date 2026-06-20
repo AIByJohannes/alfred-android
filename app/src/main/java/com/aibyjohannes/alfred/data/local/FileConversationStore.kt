@@ -277,24 +277,38 @@ class FileConversationStore private constructor(
     private fun readState(): StoreState {
         val readResult = storage.readText(METADATA_PATH)
         val metadataMissing = readResult is StorageReadResult.Missing
+        var metadataNeedsRepair = false
         val state = when (readResult) {
-            StorageReadResult.Missing -> StoreState()
+            StorageReadResult.Missing -> {
+                readBackupState()?.also { metadataNeedsRepair = true } ?: StoreState()
+            }
             is StorageReadResult.Found -> {
-                check(readResult.text.isNotBlank()) { "Chat history metadata is empty" }
-                objectMapper.readValue(readResult.text, StoreState::class.java)
+                runCatching { parseState(readResult.text) }.getOrElse { primaryError ->
+                    readBackupState()?.also { metadataNeedsRepair = true } ?: throw primaryError
+                }
             }
         }
         val recovered = recoverUnindexedConversations(state)
         val changed = normalizeState(state)
-        if (changed || recovered || metadataMissing) {
+        if (changed || recovered || metadataMissing || metadataNeedsRepair) {
             writeState(state)
         }
         return state
     }
 
-    private fun recoverUnindexedConversations(state: StoreState): Boolean {
-        if (state.conversations.size > 1) return false
+    private fun readBackupState(): StoreState? {
+        return when (val backup = storage.readText(METADATA_BACKUP_PATH)) {
+            StorageReadResult.Missing -> null
+            is StorageReadResult.Found -> runCatching { parseState(backup.text) }.getOrNull()
+        }
+    }
 
+    private fun parseState(raw: String): StoreState {
+        check(raw.isNotBlank()) { "Chat history metadata is empty" }
+        return objectMapper.readValue(raw, StoreState::class.java)
+    }
+
+    private fun recoverUnindexedConversations(state: StoreState): Boolean {
         val indexedPaths = state.conversations.map { messagePath(it).joinToString("/") }.toSet()
         val workspaceEntries = storage.listChildren(emptyList()).filter {
             it.isDirectory && WORKSPACE_FOLDER_REGEX.matches(it.name)
@@ -450,11 +464,46 @@ class FileConversationStore private constructor(
     }
 
     private fun writeState(state: StoreState) {
-        storage.writeText(
-            METADATA_PATH,
-            objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(state),
-            JSON_MIME_TYPE
-        )
+        val serialized = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(state)
+        val previousMetadata = when (val current = storage.readText(METADATA_PATH)) {
+            StorageReadResult.Missing -> null
+            is StorageReadResult.Found -> current.text.takeIf { raw ->
+                runCatching { parseState(raw) }.isSuccess
+            }
+        }
+
+        if (previousMetadata == serialized) {
+            return
+        }
+
+        if (previousMetadata != null) {
+            storage.writeText(METADATA_BACKUP_PATH, previousMetadata, JSON_MIME_TYPE)
+            verifyStoredText(METADATA_BACKUP_PATH, previousMetadata)
+        }
+
+        try {
+            storage.writeText(METADATA_PATH, serialized, JSON_MIME_TYPE)
+            verifyStoredText(METADATA_PATH, serialized)
+        } catch (error: Exception) {
+            if (previousMetadata != null) {
+                runCatching {
+                    storage.writeText(METADATA_PATH, previousMetadata, JSON_MIME_TYPE)
+                    verifyStoredText(METADATA_PATH, previousMetadata)
+                }
+            }
+            throw error
+        }
+    }
+
+    private fun verifyStoredText(path: List<String>, expected: String) {
+        when (val stored = storage.readText(path)) {
+            StorageReadResult.Missing -> throw IllegalStateException(
+                "Metadata file disappeared after writing: ${path.joinToString("/")}"
+            )
+            is StorageReadResult.Found -> check(stored.text == expected) {
+                "Metadata verification failed: ${path.joinToString("/")}"
+            }
+        }
     }
 
     private fun readMessages(conversation: ConversationRecord): List<MessageRecord> {
@@ -591,6 +640,7 @@ class FileConversationStore private constructor(
 
     companion object {
         private val METADATA_PATH = listOf("metadata.json")
+        private val METADATA_BACKUP_PATH = listOf("metadata.backup.json")
         private val WORKSPACE_FOLDER_REGEX = Regex("workspace-(\\d+)-(.*)")
         private val CONVERSATION_FILE_REGEX = Regex("conversation-(\\d+)\\.jsonl")
         private const val JSON_MIME_TYPE = "application/json"

@@ -13,6 +13,7 @@ import com.aibyjohannes.alfred.data.local.ConversationSummary
 import com.aibyjohannes.alfred.data.local.StoredChatMessage
 import com.aibyjohannes.alfred.data.local.WorkspaceSummary
 import io.mockk.*
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
@@ -126,6 +127,64 @@ class HomeViewModelTest {
         testScheduler.advanceUntilIdle()
 
         // Assert
+        coVerify(exactly = 0) { conversationStore.createConversation() }
+    }
+
+    @Test
+    fun `overlapping new chat requests create only one empty conversation`() = runTest {
+        val initialConversation = ConversationSummary(1L, "First Chat", System.currentTimeMillis())
+        val newConversation = ConversationSummary(2L, null, System.currentTimeMillis())
+        val firstCreateStarted = CompletableDeferred<Unit>()
+        val releaseFirstCreate = CompletableDeferred<Unit>()
+        var createCalls = 0
+
+        every { apiKeyStore.hasApiKey() } returns true
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns initialConversation
+        coEvery { conversationStore.loadMessages(1L) } returns listOf(
+            StoredChatMessage(id = 1L, role = ChatMessage.ROLE_USER, content = "Hello")
+        )
+        coEvery { conversationStore.loadMessages(2L) } returns emptyList()
+        coEvery { conversationStore.createConversation() } coAnswers {
+            createCalls++
+            if (createCalls == 1) {
+                firstCreateStarted.complete(Unit)
+                releaseFirstCreate.await()
+            }
+            newConversation
+        }
+        coEvery { conversationStore.listConversations() } returns listOf(initialConversation, newConversation)
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.createConversationAndSwitch()
+        viewModel.createConversationAndSwitch()
+        testScheduler.runCurrent()
+        assert(firstCreateStarted.isCompleted)
+        releaseFirstCreate.complete(Unit)
+        testScheduler.advanceUntilIdle()
+
+        coVerify(exactly = 1) { conversationStore.createConversation() }
+    }
+
+    @Test
+    fun `new chat is ignored while a response is streaming`() = runTest {
+        val conversation = ConversationSummary(1L, "Current", System.currentTimeMillis())
+        val flow = kotlinx.coroutines.flow.MutableSharedFlow<ChatStreamEvent>()
+
+        every { apiKeyStore.hasApiKey() } returns true
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
+        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.listConversations() } returns listOf(conversation)
+        every { repository.streamMessage(any(), any(), any()) } returns flow
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.sendMessage("Keep this response in the current chat")
+        viewModel.createConversationAndSwitch()
+        testScheduler.runCurrent()
+
         coVerify(exactly = 0) { conversationStore.createConversation() }
     }
 

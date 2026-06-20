@@ -269,9 +269,63 @@ class FileConversationStoreTest {
         assertEquals(1, FileConversationStore(storage).listConversations().size)
     }
 
+    @Test
+    fun `failed metadata write during new chat preserves the existing index`() = runTest {
+        val storage = FaultInjectingStorage()
+        val store = FileConversationStore(storage)
+        val existing = store.getOrCreateActiveConversation()
+        store.appendMessage(existing.id, ChatMessage.ROLE_USER, "Keep this chat")
+        val metadataBeforeCreate = storage.files.getValue("metadata.json")
+        storage.failNextMetadataWriteAfterTruncate = true
+
+        val failure = runCatching { store.createConversation() }
+
+        assertTrue(failure.isFailure)
+        assertEquals(metadataBeforeCreate, storage.files.getValue("metadata.json"))
+        assertEquals(listOf(existing.id), FileConversationStore(storage).listConversations().map { it.id })
+        assertEquals("Keep this chat", FileConversationStore(storage).loadMessages(existing.id).single().content)
+    }
+
+    @Test
+    fun `valid metadata backup repairs a truncated primary index`() = runTest {
+        val storage = FaultInjectingStorage()
+        val store = FileConversationStore(storage)
+        val existing = store.getOrCreateActiveConversation()
+        store.appendMessage(existing.id, ChatMessage.ROLE_USER, "Recover from backup")
+        val validMetadata = storage.files.getValue("metadata.json")
+        storage.files["metadata.backup.json"] = validMetadata
+        storage.files["metadata.json"] = ""
+
+        val recovered = FileConversationStore(storage)
+
+        assertEquals(listOf(existing.id), recovered.listConversations().map { it.id })
+        assertEquals("Recover from backup", recovered.loadMessages(existing.id).single().content)
+        assertTrue(storage.files.getValue("metadata.json").isNotBlank())
+    }
+
+    @Test
+    fun `orphan conversation is recovered when multiple conversations remain indexed`() = runTest {
+        val storage = FaultInjectingStorage()
+        val store = FileConversationStore(storage)
+        val first = store.getOrCreateActiveConversation()
+        store.appendMessage(first.id, ChatMessage.ROLE_USER, "First")
+        val second = store.createConversation()
+        store.appendMessage(second.id, ChatMessage.ROLE_USER, "Second")
+        val metadataWithTwoChats = storage.files.getValue("metadata.json")
+        val third = store.createConversation()
+        store.appendMessage(third.id, ChatMessage.ROLE_USER, "Recover me")
+
+        storage.files["metadata.json"] = metadataWithTwoChats
+
+        val recovered = FileConversationStore(storage)
+        assertEquals(3, recovered.listConversations().size)
+        assertEquals("Recover me", recovered.loadMessages(third.id).single().content)
+    }
+
     private class FaultInjectingStorage : ChatHistoryStorage {
         val files = LinkedHashMap<String, String>()
         var failNextMetadataRead = false
+        var failNextMetadataWriteAfterTruncate = false
         var failDelete = false
 
         override fun ensureReady() = Unit
@@ -311,7 +365,13 @@ class FileConversationStoreTest {
         }
 
         override fun writeText(path: List<String>, text: String, mimeType: String) {
-            files[path.joinToString("/")] = text
+            val key = path.joinToString("/")
+            if (key == "metadata.json" && failNextMetadataWriteAfterTruncate) {
+                failNextMetadataWriteAfterTruncate = false
+                files[key] = ""
+                throw IllegalStateException("Metadata write failed after truncation")
+            }
+            files[key] = text
         }
 
         override fun appendLine(path: List<String>, line: String, mimeType: String) {

@@ -14,6 +14,8 @@ import com.aibyjohannes.alfred.data.local.ConversationStore
 import com.aibyjohannes.alfred.data.local.ConversationSummary
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 enum class RenderMode {
     PLAIN,
@@ -77,6 +79,7 @@ class HomeViewModel : ViewModel() {
     private var sysInfoProvider: SysInfoProvider? = null
     private var onChatActivity: (() -> Unit)? = null
     private var nextTurnMaxPasses: Int? = null
+    private val newChatMutex = Mutex()
 
     private val _messages = MutableLiveData<List<UiChatMessage>>(emptyList())
     val messages: LiveData<List<UiChatMessage>> = _messages
@@ -488,18 +491,19 @@ class HomeViewModel : ViewModel() {
 
     fun createConversationAndSwitch() {
         val store = conversationStore ?: return
+        if (_isLoading.value == true) return
         viewModelScope.launch {
-            val currentId = currentConversationId
-            if (currentId != null) {
-                val uiMessages = _messages.value.orEmpty()
-                if (uiMessages.isEmpty()) {
-                    // Already in an empty conversation, keep using it (idempotent)
-                    return@launch
+            newChatMutex.withLock {
+                if (_isLoading.value == true) return@withLock
+                val currentId = currentConversationId
+                if (currentId != null && store.loadMessages(currentId).isEmpty()) {
+                    // Already in an empty persisted conversation, keep using it.
+                    return@withLock
                 }
+                val newConversation = store.createConversation()
+                loadConversation(newConversation)
+                refreshConversationList()
             }
-            val newConversation = store.createConversation()
-            loadConversation(newConversation)
-            refreshConversationList()
         }
     }
 

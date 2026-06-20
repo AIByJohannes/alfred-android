@@ -233,6 +233,10 @@ class MainActivity : AppCompatActivity() {
         homeViewModel.activeConversationId.observe(this) { activeConversationId ->
             conversationAdapter.setActiveConversationId(activeConversationId)
         }
+        homeViewModel.isLoading.observe(this) { isLoading ->
+            binding.btnNewChatLayout.isEnabled = !isLoading
+            binding.btnNewChatLayout.alpha = if (isLoading) 0.5f else 1f
+        }
     }
 
     override fun onResume() {
