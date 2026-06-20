@@ -45,10 +45,16 @@ Each `SKILL.md` must start with YAML frontmatter containing a lowercase, hyphena
 
 LLM evals run as a separate verification lane in the `:evals` module, not as unit tests.
 
+If you have `just` installed, you can run them using the `just` recipes (which dynamically pick up your environment's `JAVA_HOME`).
+
 ### Run smoke evals (fast)
 
 ```powershell
-$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.9.10-hotspot'
+$env:OPENROUTER_API_KEY = 'sk-or-v1-your-key-here'
+just eval-smoke
+```
+*Or manually:*
+```powershell
 $env:OPENROUTER_API_KEY = 'sk-or-v1-your-key-here'
 .\gradlew evalSmoke
 ```
@@ -56,7 +62,11 @@ $env:OPENROUTER_API_KEY = 'sk-or-v1-your-key-here'
 ### Run full evals (slow/expensive)
 
 ```powershell
-$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.9.10-hotspot'
+$env:OPENROUTER_API_KEY = 'sk-or-v1-your-key-here'
+just eval-full
+```
+*Or manually:*
+```powershell
 $env:OPENROUTER_API_KEY = 'sk-or-v1-your-key-here'
 .\gradlew evalFull
 ```
@@ -64,7 +74,13 @@ $env:OPENROUTER_API_KEY = 'sk-or-v1-your-key-here'
 ### Run full evals with LLM judge (DeepSeek)
 
 ```powershell
-$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.9.10-hotspot'
+$env:OPENROUTER_API_KEY = 'sk-or-v1-your-key-here'
+$env:EVAL_JUDGE_ENABLED = 'true'
+$env:EVAL_JUDGE_MODEL = 'deepseek/deepseek-v3.2'
+just eval-full
+```
+*Or manually:*
+```powershell
 $env:OPENROUTER_API_KEY = 'sk-or-v1-your-key-here'
 $env:EVAL_JUDGE_ENABLED = 'true'
 $env:EVAL_JUDGE_MODEL = 'deepseek/deepseek-v3.2'

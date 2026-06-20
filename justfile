@@ -1,34 +1,40 @@
 set windows-shell := ["pwsh.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]
 
-java_home := "C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.10.7-hotspot"
+# Try to use existing JAVA_HOME from the environment, otherwise let Gradle resolve it.
+# To override, run: just java_home="C:\path\to\jdk" <recipe>
+java_home := env_var_or_default("JAVA_HOME", "")
 gradlew := ".\\gradlew.bat"
+
+# Helper statement to set JAVA_HOME in pwsh only if java_home is not empty
+set_java_home := if java_home == "" { "" } else { "$env:JAVA_HOME = '" + java_home + "';" }
 
 default:
     just --list
 
 build:
-    $env:JAVA_HOME = '{{java_home}}'; & '{{gradlew}}' assembleDebug
+    {{set_java_home}} & '{{gradlew}}' assembleDebug
 
 test:
-    $env:JAVA_HOME = '{{java_home}}'; & '{{gradlew}}' test
+    {{set_java_home}} & '{{gradlew}}' test
 
 connected-test:
-    $env:JAVA_HOME = '{{java_home}}'; & '{{gradlew}}' connectedAndroidTest
+    {{set_java_home}} & '{{gradlew}}' connectedAndroidTest
 
 clean:
-    $env:JAVA_HOME = '{{java_home}}'; & '{{gradlew}}' clean
+    {{set_java_home}} & '{{gradlew}}' clean
 
-install-debug:
-    $env:JAVA_HOME = '{{java_home}}'; & '{{gradlew}}' installDebug
+deploy:
+    {{set_java_home}} & '{{gradlew}}' installDebug
 
 eval-smoke:
-    $env:JAVA_HOME = '{{java_home}}'; & '{{gradlew}}' evalSmoke
+    {{set_java_home}} & '{{gradlew}}' evalSmoke
 
 eval-full:
-    $env:JAVA_HOME = '{{java_home}}'; & '{{gradlew}}' evalFull
+    {{set_java_home}} & '{{gradlew}}' evalFull
 
 eval-smoke-strict:
-    $env:JAVA_HOME = '{{java_home}}'; & '{{gradlew}}' evalSmokeStrict
+    {{set_java_home}} & '{{gradlew}}' evalSmokeStrict
 
 eval-full-strict:
-    $env:JAVA_HOME = '{{java_home}}'; & '{{gradlew}}' evalFullStrict
+    {{set_java_home}} & '{{gradlew}}' evalFullStrict
+

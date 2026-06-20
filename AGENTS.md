@@ -15,15 +15,21 @@ This file provides practical guidance for AI agents working on this repository.
 
 ## Running Builds
 
-Use the Gradle wrapper directly (the `just` CLI tool may not be installed). If a device is connected via ADB, prefer installing directly:
+The `just` CLI tool is installed on the host. You can use either the Gradle wrapper directly or `just` (which dynamically detects `JAVA_HOME` from the environment).
 
 ```powershell
-.\gradlew.bat installDebug    # Build and install on connected device (preferred for ADB deployment)
-.\gradlew.bat assembleDebug   # Build debug APK only
-.\gradlew.bat test            # Run unit tests
-```
+just deploy                   # Build and install on connected device (preferred for ADB deployment)
+# Or manually:
+.\gradlew.bat installDebug
 
-The system Java on PATH (Temurin 22) works fine — do **not** set `JAVA_HOME` to the Adoptium JDK-21 path referenced in `justfile`, as that path may not exist on all machines.
+just build                    # Build debug APK only
+# Or manually:
+.\gradlew.bat assembleDebug
+
+just test                     # Run unit tests
+# Or manually:
+.\gradlew.bat test
+```
 
 ## APK Output
 

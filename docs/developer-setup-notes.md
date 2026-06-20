@@ -8,15 +8,17 @@ During testing and verification of the build system on this Windows machine, sev
 
 The host has the following Java environments pre-installed or embedded:
 
-- **Global Eclipse Adoptium OpenJDK 22**:
-  - Path: `C:\Program Files\Eclipse Adoptium\jdk-22.0.2.9-hotspot`
+- **Global Eclipse Adoptium OpenJDK 21**:
+  - Path: `C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot`
+- **Global Eclipse Adoptium OpenJDK 25**:
+  - Path: `C:\Program Files\Eclipse Adoptium\jdk-25.0.1.8-hotspot`
 - **Embedded Android Studio JetBrains Runtime (JDK 21)**:
   - Path: `C:\Program Files\Android\Android Studio\jbr`
 - **Embedded IntelliJ IDEA JetBrains Runtime (JDK 21)**:
   - Path: `C:\Program Files\JetBrains\IntelliJ IDEA 2025.2.5\jbr`
 
 > [!NOTE]
-> The `justfile` and some commands in the `README.md` previously hardcoded `C:\Program Files\Eclipse Adoptium\jdk-21.0.10.7-hotspot` or similar paths, which do not exist on this machine. Use the paths above for `JAVA_HOME` configuration.
+> The `justfile` dynamically reads `JAVA_HOME` from the environment. There is no longer a need to hardcode paths inside the file.
 
 ---
 
@@ -54,29 +56,35 @@ With this configuration, Gradle's toolchain auto-detection successfully register
 
 ## 3. Build & Execution Workflow
 
-### `just` CLI is Missing
-The host does **not** have the `just` task runner installed or available in the system `PATH`. Running `just build` or similar commands will result in command-not-found errors.
-
-### Manual Commands to Build & Test
-
-Always run the build commands using the Adoptium JDK 22 path as `JAVA_HOME` to launch the Gradle wrapper:
+### `just` CLI Support
+The `just` task runner is installed on this system. You can easily use it to build, clean, test, and run evaluations.
 
 #### Build Debug APK
 ```powershell
-$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-22.0.2.9-hotspot'
+just build
+```
+*Alternative (Manual):*
+```powershell
 .\gradlew.bat assembleDebug
 ```
 *Output location:* `app\build\outputs\apk\debug\app-debug.apk`
 
 #### Run Unit Tests
 ```powershell
-$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-22.0.2.9-hotspot'
+just test
+```
+*Alternative (Manual):*
+```powershell
 .\gradlew.bat test
 ```
 
 #### Run Evals (Smoke/Full)
 ```powershell
-$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-22.0.2.9-hotspot'
+$env:OPENROUTER_API_KEY = 'sk-or-v1-your-key-here'
+just eval-smoke
+```
+*Alternative (Manual):*
+```powershell
 $env:OPENROUTER_API_KEY = 'sk-or-v1-your-key-here'
 .\gradlew.bat evalSmoke
 ```
