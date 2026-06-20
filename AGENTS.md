@@ -15,10 +15,11 @@ This file provides practical guidance for AI agents working on this repository.
 
 ## Running Builds
 
-Use the Gradle wrapper directly (the `just` CLI tool may not be installed):
+Use the Gradle wrapper directly (the `just` CLI tool may not be installed). If a device is connected via ADB, prefer installing directly:
 
 ```powershell
-.\gradlew.bat assembleDebug   # Build debug APK
+.\gradlew.bat installDebug    # Build and install on connected device (preferred for ADB deployment)
+.\gradlew.bat assembleDebug   # Build debug APK only
 .\gradlew.bat test            # Run unit tests
 ```
 
