@@ -14,9 +14,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.Assert.fail
-import java.time.LocalDate
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
+import java.util.Base64
 
 class TickTickClientTest {
 
@@ -40,35 +38,39 @@ class TickTickClientTest {
     }
 
     @Test
-    fun `resolveDueDate resolves relative and ISO dates`() {
-        val client = TickTickClient(credentialsProvider)
-        val zoneId = ZoneId.of("UTC")
-        val today = LocalDate.now(zoneId)
-
-        val (todayResolved, isAllDayToday) = client.resolveDueDate("today", zoneId)
-        assertTrue(isAllDayToday)
-        assertEquals(today.atStartOfDay(zoneId).format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.000+0000")), todayResolved)
-
-        val (tomorrowResolved, isAllDayTomorrow) = client.resolveDueDate("tomorrow", zoneId)
-        assertTrue(isAllDayTomorrow)
-        assertEquals(today.plusDays(1).atStartOfDay(zoneId).format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.000+0000")), tomorrowResolved)
-
-        val (yesterdayResolved, isAllDayYesterday) = client.resolveDueDate("yesterday", zoneId)
-        assertTrue(isAllDayYesterday)
-        assertEquals(today.minusDays(1).atStartOfDay(zoneId).format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.000+0000")), yesterdayResolved)
-
-        val (fixedResolved, isAllDayFixed) = client.resolveDueDate("2026-05-23", zoneId)
-        assertTrue(isAllDayFixed)
-        assertEquals("2026-05-23T00:00:00.000+0000", fixedResolved)
-    }
-
-    @Test
-    fun `getProjects returns correct response`() = runTest {
+    fun `getMcpTools parses JSON-RPC tools list response`() = runTest {
         val mockEngine = MockEngine { request ->
-            assertEquals("https://api.ticktick.com/open/v1/project", request.url.toString())
+            assertEquals("https://mcp.ticktick.com", request.url.toString())
             assertEquals("Bearer test-access-token", request.headers["Authorization"])
+            assertEquals("2024-11-05", request.headers["Mcp-Protocol-Version"])
+            
+            val reqBody = requestBodyText(request)
+            assertTrue(reqBody.contains("\"method\":\"tools/list\""))
+            
             respond(
-                content = "[{\"id\":\"project1\",\"name\":\"Inbox\"}]",
+                content = """
+                {
+                  "jsonrpc": "2.0",
+                  "result": {
+                    "tools": [
+                      {
+                        "name": "create_task",
+                        "description": "Create a new task",
+                        "inputSchema": {
+                          "type": "object",
+                          "properties": {
+                            "title": { "type": "string", "description": "The task title" },
+                            "priority": { "type": "integer" },
+                            "status": { "type": "string", "enum": ["open", "closed"] }
+                          },
+                          "required": ["title"]
+                        }
+                      }
+                    ]
+                  },
+                  "id": "1"
+                }
+                """.trimIndent(),
                 status = HttpStatusCode.OK,
                 headers = headersOf("Content-Type", "application/json")
             )
@@ -76,8 +78,50 @@ class TickTickClientTest {
         val httpClient = HttpClient(mockEngine)
         val client = TickTickClient(credentialsProvider, httpClient)
 
-        val result = client.getProjects()
-        assertEquals("[{\"id\":\"project1\",\"name\":\"Inbox\"}]", result)
+        val tools = client.getMcpTools()
+        assertEquals(1, tools.size)
+        val tool = tools[0]
+        assertEquals("create_task", tool.name)
+        assertEquals("Create a new task", tool.description)
+        assertEquals(1, tool.requiredParameters.size)
+        assertEquals("title", tool.requiredParameters[0].name)
+        assertEquals(2, tool.optionalParameters.size)
+    }
+
+    @Test
+    fun `executeMcpToolCall parses JSON-RPC call response and returns text`() = runTest {
+        val mockEngine = MockEngine { request ->
+            assertEquals("https://mcp.ticktick.com", request.url.toString())
+            
+            val reqBody = requestBodyText(request)
+            assertTrue(reqBody.contains("\"method\":\"tools/call\""))
+            assertTrue(reqBody.contains("\"name\":\"create_task\""))
+            assertTrue(reqBody.contains("\"title\":\"Buy milk\""))
+
+            respond(
+                content = """
+                {
+                  "jsonrpc": "2.0",
+                  "result": {
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "Success response text"
+                      }
+                    ]
+                  },
+                  "id": "1"
+                }
+                """.trimIndent(),
+                status = HttpStatusCode.OK,
+                headers = headersOf("Content-Type", "application/json")
+            )
+        }
+        val httpClient = HttpClient(mockEngine)
+        val client = TickTickClient(credentialsProvider, httpClient)
+
+        val result = client.executeMcpToolCall("create_task", "{\"title\":\"Buy milk\"}")
+        assertEquals("Success response text", result)
     }
 
     @Test
@@ -87,7 +131,7 @@ class TickTickClientTest {
         val mockEngine = MockEngine { request ->
             callCount++
             when {
-                request.url.toString() == "https://api.ticktick.com/open/v1/project" && request.headers["Authorization"] == "Bearer test-access-token" -> {
+                request.url.toString() == "https://mcp.ticktick.com" && request.headers["Authorization"] == "Bearer test-access-token" -> {
                     respond(
                         content = "Unauthorized",
                         status = HttpStatusCode.Unauthorized
@@ -101,9 +145,17 @@ class TickTickClientTest {
                         headers = headersOf("Content-Type", "application/json")
                     )
                 }
-                request.url.toString() == "https://api.ticktick.com/open/v1/project" && request.headers["Authorization"] == "Bearer new-access-token" -> {
+                request.url.toString() == "https://mcp.ticktick.com" && request.headers["Authorization"] == "Bearer new-access-token" -> {
                     respond(
-                        content = "[{\"id\":\"project1\",\"name\":\"Inbox\"}]",
+                        content = """
+                        {
+                          "jsonrpc": "2.0",
+                          "result": {
+                            "tools": []
+                          },
+                          "id": "1"
+                        }
+                        """.trimIndent(),
                         status = HttpStatusCode.OK,
                         headers = headersOf("Content-Type", "application/json")
                     )
@@ -114,8 +166,8 @@ class TickTickClientTest {
         val httpClient = HttpClient(mockEngine)
         val client = TickTickClient(credentialsProvider, httpClient)
 
-        val result = client.getProjects()
-        assertEquals("[{\"id\":\"project1\",\"name\":\"Inbox\"}]", result)
+        val tools = client.getMcpTools()
+        assertEquals(0, tools.size)
         assertEquals(3, callCount)
         assertEquals(1, credentialsProvider.refreshCount)
         assertEquals("new-access-token", credentialsProvider.currentCreds?.accessToken)

@@ -49,16 +49,25 @@ class OpenRouterChatEngineToolParsingTest {
 
     @Test
     fun `tool descriptors include all Alfred tools`() {
-        val method = OpenRouterChatEngine::class.java.declaredMethods.first { it.name.startsWith("buildAlfredToolDescriptors") }
+        val method = OpenRouterChatEngine::class.java.declaredMethods.first {
+            it.name.startsWith("buildAlfredToolDescriptors") &&
+            it.parameterCount == 1 &&
+            it.parameterTypes[0] == java.util.List::class.java
+        }
         method.isAccessible = true
-        val tools = method.invoke(buildEngine()) as List<*>
+        val mockMcpTool = ai.koog.agents.core.tools.ToolDescriptor(
+            name = "mcp_tool_name",
+            description = "mcp tool desc",
+            requiredParameters = emptyList()
+        )
+        val tools = method.invoke(buildEngine(), listOf(mockMcpTool)) as List<*>
 
         assertEquals(
             listOf(
                 OpenRouterChatEngine.WEB_SEARCH_FUNCTION_NAME,
                 OpenRouterChatEngine.LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME,
-                OpenRouterChatEngine.TICKTICK_FUNCTION_NAME,
-                OpenRouterChatEngine.ASK_SMART_MODEL_FUNCTION_NAME
+                OpenRouterChatEngine.ASK_SMART_MODEL_FUNCTION_NAME,
+                "mcp_tool_name"
             ),
             tools.map { it?.javaClass?.getMethod("getName")?.invoke(it) }
         )

@@ -1,5 +1,8 @@
 package com.aibyjohannes.alfred.core.ticktick
 
+import ai.koog.agents.core.tools.ToolDescriptor
+import ai.koog.agents.core.tools.ToolParameterDescriptor
+import ai.koog.agents.core.tools.ToolParameterType
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
@@ -11,10 +14,6 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.formUrlEncode
-import java.time.LocalDate
-import java.time.ZoneId
-import java.time.ZonedDateTime
-import java.time.format.DateTimeFormatter
 import java.util.Base64
 import java.util.concurrent.TimeUnit
 
@@ -30,15 +29,22 @@ class TickTickClient(
             ?: throw IllegalStateException("TickTick is not configured. Please configure TickTick in settings.")
     }
 
-    private suspend fun request(
+    private suspend fun requestMcp(
         method: String,
-        endpoint: String,
-        bodyJson: String? = null
+        params: com.fasterxml.jackson.databind.JsonNode
     ): String {
-        val creds = getCredentialsOrThrow()
-        val url = "https://api.ticktick.com/open/v1/$endpoint"
+        val payload = objectMapper.createObjectNode().apply {
+            put("jsonrpc", "2.0")
+            put("id", System.currentTimeMillis().toString())
+            put("method", method)
+            set<com.fasterxml.jackson.databind.JsonNode>("params", params)
+        }
+        val bodyJson = objectMapper.writeValueAsString(payload)
 
-        val response = tryRequest(method, url, creds.accessToken, bodyJson)
+        val creds = getCredentialsOrThrow()
+        val url = "https://mcp.ticktick.com"
+
+        val response = tryRequestMcp(url, creds.accessToken, bodyJson)
 
         if (response.status == HttpStatusCode.Unauthorized) {
             if (creds.refreshToken.isNullOrBlank()) {
@@ -46,34 +52,33 @@ class TickTickClient(
             }
             val newCreds = refreshToken(creds)
             if (newCreds != null) {
-                val retryResponse = tryRequest(method, url, newCreds.accessToken, bodyJson)
+                val retryResponse = tryRequestMcp(url, newCreds.accessToken, bodyJson)
                 if (retryResponse.status.value >= 300) {
-                    throw Exception("TickTick API error after refresh: ${retryResponse.status.value} ${retryResponse.bodyAsText()}")
+                    throw Exception("TickTick MCP error after refresh: ${retryResponse.status.value} ${retryResponse.bodyAsText()}")
                 }
                 return retryResponse.bodyAsText()
             } else {
                 throw Exception("TickTick token expired and refresh failed.")
             }
         } else if (response.status.value >= 300) {
-            throw Exception("TickTick API error: ${response.status.value} ${response.bodyAsText()}")
+            throw Exception("TickTick MCP error: ${response.status.value} ${response.bodyAsText()}")
         }
 
         return response.bodyAsText()
     }
 
-    private suspend fun tryRequest(
-        method: String,
+    private suspend fun tryRequestMcp(
         url: String,
         accessToken: String,
-        bodyJson: String? = null
+        bodyJson: String
     ): HttpResponse {
         return httpClient.request(url) {
-            this.method = HttpMethod.parse(method)
+            this.method = HttpMethod.Post
             header("Authorization", "Bearer $accessToken")
-            if (bodyJson != null) {
-                header("Content-Type", "application/json")
-                setBody(bodyJson)
-            }
+            header("Content-Type", "application/json")
+            header("Accept", "application/json")
+            header("Mcp-Protocol-Version", "2024-11-05")
+            setBody(bodyJson)
         }
     }
 
@@ -121,273 +126,108 @@ class TickTickClient(
         return updatedCreds
     }
 
-    // --- Task Methods ---
-
-    suspend fun getTasks(): String {
-        val projectsJson = getProjects()
-        val projectsNode = objectMapper.readTree(projectsJson)
-
-        val allTasks = mutableListOf<Map<String, Any?>>()
-        val projectIds = mutableListOf(Pair("inbox", "Inbox"))
-
-        if (projectsNode.isArray) {
-            for (proj in projectsNode) {
-                val closed = proj.path("closed").asBoolean(false)
-                if (!closed) {
-                    val id = proj.path("id").asText()
-                    val name = proj.path("name").asText()
-                    if (id != "inbox") {
-                        projectIds.add(Pair(id, name))
-                    }
-                }
-            }
-        }
-
-        for ((projectId, projectName) in projectIds) {
-            try {
-                val dataJson = getProjectData(projectId)
-                val dataNode = objectMapper.readTree(dataJson)
-                val tasksNode = dataNode.path("tasks")
-                if (tasksNode.isArray) {
-                    for (task in tasksNode) {
-                        val taskMap = objectMapper.readValue(
-                            objectMapper.writeValueAsString(task),
-                            Map::class.java
-                        ).toMutableMap() as MutableMap<String, Any?>
-                        taskMap["projectId"] = taskMap["projectId"] ?: projectId
-                        taskMap["project_name"] = projectName
-                        allTasks.add(taskMap)
-                    }
-                }
-            } catch (_: Exception) {
-                // Ignore single project errors (same as Python script)
-            }
-        }
-
-        return objectMapper.writeValueAsString(allTasks)
-    }
-
-    suspend fun getTask(projectId: String, taskId: String): String {
-        return request("GET", "project/$projectId/task/$taskId")
-    }
-
-    suspend fun createTask(
-        title: String,
-        projectId: String? = null,
-        content: String? = null,
-        dueDate: String? = null,
-        priority: Int? = null,
-        tags: List<String>? = null
-    ): String {
-        val payload = mutableMapOf<String, Any?>("title" to title)
-        if (projectId != null) payload["projectId"] = projectId
-        if (content != null) payload["content"] = content
-        if (priority != null) payload["priority"] = priority
-        if (tags != null) payload["tags"] = tags
-
-        if (dueDate != null) {
-            val (resolvedDue, isAllDay) = resolveDueDate(dueDate)
-            payload["dueDate"] = resolvedDue
-            payload["isAllDay"] = isAllDay
-        }
-
-        return request("POST", "task", serializeMap(payload))
-    }
-
-    suspend fun updateTask(
-        taskId: String,
-        projectId: String,
-        newProjectId: String? = null,
-        title: String? = null,
-        content: String? = null,
-        dueDate: String? = null,
-        priority: Int? = null,
-        tags: List<String>? = null,
-        items: List<Map<String, Any?>>? = null
-    ): String {
-        val currentTaskJson = getTask(projectId, taskId)
-        val payload = objectMapper.readValue(
-            currentTaskJson,
-            Map::class.java
-        ).toMutableMap() as MutableMap<String, Any?>
-
-        if (title != null) payload["title"] = title
-        if (content != null) payload["content"] = content
-        if (priority != null) payload["priority"] = priority
-        if (tags != null) payload["tags"] = tags
-        if (items != null) payload["items"] = items
-
-        if (dueDate != null) {
-            val (resolvedDue, isAllDay) = resolveDueDate(dueDate)
-            payload["dueDate"] = resolvedDue
-            payload["isAllDay"] = isAllDay
-        }
-
-        var finalProjectId = projectId
-        if (newProjectId != null && newProjectId != projectId) {
-            val movePayload = listOf(
-                mapOf(
-                    "taskId" to taskId,
-                    "fromProjectId" to projectId,
-                    "toProjectId" to newProjectId
-                )
-            )
-            request("POST", "task/move", objectMapper.writeValueAsString(movePayload))
-            finalProjectId = newProjectId
-        }
-
-        payload["projectId"] = finalProjectId
-        payload["id"] = taskId
-
-        return request("POST", "task/$taskId", serializeMap(payload))
-    }
-
-    suspend fun completeTask(projectId: String, taskId: String): String {
-        request("POST", "project/$projectId/task/$taskId/complete")
-        return "{\"ok\": true, \"id\": \"$taskId\", \"projectId\": \"$projectId\"}"
-    }
-
-    suspend fun deleteTask(projectId: String, taskId: String): String {
-        request("DELETE", "project/$projectId/task/$taskId")
-        return "{\"ok\": true, \"id\": \"$taskId\", \"projectId\": \"$projectId\"}"
-    }
-
-    // --- Subtask Methods ---
-
-    suspend fun listSubtasks(projectId: String, taskId: String): List<Map<String, Any?>> {
-        val taskJson = getTask(projectId, taskId)
-        val node = objectMapper.readTree(taskJson)
-        val itemsNode = node.path("items")
-        if (itemsNode.isMissingNode || !itemsNode.isArray) {
+    suspend fun getMcpTools(): List<ToolDescriptor> {
+        val responseBody = try {
+            requestMcp("tools/list", objectMapper.createObjectNode())
+        } catch (e: Exception) {
             return emptyList()
         }
-        return objectMapper.convertValue(itemsNode, List::class.java) as List<Map<String, Any?>>
-    }
 
-    suspend fun createSubtask(projectId: String, taskId: String, title: String): String {
-        val items = listSubtasks(projectId, taskId).toMutableList()
-        items.add(mapOf("title" to title, "status" to 0))
-        return updateTask(taskId, projectId, items = items)
-    }
-
-    suspend fun completeSubtask(projectId: String, taskId: String, indexOrTitle: String): String {
-        val items = listSubtasks(projectId, taskId).toMutableList()
-        if (items.isEmpty()) {
-            throw Exception("Task has no subtasks.")
+        val rootNode = objectMapper.readTree(responseBody)
+        val toolsNode = rootNode.path("result").path("tools")
+        if (!toolsNode.isArray) {
+            return emptyList()
         }
 
-        val targetIdx = findSubtaskIndex(items, indexOrTitle)
-        if (targetIdx == -1) {
-            throw Exception("No subtask found matching: $indexOrTitle")
-        }
+        val descriptors = mutableListOf<ToolDescriptor>()
+        for (toolNode in toolsNode) {
+            val name = toolNode.path("name").asText("")
+            val description = toolNode.path("description").asText("")
+            if (name.isBlank()) continue
 
-        val updatedItem = items[targetIdx].toMutableMap()
-        updatedItem["status"] = 2
-        items[targetIdx] = updatedItem
+            val requiredParams = mutableListOf<ToolParameterDescriptor>()
+            val optionalParams = mutableListOf<ToolParameterDescriptor>()
 
-        return updateTask(taskId, projectId, items = items)
-    }
-
-    suspend fun deleteSubtask(projectId: String, taskId: String, indexOrTitle: String): String {
-        val items = listSubtasks(projectId, taskId).toMutableList()
-        if (items.isEmpty()) {
-            throw Exception("Task has no subtasks.")
-        }
-
-        val targetIdx = findSubtaskIndex(items, indexOrTitle)
-        if (targetIdx == -1) {
-            throw Exception("No subtask found matching: $indexOrTitle")
-        }
-
-        items.removeAt(targetIdx)
-        return updateTask(taskId, projectId, items = items)
-    }
-
-    // --- Project Methods ---
-
-    suspend fun getProjects(): String {
-        return request("GET", "project")
-    }
-
-    suspend fun getProjectData(projectId: String): String {
-        return request("GET", "project/$projectId/data")
-    }
-
-    suspend fun createProject(name: String, color: String? = null): String {
-        val payload = mutableMapOf<String, Any?>("name" to name)
-        if (color != null) payload["color"] = color
-        return request("POST", "project", serializeMap(payload))
-    }
-
-    suspend fun deleteProject(projectId: String): String {
-        request("DELETE", "project/$projectId")
-        return "{\"ok\": true, \"projectId\": \"$projectId\"}"
-    }
-
-    // --- Helpers ---
-
-    private fun findSubtaskIndex(items: List<Map<String, Any?>>, indexOrTitle: String): Int {
-        val parsedIdx = indexOrTitle.toIntOrNull()
-        if (parsedIdx != null && parsedIdx >= 1 && parsedIdx <= items.size) {
-            return parsedIdx - 1
-        }
-
-        val query = normalizeQuery(indexOrTitle)
-        for (i in items.indices) {
-            val title = normalizeQuery(items[i]["title"]?.toString() ?: "")
-            if (title == query) {
-                return i
-            }
-        }
-
-        for (i in items.indices) {
-            val title = normalizeQuery(items[i]["title"]?.toString() ?: "")
-            if (title.contains(query)) {
-                return i
-            }
-        }
-
-        return -1
-    }
-
-    private fun normalizeQuery(value: String): String {
-        return value.trim().lowercase().split("\\s+".toRegex()).joinToString(" ")
-    }
-
-    fun resolveDueDate(dueStr: String, zoneId: ZoneId = ZoneId.systemDefault()): Pair<String, Boolean> {
-        val valStr = dueStr.trim().lowercase()
-        val today = LocalDate.now(zoneId)
-        val targetDate = when (valStr) {
-            "today" -> today
-            "tomorrow" -> today.plusDays(1)
-            "yesterday" -> today.minusDays(1)
-            else -> {
-                try {
-                    LocalDate.parse(dueStr.trim(), DateTimeFormatter.ISO_LOCAL_DATE)
-                } catch (_: Exception) {
-                    null
+            val inputSchema = toolNode.path("inputSchema")
+            val requiredSet = mutableSetOf<String>()
+            val requiredNode = inputSchema.path("required")
+            if (requiredNode.isArray) {
+                for (r in requiredNode) {
+                    requiredSet.add(r.asText())
                 }
             }
-        }
 
-        if (targetDate != null) {
-            val zdt = targetDate.atStartOfDay(zoneId).withZoneSameInstant(ZoneId.of("UTC"))
-            val formatted = zdt.format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.000+0000"))
-            return Pair(formatted, true)
-        }
+            val propertiesNode = inputSchema.path("properties")
+            if (propertiesNode.isObject) {
+                val fields = propertiesNode.fieldNames()
+                while (fields.hasNext()) {
+                    val fieldName = fields.next()
+                    val propNode = propertiesNode.path(fieldName)
+                    val propDesc = propNode.path("description").asText("")
+                    val propTypeStr = propNode.path("type").asText("string")
+                    val enumNode = propNode.path("enum")
 
-        return try {
-            val zdt = ZonedDateTime.parse(dueStr).withZoneSameInstant(ZoneId.of("UTC"))
-            val formatted = zdt.format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.000+0000"))
-            Pair(formatted, false)
-        } catch (_: Exception) {
-            Pair(dueStr, false)
+                    val paramType = when {
+                        enumNode.isArray && enumNode.size() > 0 -> {
+                            val enumValues = mutableListOf<String>()
+                            for (e in enumNode) {
+                                enumValues.add(e.asText())
+                            }
+                            ToolParameterType.Enum(enumValues.toTypedArray())
+                        }
+                        propTypeStr == "integer" || propTypeStr == "number" -> ToolParameterType.Integer
+                        propTypeStr == "boolean" -> ToolParameterType.Boolean
+                        else -> ToolParameterType.String
+                    }
+
+                    val paramDescriptor = ToolParameterDescriptor(fieldName, propDesc, paramType)
+                    if (fieldName in requiredSet) {
+                        requiredParams.add(paramDescriptor)
+                    } else {
+                        optionalParams.add(paramDescriptor)
+                    }
+                }
+            }
+
+            descriptors.add(
+                ToolDescriptor(
+                    name = name,
+                    description = description,
+                    requiredParameters = requiredParams,
+                    optionalParameters = optionalParams
+                )
+            )
         }
+        return descriptors
     }
 
-    private fun serializeMap(map: Map<String, Any?>): String {
-        val cleanMap = map.filterValues { it != null }
-        return objectMapper.writeValueAsString(cleanMap)
+    suspend fun executeMcpToolCall(name: String, argumentsJson: String): String {
+        val paramsNode = objectMapper.createObjectNode()
+        paramsNode.put("name", name)
+        paramsNode.set<com.fasterxml.jackson.databind.JsonNode>("arguments", objectMapper.readTree(argumentsJson))
+
+        val responseBody = requestMcp("tools/call", paramsNode)
+        val rootNode = objectMapper.readTree(responseBody)
+
+        val errorNode = rootNode.path("error")
+        if (!errorNode.isMissingNode && !errorNode.isNull) {
+            val message = errorNode.path("message").asText("Unknown MCP error")
+            throw Exception(message)
+        }
+
+        val contentNode = rootNode.path("result").path("content")
+        if (contentNode.isArray) {
+            val textBuilder = StringBuilder()
+            for (contentItem in contentNode) {
+                val type = contentItem.path("type").asText()
+                if (type == "text") {
+                    textBuilder.append(contentItem.path("text").asText())
+                }
+            }
+            return textBuilder.toString()
+        }
+
+        return responseBody
     }
 
     override fun close() {
