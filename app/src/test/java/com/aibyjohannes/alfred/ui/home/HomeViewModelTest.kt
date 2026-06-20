@@ -19,13 +19,14 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.*
 import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HomeViewModelTest {
-
     @get:Rule
     val instantTaskExecutorRule = InstantTaskExecutorRule()
 
@@ -826,5 +827,114 @@ class HomeViewModelTest {
         testScheduler.advanceUntilIdle()
         messages = viewModel.messages.value.orEmpty()
         assert(messages[0].content == inputMessageText) { "User message was blanked out after ToolCallRequested" }
+    }
+
+    @Test
+    fun `createWorkspace creates new workspace and switches to it`() = runTest {
+        val newWorkspace = WorkspaceSummary(2L, "Work")
+        val activeConversation = ConversationSummary(3L, null, System.currentTimeMillis())
+
+        coEvery { conversationStore.createWorkspace("Work") } returns newWorkspace
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns activeConversation
+        coEvery { conversationStore.listWorkspaces() } returns listOf(WorkspaceSummary(1L, "Personal"), newWorkspace)
+        coEvery { conversationStore.listConversations() } returns listOf(activeConversation)
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.createWorkspace("Work")
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(2L, viewModel.activeWorkspaceId.value)
+        assertEquals(3L, viewModel.activeConversationId.value)
+        coVerify { conversationStore.createWorkspace("Work") }
+    }
+
+    @Test
+    fun `switchWorkspace switches active workspace and loads active conversation`() = runTest {
+        val workWorkspace = WorkspaceSummary(2L, "Work")
+        val activeConversation = ConversationSummary(4L, "Work Chat", System.currentTimeMillis())
+
+        coEvery { conversationStore.switchActiveWorkspace(2L) } returns workWorkspace
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns activeConversation
+        coEvery { conversationStore.listConversations() } returns listOf(activeConversation)
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.switchWorkspace(2L)
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(2L, viewModel.activeWorkspaceId.value)
+        assertEquals(4L, viewModel.activeConversationId.value)
+        coVerify { conversationStore.switchActiveWorkspace(2L) }
+    }
+
+    @Test
+    fun `renameWorkspace renames workspace and keeps active workspace id`() = runTest {
+        val activeWs = WorkspaceSummary(1L, "Personal Renamed")
+        coEvery { conversationStore.getOrCreateActiveWorkspace() } returns activeWs
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.renameWorkspace(1L, "Personal Renamed")
+        testScheduler.advanceUntilIdle()
+
+        coVerify { conversationStore.renameWorkspace(1L, "Personal Renamed") }
+        assertEquals(1L, viewModel.activeWorkspaceId.value)
+    }
+
+    @Test
+    fun `deleteWorkspace deletes workspace only when multiple workspaces exist`() = runTest {
+        val ws1 = WorkspaceSummary(1L, "Personal")
+        val ws2 = WorkspaceSummary(2L, "Work")
+
+        // Case 1: Only 1 workspace exists -> delete does nothing
+        coEvery { conversationStore.listWorkspaces() } returns listOf(ws1)
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.deleteWorkspace(1L)
+        testScheduler.advanceUntilIdle()
+        coVerify(exactly = 0) { conversationStore.deleteWorkspace(any()) }
+
+        // Case 2: Multiple workspaces exist -> delete executes
+        coEvery { conversationStore.listWorkspaces() } returns listOf(ws1, ws2)
+        coEvery { conversationStore.getOrCreateActiveWorkspace() } returns ws2
+        viewModel.retryChatHistoryLoad()
+        testScheduler.advanceUntilIdle()
+
+        viewModel.deleteWorkspace(1L)
+        testScheduler.advanceUntilIdle()
+        coVerify(exactly = 1) { conversationStore.deleteWorkspace(1L) }
+        assertEquals(2L, viewModel.activeWorkspaceId.value)
+    }
+
+    @Test
+    fun `clearChat deletes active conversation and creates new empty conversation`() = runTest {
+        val activeConversation = ConversationSummary(1L, "Chat", System.currentTimeMillis())
+        val newConversation = ConversationSummary(2L, null, System.currentTimeMillis())
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns activeConversation
+        coEvery { conversationStore.loadMessages(1L) } returns listOf(
+            StoredChatMessage(1L, ChatMessage.ROLE_USER, "Hello"),
+            StoredChatMessage(2L, ChatMessage.ROLE_ASSISTANT, "Hi")
+        )
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+        assertEquals(2, viewModel.messages.value.orEmpty().size)
+
+        coEvery { conversationStore.deleteConversation(1L) } just Runs
+        coEvery { conversationStore.createConversation() } returns newConversation
+        coEvery { conversationStore.loadMessages(2L) } returns emptyList()
+        coEvery { conversationStore.listConversations() } returns listOf(newConversation)
+
+        viewModel.clearChat()
+        testScheduler.advanceUntilIdle()
+
+        coVerify { conversationStore.deleteConversation(1L) }
+        coVerify { conversationStore.createConversation() }
+        assertTrue(viewModel.messages.value.orEmpty().isEmpty())
     }
 }

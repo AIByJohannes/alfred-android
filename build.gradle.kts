@@ -43,7 +43,19 @@ kover {
                     "*.R",
                     "*.R$*",
                     "*.BuildConfig",
-                    "com.aibyjohannes.alfred.databinding.*"
+                    "com.aibyjohannes.alfred.databinding.*",
+                    "com.aibyjohannes.alfred.MainActivity*",
+                    "com.aibyjohannes.alfred.ui.settings.SettingsFragment*",
+                    "com.aibyjohannes.alfred.ui.home.HomeFragment*",
+                    "com.aibyjohannes.alfred.ui.home.ChatAdapter*",
+                    "com.aibyjohannes.alfred.ui.home.ConversationAdapter*",
+                    "com.aibyjohannes.alfred.ui.home.DrawerProjectsAdapter*",
+                    "com.aibyjohannes.alfred.ui.home.VoiceOrAnimator*",
+                    "com.aibyjohannes.alfred.ui.home.WorkspaceChipAdapter*",
+                    "com.aibyjohannes.alfred.ui.home.AudioRecorder*",
+                    "com.aibyjohannes.alfred.data.ticktick.TickTickOAuthServer*",
+                    "com.aibyjohannes.alfred.notifications.AlfredNotificationReceiver*",
+                    "com.aibyjohannes.alfred.notifications.NotificationBootReceiver*"
                 )
             }
         }

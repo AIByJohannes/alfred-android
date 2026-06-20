@@ -270,4 +270,189 @@ class OpenRouterChatEngineToolParsingTest {
         method.isAccessible = true
         return method.invoke(engine, argumentsJson) as OpenRouterChatEngine.SmartModelDelegationDetails?
     }
+
+    @Test
+    fun `sendMessage succeeds and returns chat turn result`() = runTest {
+        val client = mockk<OpenRouterLLMClient>(relaxed = true)
+        val engine = spyk(buildEngine()) {
+            every { createOpenRouterClient() } returns client
+        }
+
+        coEvery { client.executeStreaming(any(), any(), any()) } returns flowOf(
+            StreamFrame.TextDelta(text = "Final answer")
+        )
+
+        val result = engine.sendMessage("hello", emptyList())
+        assertTrue(result.isSuccess)
+        assertEquals("Final answer", result.getOrThrow().content)
+    }
+
+    @Test
+    fun `sendMessage returns failure on exception`() = runTest {
+        val engine = spyk(buildEngine()) {
+            every { createOpenRouterClient() } throws RuntimeException("Connection error")
+        }
+
+        val result = engine.sendMessage("hello", emptyList())
+        assertTrue(result.isFailure)
+        assertEquals("Connection error", result.exceptionOrNull()?.message)
+    }
+
+    @Test
+    fun `sendMessage returns failure when no Completed event emitted`() = runTest {
+        val client = mockk<OpenRouterLLMClient>(relaxed = true)
+        val engine = spyk(buildEngine()) {
+            every { createOpenRouterClient() } returns client
+        }
+
+        coEvery { client.executeStreaming(any(), any(), any()) } returns flowOf(
+            // empty flow
+        )
+
+        val result = engine.sendMessage("hello", emptyList())
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()?.message?.contains("No response content from AI") == true)
+    }
+
+    @OptIn(kotlin.ExperimentalStdlibApi::class)
+    private suspend fun executeToolCall(
+        engine: OpenRouterChatEngine,
+        functionName: String,
+        arguments: String
+    ): String = kotlin.coroutines.intrinsics.suspendCoroutineUninterceptedOrReturn { cont ->
+        val method = OpenRouterChatEngine::class.java.declaredMethods.first {
+            it.name.startsWith("executeToolCall")
+        }
+        method.isAccessible = true
+        method.invoke(engine, functionName, arguments, cont)
+    }
+
+    @Test
+    fun `executeToolCall web_search success`() = runTest {
+        val webSearch = mockk<WebSearchClient>()
+        coEvery { webSearch.search("queryText") } returns Result.success("Search hits found")
+        val engine = OpenRouterChatEngine(
+            apiKey = "test",
+            webSearchClient = webSearch
+        )
+        val result = executeToolCall(engine, OpenRouterChatEngine.WEB_SEARCH_FUNCTION_NAME, """{"query":"queryText"}""")
+        assertEquals("Search hits found", result)
+    }
+
+    @Test
+    fun `executeToolCall web_search failure`() = runTest {
+        val webSearch = mockk<WebSearchClient>()
+        coEvery { webSearch.search("queryText") } returns Result.failure(Exception("network error"))
+        val engine = OpenRouterChatEngine(
+            apiKey = "test",
+            webSearchClient = webSearch
+        )
+        val result = executeToolCall(engine, OpenRouterChatEngine.WEB_SEARCH_FUNCTION_NAME, """{"query":"queryText"}""")
+        assertEquals("Web search failed: network error", result)
+    }
+
+    @Test
+    fun `executeToolCall web_search empty query`() = runTest {
+        val engine = OpenRouterChatEngine(apiKey = "test", webSearchClient = mockk())
+        val result = executeToolCall(engine, OpenRouterChatEngine.WEB_SEARCH_FUNCTION_NAME, """{"query":""}""")
+        assertEquals("Web search failed: missing required 'query' argument.", result)
+    }
+
+    @Test
+    fun `executeToolCall local_knowledge_search success`() = runTest {
+        val lkSearch = mockk<LocalKnowledgeSearchClient>()
+        coEvery { lkSearch.search(any()) } returns Result.success(
+            listOf(
+                LocalKnowledgeSearchResult(
+                    source = LocalKnowledgeSource.MEMORIES,
+                    title = "Mem1",
+                    snippet = "some snippet",
+                    timestampEpochMs = 123456L
+                )
+            )
+        )
+        val engine = OpenRouterChatEngine(
+            apiKey = "test",
+            webSearchClient = mockk(),
+            localKnowledgeSearchClient = lkSearch
+        )
+        val result = executeToolCall(engine, OpenRouterChatEngine.LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME, """{"query":"Kotlin"}""")
+        assertTrue(result.contains("Mem1"))
+        assertTrue(result.contains("some snippet"))
+    }
+
+    @Test
+    fun `executeToolCall local_knowledge_search failure`() = runTest {
+        val lkSearch = mockk<LocalKnowledgeSearchClient>()
+        coEvery { lkSearch.search(any()) } returns Result.failure(Exception("disk error"))
+        val engine = OpenRouterChatEngine(
+            apiKey = "test",
+            webSearchClient = mockk(),
+            localKnowledgeSearchClient = lkSearch
+        )
+        val result = executeToolCall(engine, OpenRouterChatEngine.LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME, """{"query":"Kotlin"}""")
+        assertEquals("Local knowledge search failed: disk error", result)
+    }
+
+    @Test
+    fun `executeToolCall local_knowledge_search invalid query`() = runTest {
+        val engine = OpenRouterChatEngine(apiKey = "test", webSearchClient = mockk())
+        val result = executeToolCall(engine, OpenRouterChatEngine.LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME, """{"limit":5}""")
+        assertEquals("Local knowledge search failed: missing required 'query' argument.", result)
+    }
+
+    @Test
+    fun `executeToolCall ask_smart_model success`() = runTest {
+        val client = mockk<OpenRouterLLMClient>()
+        val engine = spyk(OpenRouterChatEngine(apiKey = "test", webSearchClient = mockk())) {
+            every { createOpenRouterClient() } returns client
+        }
+
+        coEvery { client.executeStreaming(any(), any(), any()) } returns flowOf(
+            StreamFrame.TextDelta(text = "Smart plan content")
+        )
+        every { client.close() } just Runs
+
+        val result = executeToolCall(engine, OpenRouterChatEngine.ASK_SMART_MODEL_FUNCTION_NAME, """{"task_details":"reason about this"}""")
+        assertEquals("Smart plan content", result)
+    }
+
+    @Test
+    fun `executeToolCall ask_smart_model exception`() = runTest {
+        val client = mockk<OpenRouterLLMClient>()
+        val engine = spyk(OpenRouterChatEngine(apiKey = "test", webSearchClient = mockk())) {
+            every { createOpenRouterClient() } returns client
+        }
+
+        coEvery { client.executeStreaming(any(), any(), any()) } throws RuntimeException("streaming error")
+        every { client.close() } just Runs
+
+        val result = executeToolCall(engine, OpenRouterChatEngine.ASK_SMART_MODEL_FUNCTION_NAME, """{"task_details":"reason about this"}""")
+        assertEquals("Smart model delegation failed: streaming error", result)
+    }
+
+    @Test
+    fun `executeToolCall ask_smart_model missing task_details`() = runTest {
+        val engine = OpenRouterChatEngine(apiKey = "test", webSearchClient = mockk())
+        val result = executeToolCall(engine, OpenRouterChatEngine.ASK_SMART_MODEL_FUNCTION_NAME, """{"context":"context info"}""")
+        assertEquals("Smart model delegation failed: missing required 'task_details' argument.", result)
+    }
+
+    @Test
+    fun `executeToolCall obsidian tools when client null`() = runTest {
+        val engine = OpenRouterChatEngine(apiKey = "test", webSearchClient = mockk(), obsidianClient = null)
+        
+        val searchResult = executeToolCall(engine, OpenRouterChatEngine.OBSIDIAN_SEARCH_TOOL, """{"query":"test"}""")
+        assertEquals("Obsidian integration is not configured.", searchResult)
+
+        val listResult = executeToolCall(engine, OpenRouterChatEngine.OBSIDIAN_LIST_FOLDER_TOOL, """{"path":"Daily"}""")
+        assertEquals("Obsidian integration is not configured.", listResult)
+
+        val readResult = executeToolCall(engine, OpenRouterChatEngine.OBSIDIAN_READ_TOOL, """{"path":"note"}""")
+        assertEquals("Obsidian integration is not configured.", readResult)
+
+        val writeResult = executeToolCall(engine, OpenRouterChatEngine.OBSIDIAN_WRITE_TOOL, """{"path":"note","content":"text"}""")
+        assertEquals("Obsidian integration is not configured.", writeResult)
+    }
 }
+

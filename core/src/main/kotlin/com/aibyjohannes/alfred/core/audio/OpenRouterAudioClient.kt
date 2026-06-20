@@ -16,10 +16,10 @@ import java.util.Base64
 
 class OpenRouterAudioClient(
     private val apiKey: String,
-    private val model: String = DEFAULT_MODEL
+    private val model: String = DEFAULT_MODEL,
+    private val client: HttpClient = HttpClient(io.ktor.client.engine.okhttp.OkHttp)
 ) : AutoCloseable {
 
-    private val client = HttpClient(OkHttp)
     private val objectMapper = ObjectMapper()
 
     suspend fun transcribe(audioFile: File): Result<String> = withContext(Dispatchers.IO) {
