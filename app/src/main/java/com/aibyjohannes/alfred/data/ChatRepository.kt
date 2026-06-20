@@ -20,19 +20,55 @@ import com.fasterxml.jackson.annotation.JsonPropertyDescription
 import kotlinx.coroutines.flow.Flow
 import java.io.File
 
-class ChatRepository(
+internal data class ChatEngineRequest(
+    val apiKey: String,
+    val model: String,
+    val sysInfo: String?,
+    val maxPasses: Int
+)
+
+internal class ChatRepositoryDependencies(
+    val audioClientFactory: (String, String) -> OpenRouterAudioClient = { apiKey, model ->
+        OpenRouterAudioClient(apiKey, model)
+    },
+    val ttsClientFactory: (String, String, String) -> OpenRouterTtsClient = { apiKey, model, voice ->
+        OpenRouterTtsClient(apiKey, model, voice)
+    },
+    val chatEngineFactory: ((ChatEngineRequest) -> ChatEngine)? = null
+)
+
+class ChatRepository private constructor(
     private val apiKeyStore: ApiKeyStore,
     private val localKnowledgeSearchClient: LocalKnowledgeSearchClient? = null,
     private val obsidianClient: ObsidianClient? = null,
-    private val obsidianClientProvider: (() -> ObsidianClient?)? = null
+    private val obsidianClientProvider: (() -> ObsidianClient?)? = null,
+    private val dependencies: ChatRepositoryDependencies
 ) {
+    constructor(
+        apiKeyStore: ApiKeyStore,
+        localKnowledgeSearchClient: LocalKnowledgeSearchClient? = null,
+        obsidianClient: ObsidianClient? = null,
+        obsidianClientProvider: (() -> ObsidianClient?)? = null
+    ) : this(
+        apiKeyStore,
+        localKnowledgeSearchClient,
+        obsidianClient,
+        obsidianClientProvider,
+        ChatRepositoryDependencies()
+    )
+
+    internal constructor(
+        apiKeyStore: ApiKeyStore,
+        dependencies: ChatRepositoryDependencies
+    ) : this(apiKeyStore, null, null, null, dependencies)
+
     suspend fun transcribeAudio(audioFile: java.io.File): Result<String> {
-        val apiKey = apiKeyStore.loadOpenRouterKey()
+        val apiKey = loadApiKey()
             ?: return Result.failure(Exception("API key not configured. Please add your OpenRouter API key in Settings."))
         val sttModel = apiKeyStore.loadSttModel()
 
         return try {
-            OpenRouterAudioClient(apiKey, sttModel).use { client ->
+            dependencies.audioClientFactory(apiKey, sttModel).use { client ->
                 client.transcribe(audioFile)
             }
         } catch (e: Exception) {
@@ -41,13 +77,13 @@ class ChatRepository(
     }
 
     suspend fun synthesizeSpeech(text: String, outputFile: File): Result<File> {
-        val apiKey = apiKeyStore.loadOpenRouterKey()
+        val apiKey = loadApiKey()
             ?: return Result.failure(Exception("API key not configured. Please add your OpenRouter API key in Settings."))
         val ttsModel = apiKeyStore.loadTtsModel()
         val ttsVoice = apiKeyStore.loadTtsVoice()
 
         return try {
-            OpenRouterTtsClient(apiKey, ttsModel, ttsVoice).use { client ->
+            dependencies.ttsClientFactory(apiKey, ttsModel, ttsVoice).use { client ->
                 client.synthesize(text, outputFile)
             }
         } catch (e: Exception) {
@@ -60,7 +96,7 @@ class ChatRepository(
         conversationHistory: List<ChatMessage>,
         sysInfo: String? = null
     ): Result<String> {
-        val apiKey = apiKeyStore.loadOpenRouterKey()
+        val apiKey = loadApiKey()
             ?: return Result.failure(Exception("API key not configured. Please add your OpenRouter API key in Settings."))
 
         val engine = createEngine(apiKey, sysInfo)
@@ -77,7 +113,7 @@ class ChatRepository(
         sysInfo: String? = null,
         maxPasses: Int? = null
     ): Flow<ChatStreamEvent> {
-        val apiKey = apiKeyStore.loadOpenRouterKey()
+        val apiKey = loadApiKey()
             ?: throw IllegalStateException("API key not configured. Please add your OpenRouter API key in Settings.")
         return createEngine(apiKey, sysInfo, maxPasses).streamMessage(
             userMessage = userMessage,
@@ -110,6 +146,10 @@ class ChatRepository(
 
     private fun createEngine(apiKey: String, sysInfo: String? = null, maxPasses: Int? = null): ChatEngine {
         val model = apiKeyStore.loadModel()
+        val resolvedMaxPasses = maxPasses ?: 10
+        dependencies.chatEngineFactory?.let { factory ->
+            return factory(ChatEngineRequest(apiKey, model, sysInfo, resolvedMaxPasses))
+        }
 
         val tickTickProvider = object : TickTickCredentialsProvider {
             override fun getCredentials(): TickTickCredentials? {
@@ -143,9 +183,13 @@ class ChatRepository(
             localKnowledgeSearchClient = localKnowledgeSearchClient,
             tickTickClient = tickTickClient,
             obsidianClient = resolveObsidianClient(),
-            maxAgentPasses = maxPasses ?: 10
+            maxAgentPasses = resolvedMaxPasses
         )
     }
+
+    private fun loadApiKey(): String? = apiKeyStore.loadOpenRouterKey()
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
 
     /** Returns the currently active ObsidianClient, preferring the dynamic provider over the fixed one. */
     fun resolveObsidianClient(): ObsidianClient? =
@@ -188,7 +232,7 @@ class ChatRepository(
     @Deprecated("Use core engine package directly for new integrations.")
     class PerplexitySubAgent(private val apiKeyStore: ApiKeyStore) {
         suspend fun webSearch(query: String): Result<String> {
-            val apiKey = apiKeyStore.loadOpenRouterKey()
+            val apiKey = apiKeyStore.loadOpenRouterKey()?.trim()?.takeIf { it.isNotEmpty() }
                 ?: return Result.failure(Exception("API key not configured."))
             return PerplexitySearchClient(apiKey = apiKey, model = PERPLEXITY_MODEL).search(query)
         }

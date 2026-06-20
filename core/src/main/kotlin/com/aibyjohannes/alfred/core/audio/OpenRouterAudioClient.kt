@@ -38,6 +38,7 @@ class OpenRouterAudioClient(
                 "webm" -> "webm"
                 "ogg" -> "ogg"
                 "flac" -> "flac"
+                "aac" -> "aac"
                 else -> "wav"
             }
 

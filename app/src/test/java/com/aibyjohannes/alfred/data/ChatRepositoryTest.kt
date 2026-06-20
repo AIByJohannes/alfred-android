@@ -2,16 +2,20 @@ package com.aibyjohannes.alfred.data
 
 import com.aibyjohannes.alfred.core.audio.OpenRouterAudioClient
 import com.aibyjohannes.alfred.core.audio.OpenRouterTtsClient
-import com.aibyjohannes.alfred.core.engine.OpenRouterChatEngine
+import com.aibyjohannes.alfred.core.engine.ChatEngine
 import com.aibyjohannes.alfred.core.model.ChatStreamEvent
 import com.aibyjohannes.alfred.core.model.ChatTurnResult
-import com.aibyjohannes.alfred.core.search.PerplexitySearchClient
+import com.aibyjohannes.alfred.core.model.CoreChatMessage
+import com.aibyjohannes.alfred.core.model.CoreChatMessageKind
 import com.aibyjohannes.alfred.data.api.ChatMessage
 import io.mockk.*
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
-import org.junit.After
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 import java.io.File
@@ -20,107 +24,167 @@ class ChatRepositoryTest {
 
     private val apiKeyStore = mockk<ApiKeyStore>()
 
-    private lateinit var repository: ChatRepository
-
     @Before
     fun setUp() {
-        mockkConstructor(OpenRouterAudioClient::class)
-        mockkConstructor(OpenRouterTtsClient::class)
-        mockkConstructor(OpenRouterChatEngine::class)
-
-        repository = ChatRepository(apiKeyStore)
-    }
-
-    @After
-    fun tearDown() {
-        unmockkAll()
-    }
-
-    @Test
-    fun `transcribeAudio success`() = runBlocking {
-        val audioFile = mockk<File>()
         every { apiKeyStore.loadOpenRouterKey() } returns "test-key"
+        every { apiKeyStore.loadModel() } returns "test-chat-model"
         every { apiKeyStore.loadSttModel() } returns "test-stt-model"
-        
-        coEvery { anyConstructed<OpenRouterAudioClient>().transcribe(audioFile) } returns Result.success("transcribed text")
-        every { anyConstructed<OpenRouterAudioClient>().close() } just Runs
-
-        val result = repository.transcribeAudio(audioFile)
-
-        assertTrue(result.isSuccess)
-        assertEquals("transcribed text", result.getOrNull())
-    }
-
-    @Test
-    fun `transcribeAudio fails when API key missing`() = runBlocking {
-        val audioFile = mockk<File>()
-        every { apiKeyStore.loadOpenRouterKey() } returns null
-
-        val result = repository.transcribeAudio(audioFile)
-
-        assertTrue(result.isFailure)
-        assertTrue(result.exceptionOrNull()?.message?.contains("API key not configured") == true)
-    }
-
-    @Test
-    fun `synthesizeSpeech success`() = runBlocking {
-        val outputFile = mockk<File>()
-        every { apiKeyStore.loadOpenRouterKey() } returns "test-key"
         every { apiKeyStore.loadTtsModel() } returns "test-tts-model"
-        every { apiKeyStore.loadTtsVoice() } returns "test-tts-voice"
+        every { apiKeyStore.loadTtsVoice() } returns "test-voice"
+    }
 
-        coEvery { anyConstructed<OpenRouterTtsClient>().synthesize("hello", outputFile) } returns Result.success(outputFile)
-        every { anyConstructed<OpenRouterTtsClient>().close() } just Runs
+    @Test
+    fun `transcribeAudio forwards selected credentials and closes the client`() = runBlocking {
+        val audioFile = mockk<File>()
+        val audioClient = mockk<OpenRouterAudioClient>()
+        var factoryArguments: Pair<String, String>? = null
+        every { audioClient.close() } just Runs
+        coEvery { audioClient.transcribe(audioFile) } returns Result.success("transcribed text")
+        val repository = repository(
+            audioFactory = { apiKey, model ->
+                factoryArguments = apiKey to model
+                audioClient
+            }
+        )
+
+        val result = repository.transcribeAudio(audioFile)
+
+        assertEquals("transcribed text", result.getOrThrow())
+        assertEquals("test-key" to "test-stt-model", factoryArguments)
+        coVerify(exactly = 1) { audioClient.transcribe(audioFile) }
+        verify(exactly = 1) { audioClient.close() }
+    }
+
+    @Test
+    fun `synthesizeSpeech forwards selected settings and closes the client`() = runBlocking {
+        val outputFile = mockk<File>()
+        val ttsClient = mockk<OpenRouterTtsClient>()
+        var factoryArguments: Triple<String, String, String>? = null
+        every { ttsClient.close() } just Runs
+        coEvery { ttsClient.synthesize("hello", outputFile) } returns Result.success(outputFile)
+        val repository = repository(
+            ttsFactory = { apiKey, model, voice ->
+                factoryArguments = Triple(apiKey, model, voice)
+                ttsClient
+            }
+        )
 
         val result = repository.synthesizeSpeech("hello", outputFile)
 
-        assertTrue(result.isSuccess)
-        assertEquals(outputFile, result.getOrNull())
+        assertSame(outputFile, result.getOrThrow())
+        assertEquals(Triple("test-key", "test-tts-model", "test-voice"), factoryArguments)
+        coVerify(exactly = 1) { ttsClient.synthesize("hello", outputFile) }
+        verify(exactly = 1) { ttsClient.close() }
     }
 
     @Test
-    fun `sendMessage success`() = runBlocking {
-        every { apiKeyStore.loadOpenRouterKey() } returns "test-key"
-        every { apiKeyStore.loadModel() } returns "test-model"
-        every { apiKeyStore.loadTickTickClientId() } returns null
+    fun `null and blank API keys reject every live repository operation`() = runBlocking {
+        listOf<String?>(null, "", "   ").forEach { missingKey ->
+            every { apiKeyStore.loadOpenRouterKey() } returns missingKey
+            var collaboratorCreated = false
+            val repository = repository(
+                audioFactory = { _, _ -> collaboratorCreated = true; mockk() },
+                ttsFactory = { _, _, _ -> collaboratorCreated = true; mockk() },
+                engineFactory = { collaboratorCreated = true; mockk() }
+            )
 
-        val mockTurnResult = mockk<ChatTurnResult>()
-        every { mockTurnResult.content } returns "ai reply"
-        
-        coEvery { anyConstructed<OpenRouterChatEngine>().sendMessage(any(), any()) } returns Result.success(mockTurnResult)
-
-        val chatMessage = ChatMessage(role = ChatMessage.ROLE_USER, content = "user content")
-        val result = repository.sendMessage("hello", listOf(chatMessage))
-
-        assertTrue(result.isSuccess)
-        assertEquals("ai reply", result.getOrNull())
+            assertTrue(repository.transcribeAudio(mockk()).isFailure)
+            assertTrue(repository.synthesizeSpeech("text", mockk()).isFailure)
+            assertTrue(repository.sendMessage("hello", emptyList()).isFailure)
+            assertThrows(IllegalStateException::class.java) {
+                repository.streamMessage("hello", emptyList())
+            }
+            assertTrue(!collaboratorCreated)
+        }
     }
 
     @Test
-    fun `streamMessage success`() = runBlocking {
-        every { apiKeyStore.loadOpenRouterKey() } returns "test-key"
-        every { apiKeyStore.loadModel() } returns "test-model"
-        every { apiKeyStore.loadTickTickClientId() } returns null
+    fun `sendMessage forwards the complete conversation contract and returns assistant content`() = runBlocking {
+        val engine = mockk<ChatEngine>()
+        val historySlot = slot<List<CoreChatMessage>>()
+        var engineRequest: ChatEngineRequest? = null
+        coEvery { engine.sendMessage("new question", capture(historySlot)) } returns Result.success(
+            ChatTurnResult(content = "assistant reply", toolCalls = emptyList())
+        )
+        val repository = repository(engineFactory = { request -> engineRequest = request; engine })
+        val history = listOf(
+            ChatMessage(
+                role = ChatMessage.ROLE_ASSISTANT,
+                content = "tool result",
+                kind = ChatMessage.KIND_TOOL_RESULT,
+                turnId = "turn-1",
+                toolCallId = "call-1",
+                toolName = "search",
+                toolArgumentsJson = "{\"query\":\"weather\"}",
+                isError = true,
+                reasoningText = "reasoning",
+                reasoningSummary = "summary",
+                encryptedReasoning = "encrypted",
+                includeInPrompt = false,
+                searchable = false
+            )
+        )
 
-        val flow = flowOf(mockk<ChatStreamEvent>())
-        every { anyConstructed<OpenRouterChatEngine>().streamMessage(any(), any()) } returns flow
+        val result = repository.sendMessage("new question", history, sysInfo = "device context")
 
-        val chatMessage = ChatMessage(role = ChatMessage.ROLE_USER, content = "user content")
-        val resultFlow = repository.streamMessage("hello", listOf(chatMessage))
-
-        assertNotNull(resultFlow)
+        assertEquals("assistant reply", result.getOrThrow())
+        assertEquals(ChatEngineRequest("test-key", "test-chat-model", "device context", 10), engineRequest)
+        val forwarded = historySlot.captured.single()
+        assertEquals(ChatMessage.ROLE_ASSISTANT, forwarded.role)
+        assertEquals("tool result", forwarded.content)
+        assertEquals(CoreChatMessageKind.TOOL_RESULT, forwarded.kind)
+        assertEquals("turn-1", forwarded.turnId)
+        assertEquals("call-1", forwarded.toolCallId)
+        assertEquals("search", forwarded.toolName)
+        assertEquals("{\"query\":\"weather\"}", forwarded.toolArgumentsJson)
+        assertTrue(forwarded.isError)
+        assertEquals("reasoning", forwarded.reasoningText)
+        assertEquals("summary", forwarded.reasoningSummary)
+        assertEquals("encrypted", forwarded.encryptedReasoning)
+        assertTrue(!forwarded.includeInPrompt)
+        assertTrue(!forwarded.searchable)
     }
 
     @Test
-    fun `perplexity subagent search success`() = runBlocking {
-        every { apiKeyStore.loadOpenRouterKey() } returns "test-key"
-        mockkConstructor(PerplexitySearchClient::class)
-        coEvery { anyConstructed<PerplexitySearchClient>().search("query") } returns Result.success("search result")
+    fun `streamMessage forwards max passes and emits the engine events`() = runBlocking {
+        val engine = mockk<ChatEngine>()
+        val event = ChatStreamEvent.TextDelta(passIndex = 2, textChunk = "chunk")
+        val historySlot = slot<List<CoreChatMessage>>()
+        var engineRequest: ChatEngineRequest? = null
+        every { engine.streamMessage("hello", capture(historySlot)) } returns flowOf(event)
+        val repository = repository(engineFactory = { request -> engineRequest = request; engine })
+        val history = listOf(ChatMessage(role = ChatMessage.ROLE_USER, content = "earlier"))
 
-        val subAgent = ChatRepository.PerplexitySubAgent(apiKeyStore)
-        val result = subAgent.webSearch("query")
+        val events = repository.streamMessage("hello", history, sysInfo = "sys", maxPasses = 4).toList()
 
-        assertTrue(result.isSuccess)
-        assertEquals("search result", result.getOrNull())
+        assertEquals(listOf(event), events)
+        assertEquals(ChatEngineRequest("test-key", "test-chat-model", "sys", 4), engineRequest)
+        assertEquals("earlier", historySlot.captured.single().content)
     }
+
+    @Test
+    fun `sendMessage preserves engine failures`() = runBlocking {
+        val engine = mockk<ChatEngine>()
+        val failure = IllegalStateException("upstream failed")
+        coEvery { engine.sendMessage(any(), any()) } returns Result.failure(failure)
+        val repository = repository(engineFactory = { engine })
+
+        val result = repository.sendMessage("hello", emptyList())
+
+        assertTrue(result.isFailure)
+        assertSame(failure, result.exceptionOrNull())
+    }
+
+    private fun repository(
+        audioFactory: (String, String) -> OpenRouterAudioClient = { _, _ -> mockk() },
+        ttsFactory: (String, String, String) -> OpenRouterTtsClient = { _, _, _ -> mockk() },
+        engineFactory: (ChatEngineRequest) -> ChatEngine = { mockk() }
+    ): ChatRepository = ChatRepository(
+        apiKeyStore = apiKeyStore,
+        dependencies = ChatRepositoryDependencies(
+            audioClientFactory = audioFactory,
+            ttsClientFactory = ttsFactory,
+            chatEngineFactory = engineFactory
+        )
+    )
 }

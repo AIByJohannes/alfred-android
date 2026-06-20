@@ -1,5 +1,7 @@
 package com.aibyjohannes.alfred.data.local
 
+import io.mockk.every
+import io.mockk.mockk
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -24,6 +26,17 @@ class FileChatHistoryStorageTest {
     }
 
     @Test
+    fun `ensureReady rejects a root path that is a file`() {
+        val rootFile = temporaryFolder.newFile("not-a-directory")
+
+        val error = assertThrows(IllegalStateException::class.java) {
+            FileChatHistoryStorage(rootFile).ensureReady()
+        }
+
+        assertTrue(error.message.orEmpty().contains("directory", ignoreCase = true))
+    }
+
+    @Test
     fun `ensureDirectory creates subdirectories`() {
         val rootDir = temporaryFolder.newFolder()
         val storage = FileChatHistoryStorage(rootDir)
@@ -34,6 +47,18 @@ class FileChatHistoryStorageTest {
         val expectedDir = File(File(rootDir, "sub"), "nested")
         assertTrue(expectedDir.exists())
         assertTrue(expectedDir.isDirectory)
+    }
+
+    @Test
+    fun `ensureDirectory rejects a path blocked by a file`() {
+        val rootDir = temporaryFolder.newFolder()
+        File(rootDir, "blocked").writeText("content")
+
+        val error = assertThrows(IllegalStateException::class.java) {
+            FileChatHistoryStorage(rootDir).ensureDirectory(listOf("blocked", "nested"))
+        }
+
+        assertTrue(error.message.orEmpty().contains("directory", ignoreCase = true))
     }
 
     @Test
@@ -104,6 +129,20 @@ class FileChatHistoryStorageTest {
     }
 
     @Test
+    fun `listChildren reports an existing directory that cannot be listed`() {
+        val rootDir = mockk<File>()
+        every { rootDir.exists() } returns true
+        every { rootDir.isDirectory } returns true
+        every { rootDir.listFiles() } returns null
+
+        val error = assertThrows(IllegalStateException::class.java) {
+            FileChatHistoryStorage(rootDir).listChildren(emptyList())
+        }
+
+        assertTrue(error.message.orEmpty().contains("Could not list directory"))
+    }
+
+    @Test
     fun `createFileExclusive creates file if not exists and throws if does`() {
         val rootDir = temporaryFolder.newFolder()
         val storage = FileChatHistoryStorage(rootDir)
@@ -114,24 +153,23 @@ class FileChatHistoryStorageTest {
         assertTrue(file.exists())
         assertTrue(file.isFile)
 
-        // Try creating again, should throw IllegalStateException
-        val result = runCatching {
+        val error = assertThrows(IllegalStateException::class.java) {
             storage.createFileExclusive(path)
         }
-        assertTrue(result.isFailure)
-        assertTrue(result.exceptionOrNull() is IllegalStateException)
+        assertTrue(error.message.orEmpty().contains("already exists"))
     }
 
     @Test
-    fun `writeText writes text and handles nested paths`() {
+    fun `writeText creates nested paths and replaces existing content`() {
         val rootDir = temporaryFolder.newFolder()
         val storage = FileChatHistoryStorage(rootDir)
         val path = listOf("nested", "sub", "file.txt")
 
         storage.writeText(path, "my data")
+        storage.writeText(path, "replacement")
         val file = File(rootDir, "nested/sub/file.txt")
         assertTrue(file.exists())
-        assertEquals("my data", file.readText())
+        assertEquals("replacement", file.readText())
     }
 
     @Test
@@ -172,10 +210,15 @@ class FileChatHistoryStorageTest {
         assertFalse(File(rootDir, "dir_to_delete").exists())
     }
 
-    @Test(expected = IllegalArgumentException::class)
-    fun `empty path throws IllegalArgumentException`() {
+    @Test
+    fun `file operations reject an empty path`() {
         val rootDir = temporaryFolder.newFolder()
         val storage = FileChatHistoryStorage(rootDir)
-        storage.writeText(emptyList(), "content")
+
+        assertThrows(IllegalArgumentException::class.java) { storage.readText(emptyList()) }
+        assertThrows(IllegalArgumentException::class.java) { storage.createFileExclusive(emptyList()) }
+        assertThrows(IllegalArgumentException::class.java) { storage.writeText(emptyList(), "content") }
+        assertThrows(IllegalArgumentException::class.java) { storage.appendLine(emptyList(), "content") }
+        assertThrows(IllegalArgumentException::class.java) { storage.delete(emptyList()) }
     }
 }

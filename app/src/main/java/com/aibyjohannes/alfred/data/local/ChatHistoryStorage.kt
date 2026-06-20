@@ -32,11 +32,16 @@ class FileChatHistoryStorage(
     private val rootDir: File
 ) : ChatHistoryStorage {
     override fun ensureReady() {
-        rootDir.mkdirs()
+        check(rootDir.isDirectory || rootDir.mkdirs()) {
+            "Chat history root is not a usable directory: ${rootDir.path}"
+        }
     }
 
     override fun ensureDirectory(path: List<String>) {
-        directoryAt(path).mkdirs()
+        val directory = directoryAt(path)
+        check(directory.isDirectory || directory.mkdirs()) {
+            "Could not create directory: ${path.joinToString("/")}"
+        }
     }
 
     override fun readText(path: List<String>): StorageReadResult {
@@ -52,7 +57,9 @@ class FileChatHistoryStorage(
         val directory = if (path.isEmpty()) rootDir else directoryAt(path)
         if (!directory.exists()) return emptyList()
         check(directory.isDirectory) { "Not a directory: ${path.joinToString("/")}" }
-        return directory.listFiles().orEmpty().map { child ->
+        val children = directory.listFiles()
+            ?: throw IllegalStateException("Could not list directory: ${path.joinToString("/")}")
+        return children.map { child ->
             StorageEntry(child.name, child.isDirectory, if (child.isFile) child.length() else 0L)
         }
     }

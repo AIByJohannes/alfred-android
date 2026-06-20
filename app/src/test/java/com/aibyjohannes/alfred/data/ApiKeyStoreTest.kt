@@ -1,59 +1,52 @@
 package com.aibyjohannes.alfred.data
 
-import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
-import io.mockk.*
+import io.mockk.Runs
+import io.mockk.every
+import io.mockk.just
+import io.mockk.mockk
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
+import io.mockk.verify
 import org.junit.After
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
 class ApiKeyStoreTest {
 
-    private val context = mockk<Context>()
-    private val sharedPrefs = mockk<SharedPreferences>(relaxed = true)
-    private val editor = mockk<SharedPreferences.Editor>(relaxed = true)
+    private val sharedPrefs = mockk<SharedPreferences>()
+    private val editor = mockk<SharedPreferences.Editor>()
+    private val values = mutableMapOf<String, String?>()
 
     private lateinit var apiKeyStore: ApiKeyStore
-    private val store = mutableMapOf<String, Any?>()
 
     @Before
     fun setUp() {
         mockkStatic(Log::class)
         every { Log.e(any(), any()) } returns 0
         every { Log.e(any(), any(), any()) } returns 0
-        every { Log.w(any(), any() as String) } returns 0
-        every { Log.d(any(), any()) } returns 0
 
-        store.clear()
-        
-        // Mock getSharedPreferences to return our mocked sharedPrefs
-        every { context.getSharedPreferences(any(), any()) } returns sharedPrefs
-        
-        // Mock SharedPreferences behavior
-        every { sharedPrefs.edit() } returns editor
+        values.clear()
         every { sharedPrefs.getString(any(), any()) } answers {
-            val key = firstArg<String>()
-            val default = secondArg<String?>()
-            (store[key] as? String) ?: default
+            values[firstArg()] ?: secondArg()
         }
-        
-        // Mock Editor behavior
+        every { sharedPrefs.edit() } returns editor
         every { editor.putString(any(), any()) } answers {
-            val key = firstArg<String>()
-            val value = secondArg<String?>()
-            store[key] = value
+            values[firstArg()] = secondArg()
             editor
         }
         every { editor.remove(any()) } answers {
-            val key = firstArg<String>()
-            store.remove(key)
+            values.remove(firstArg())
             editor
         }
         every { editor.apply() } just Runs
-        
-        apiKeyStore = ApiKeyStore(context)
+
+        apiKeyStore = ApiKeyStore(sharedPrefs, fallbackApiKey = "")
     }
 
     @After
@@ -62,102 +55,80 @@ class ApiKeyStoreTest {
     }
 
     @Test
-    fun `test save and load OpenRouter key`() {
+    fun `stored API key is trimmed and reported as configured`() {
         apiKeyStore.saveOpenRouterKey("  test-key  ")
+
         assertEquals("test-key", apiKeyStore.loadOpenRouterKey())
         assertTrue(apiKeyStore.hasApiKey())
     }
 
     @Test
-    fun `test clear API key`() {
-        apiKeyStore.saveOpenRouterKey("test-key")
-        apiKeyStore.clearApiKey()
-        val expected = if (com.aibyjohannes.alfred.BuildConfig.OPENROUTER_API_KEY.isNotBlank()) {
-            com.aibyjohannes.alfred.BuildConfig.OPENROUTER_API_KEY
-        } else {
-            null
-        }
-        assertEquals(expected, apiKeyStore.loadOpenRouterKey())
-        assertEquals(expected != null, apiKeyStore.hasApiKey())
+    fun `blank stored API key is absent and configured fallback is used`() {
+        val storeWithFallback = ApiKeyStore(sharedPrefs, fallbackApiKey = "  fallback-key  ")
+
+        storeWithFallback.saveOpenRouterKey("   ")
+        assertEquals("fallback-key", storeWithFallback.loadOpenRouterKey())
+
+        storeWithFallback.saveOpenRouterKey("saved-key")
+        storeWithFallback.clearApiKey()
+        assertEquals("fallback-key", storeWithFallback.loadOpenRouterKey())
     }
 
     @Test
-    fun `test save and load model`() {
-        // Default value
+    fun `chat model defaults and custom selection round trip`() {
         assertEquals("google/gemini-3.5-flash", apiKeyStore.loadModel())
-        
-        // Custom value
-        apiKeyStore.saveModel("custom-model")
+
+        apiKeyStore.saveModel("  custom-model  ")
+
         assertEquals("custom-model", apiKeyStore.loadModel())
     }
 
     @Test
-    fun `test save and load STT model`() {
-        // Default value
+    fun `speech models default and legacy TTS models migrate`() {
         assertEquals("openai/whisper-1", apiKeyStore.loadSttModel())
-        
-        // Custom value
-        apiKeyStore.saveSttModel("custom-stt")
-        assertEquals("custom-stt", apiKeyStore.loadSttModel())
-    }
+        assertEquals("hexgrad/kokoro-82m", apiKeyStore.loadTtsModel())
 
-    @Test
-    fun `test save and load TTS model`() {
-        // Default value
-        assertEquals("hexgrad/kokoro-82m", apiKeyStore.loadTtsModel())
-        
-        // Custom value
+        apiKeyStore.saveSttModel("  custom-stt  ")
         apiKeyStore.saveTtsModel("custom-tts")
+        assertEquals("custom-stt", apiKeyStore.loadSttModel())
         assertEquals("custom-tts", apiKeyStore.loadTtsModel())
-        
-        // Legacy model migrations
-        apiKeyStore.saveTtsModel("openai/tts-1")
-        assertEquals("hexgrad/kokoro-82m", apiKeyStore.loadTtsModel())
-        
+
         apiKeyStore.saveTtsModel("openai/tts-1-hd")
         assertEquals("hexgrad/kokoro-82m", apiKeyStore.loadTtsModel())
+        apiKeyStore.saveTtsModel("   ")
+        assertEquals("hexgrad/kokoro-82m", apiKeyStore.loadTtsModel())
     }
 
     @Test
-    fun `test save and load TTS voice`() {
-        // Default value
+    fun `TTS voice defaults and legacy voices migrate`() {
         assertEquals("af_alloy", apiKeyStore.loadTtsVoice())
-        
-        // Custom value
-        apiKeyStore.saveTtsVoice("custom-voice")
+
+        apiKeyStore.saveTtsVoice(" custom-voice ")
         assertEquals("custom-voice", apiKeyStore.loadTtsVoice())
-        
-        // Legacy voice migration
-        apiKeyStore.saveTtsVoice("alloy")
-        assertEquals("af_alloy", apiKeyStore.loadTtsVoice())
-        
-        apiKeyStore.saveTtsVoice("echo")
-        assertEquals("am_echo", apiKeyStore.loadTtsVoice())
-        
-        apiKeyStore.saveTtsVoice("shimmer")
-        assertEquals("af_sky", apiKeyStore.loadTtsVoice())
+
+        mapOf("alloy" to "af_alloy", "echo" to "am_echo", "shimmer" to "af_sky").forEach { (legacy, current) ->
+            apiKeyStore.saveTtsVoice(legacy)
+            assertEquals(current, apiKeyStore.loadTtsVoice())
+        }
     }
 
     @Test
-    fun `test save and load TickTick credentials`() {
-        assertNull(apiKeyStore.loadTickTickClientId())
-        assertNull(apiKeyStore.loadTickTickClientSecret())
-        assertNull(apiKeyStore.loadTickTickAccessToken())
-        assertNull(apiKeyStore.loadTickTickRefreshToken())
+    fun `TickTick credentials round trip and clear as one unit`() {
         assertFalse(apiKeyStore.hasTickTickAuth())
-        
-        apiKeyStore.saveTickTickClientId("client-id")
-        apiKeyStore.saveTickTickClientSecret("client-secret")
-        apiKeyStore.saveTickTickAccessToken("access-token")
-        apiKeyStore.saveTickTickRefreshToken("refresh-token")
-        
+
+        apiKeyStore.saveTickTickClientId(" client-id ")
+        apiKeyStore.saveTickTickClientSecret(" client-secret ")
+        apiKeyStore.saveTickTickAccessToken(" access-token ")
+        apiKeyStore.saveTickTickRefreshToken(" refresh-token ")
+
         assertEquals("client-id", apiKeyStore.loadTickTickClientId())
         assertEquals("client-secret", apiKeyStore.loadTickTickClientSecret())
         assertEquals("access-token", apiKeyStore.loadTickTickAccessToken())
         assertEquals("refresh-token", apiKeyStore.loadTickTickRefreshToken())
         assertTrue(apiKeyStore.hasTickTickAuth())
-        
+
         apiKeyStore.clearTickTickCredentials()
+
         assertNull(apiKeyStore.loadTickTickClientId())
         assertNull(apiKeyStore.loadTickTickClientSecret())
         assertNull(apiKeyStore.loadTickTickAccessToken())
@@ -166,46 +137,35 @@ class ApiKeyStoreTest {
     }
 
     @Test
-    fun `test all methods exception paths`() {
+    fun `preference read failures return safe absent values and defaults`() {
+        val throwingPrefs = mockk<SharedPreferences>()
+        every { throwingPrefs.getString(any(), any()) } throws IllegalStateException("read failed")
+        val store = ApiKeyStore(throwingPrefs, fallbackApiKey = "fallback-key")
+
+        assertNull(store.loadOpenRouterKey())
+        assertEquals("google/gemini-3.5-flash", store.loadModel())
+        assertEquals("openai/whisper-1", store.loadSttModel())
+        assertEquals("hexgrad/kokoro-82m", store.loadTtsModel())
+        assertEquals("af_alloy", store.loadTtsVoice())
+        assertNull(store.loadTickTickAccessToken())
+        verify(atLeast = 6) { Log.e("ApiKeyStore", any(), any()) }
+    }
+
+    @Test
+    fun `preference write failures are contained and logged`() {
         val throwingPrefs = mockk<SharedPreferences>()
         val throwingEditor = mockk<SharedPreferences.Editor>()
         every { throwingPrefs.edit() } returns throwingEditor
-        
-        every { throwingEditor.putString(any(), any()) } throws RuntimeException("write error")
-        every { throwingEditor.remove(any()) } throws RuntimeException("remove error")
-        every { throwingPrefs.getString(any(), any()) } throws RuntimeException("read error")
-        
-        every { context.getSharedPreferences(any(), any()) } returns throwingPrefs
-        val throwingStore = ApiKeyStore(context)
-        
-        throwingStore.saveOpenRouterKey("key")
-        assertNull(throwingStore.loadOpenRouterKey())
-        throwingStore.clearApiKey()
-        
-        throwingStore.saveModel("model")
-        assertEquals("google/gemini-3.5-flash", throwingStore.loadModel())
-        
-        throwingStore.saveSttModel("stt")
-        assertEquals("openai/whisper-1", throwingStore.loadSttModel())
-        
-        throwingStore.saveTtsModel("tts")
-        assertEquals("hexgrad/kokoro-82m", throwingStore.loadTtsModel())
-        
-        throwingStore.saveTtsVoice("voice")
-        assertEquals("af_alloy", throwingStore.loadTtsVoice())
-        
-        throwingStore.saveTickTickClientId("id")
-        throwingStore.saveTickTickClientSecret("secret")
-        throwingStore.saveTickTickAccessToken("token")
-        throwingStore.saveTickTickRefreshToken("refresh")
-        
-        assertNull(throwingStore.loadTickTickClientId())
-        assertNull(throwingStore.loadTickTickClientSecret())
-        assertNull(throwingStore.loadTickTickAccessToken())
-        assertNull(throwingStore.loadTickTickRefreshToken())
-        
-        throwingStore.clearTickTickCredentials()
-        
-        verify(atLeast = 1) { Log.e("ApiKeyStore", any(), any()) }
+        every { throwingEditor.putString(any(), any()) } throws IllegalStateException("write failed")
+        every { throwingEditor.remove(any()) } throws IllegalStateException("remove failed")
+        val store = ApiKeyStore(throwingPrefs, fallbackApiKey = "")
+
+        store.saveOpenRouterKey("key")
+        store.saveModel("model")
+        store.saveTickTickAccessToken("token")
+        store.clearApiKey()
+        store.clearTickTickCredentials()
+
+        verify(atLeast = 5) { Log.e("ApiKeyStore", any(), any()) }
     }
 }

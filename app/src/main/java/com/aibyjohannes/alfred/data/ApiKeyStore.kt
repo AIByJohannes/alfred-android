@@ -7,25 +7,15 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.aibyjohannes.alfred.core.audio.OpenRouterTtsClient
 
-class ApiKeyStore(context: Context) {
+class ApiKeyStore internal constructor(
+    private val prefs: SharedPreferences,
+    private val fallbackApiKey: String
+) {
 
-    private val prefs: SharedPreferences = try {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-
-        EncryptedSharedPreferences.create(
-            context,
-            PREFS_FILE_NAME,
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
-    } catch (e: Exception) {
-        Log.e(TAG, "Error creating EncryptedSharedPreferences, falling back to regular SharedPreferences", e)
-        // Fallback to regular SharedPreferences if EncryptedSharedPreferences fails
-        context.getSharedPreferences(PREFS_FILE_NAME, Context.MODE_PRIVATE)
-    }
+    constructor(context: Context) : this(
+        prefs = createPreferences(context),
+        fallbackApiKey = com.aibyjohannes.alfred.BuildConfig.OPENROUTER_API_KEY
+    )
 
     fun saveOpenRouterKey(key: String) {
         try {
@@ -37,11 +27,10 @@ class ApiKeyStore(context: Context) {
 
     fun loadOpenRouterKey(): String? {
         return try {
-            val key = prefs.getString(KEY_OPENROUTER_API_KEY, null)
-            if (key.isNullOrBlank() && com.aibyjohannes.alfred.BuildConfig.OPENROUTER_API_KEY.isNotBlank()) {
-                return com.aibyjohannes.alfred.BuildConfig.OPENROUTER_API_KEY
-            }
-            key
+            prefs.getString(KEY_OPENROUTER_API_KEY, null)
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?: fallbackApiKey.trim().takeIf { it.isNotEmpty() }
         } catch (e: Exception) {
             Log.e(TAG, "Error loading API key", e)
             null
@@ -250,6 +239,25 @@ class ApiKeyStore(context: Context) {
             "nova" to "af_nova",
             "shimmer" to "af_sky"
         )
+
+        private fun createPreferences(context: Context): SharedPreferences {
+            return try {
+                val masterKey = MasterKey.Builder(context)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build()
+
+                EncryptedSharedPreferences.create(
+                    context,
+                    PREFS_FILE_NAME,
+                    masterKey,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Error creating EncryptedSharedPreferences, falling back to regular SharedPreferences", e)
+                context.getSharedPreferences(PREFS_FILE_NAME, Context.MODE_PRIVATE)
+            }
+        }
     }
 }
 

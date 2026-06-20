@@ -4,7 +4,6 @@ import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import java.util.Calendar
 
 object NotificationScheduler {
@@ -12,6 +11,10 @@ object NotificationScheduler {
     const val ACTION_INACTIVITY_REMINDER = "com.aibyjohannes.alfred.notifications.INACTIVITY_REMINDER"
 
     fun scheduleDailyReminder(context: Context) {
+        scheduleDailyReminder(context, System.currentTimeMillis())
+    }
+
+    internal fun scheduleDailyReminder(context: Context, nowEpochMs: Long) {
         val preferences = NotificationPreferencesStore(context)
         if (!preferences.notificationsEnabled) {
             cancelDailyReminder(context)
@@ -22,14 +25,14 @@ object NotificationScheduler {
         val pendingIntent = reminderPendingIntent(context, ACTION_DAILY_REMINDER, REQUEST_DAILY_REMINDER)
 
         val calendar = Calendar.getInstance().apply {
-            timeInMillis = System.currentTimeMillis()
+            timeInMillis = nowEpochMs
             set(Calendar.HOUR_OF_DAY, preferences.dailyReminderHour)
             set(Calendar.MINUTE, preferences.dailyReminderMinute)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
 
-        if (calendar.timeInMillis <= System.currentTimeMillis()) {
+        if (calendar.timeInMillis <= nowEpochMs) {
             calendar.add(Calendar.DAY_OF_YEAR, 1)
         }
 
@@ -37,6 +40,10 @@ object NotificationScheduler {
     }
 
     fun scheduleInactivityReminder(context: Context) {
+        scheduleInactivityReminder(context, System.currentTimeMillis())
+    }
+
+    internal fun scheduleInactivityReminder(context: Context, nowEpochMs: Long) {
         val preferences = NotificationPreferencesStore(context)
         if (!preferences.notificationsEnabled) {
             cancelInactivityReminder(context)
@@ -49,22 +56,25 @@ object NotificationScheduler {
             return
         }
 
-        val now = System.currentTimeMillis()
         val targetTime = (lastActivity + INACTIVITY_DELAY_MS).coerceAtLeast(
             preferences.lastNotificationEpochMs + NOTIFICATION_COOLDOWN_MS
         )
-        if (targetTime <= now) {
-            scheduleInactivityAt(context, now + MIN_RESCHEDULE_DELAY_MS)
+        if (targetTime <= nowEpochMs) {
+            scheduleInactivityAt(context, nowEpochMs + MIN_RESCHEDULE_DELAY_MS)
         } else {
             scheduleInactivityAt(context, targetTime)
         }
     }
 
     fun rescheduleAll(context: Context) {
+        rescheduleAll(context, System.currentTimeMillis())
+    }
+
+    internal fun rescheduleAll(context: Context, nowEpochMs: Long) {
         val preferences = NotificationPreferencesStore(context)
         if (preferences.notificationsEnabled) {
-            scheduleDailyReminder(context)
-            scheduleInactivityReminder(context)
+            scheduleDailyReminder(context, nowEpochMs)
+            scheduleInactivityReminder(context, nowEpochMs)
         } else {
             cancelAll(context)
         }
@@ -76,8 +86,12 @@ object NotificationScheduler {
     }
 
     fun recordChatActivity(context: Context) {
-        NotificationPreferencesStore(context).lastChatActivityEpochMs = System.currentTimeMillis()
-        scheduleInactivityReminder(context)
+        recordChatActivity(context, System.currentTimeMillis())
+    }
+
+    internal fun recordChatActivity(context: Context, nowEpochMs: Long) {
+        NotificationPreferencesStore(context).lastChatActivityEpochMs = nowEpochMs
+        scheduleInactivityReminder(context, nowEpochMs)
     }
 
     private fun scheduleInactivityAt(context: Context, triggerAtMillis: Long) {
@@ -91,19 +105,11 @@ object NotificationScheduler {
         triggerAtMillis: Long,
         pendingIntent: PendingIntent
     ) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            alarmManager.setAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                triggerAtMillis,
-                pendingIntent
-            )
-        } else {
-            alarmManager.set(
-                AlarmManager.RTC_WAKEUP,
-                triggerAtMillis,
-                pendingIntent
-            )
-        }
+        alarmManager.setAndAllowWhileIdle(
+            AlarmManager.RTC_WAKEUP,
+            triggerAtMillis,
+            pendingIntent
+        )
     }
 
     private fun cancelDailyReminder(context: Context) {
