@@ -142,10 +142,14 @@ class ChatRepository(
             ),
             localKnowledgeSearchClient = localKnowledgeSearchClient,
             tickTickClient = tickTickClient,
-            obsidianClient = obsidianClient ?: obsidianClientProvider?.invoke(),
+            obsidianClient = resolveObsidianClient(),
             maxAgentPasses = maxPasses ?: 10
         )
     }
+
+    /** Returns the currently active ObsidianClient, preferring the dynamic provider over the fixed one. */
+    fun resolveObsidianClient(): ObsidianClient? =
+        obsidianClientProvider?.invoke() ?: obsidianClient
 
     // Retained for test compatibility and tool schema intent.
     @JsonClassDescription("Search the web for current information.")

@@ -7,53 +7,139 @@ import androidx.documentfile.provider.DocumentFile
 import com.aibyjohannes.alfred.core.search.ObsidianClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class DocumentObsidianClient(
     private val context: Context,
     private val rootUri: Uri
 ) : ObsidianClient {
 
-    override suspend fun search(query: String): Result<String> = withContext(Dispatchers.IO) {
+    // ── Data types ─────────────────────────────────────────────────────────────
+
+    private data class SearchResultHit(
+        val path: String,
+        val snippet: String,
+        val score: Int,
+        val modifiedMs: Long
+    )
+
+    private data class FileEntry(
+        val relPath: String,
+        val file: DocumentFile,
+        val modifiedMs: Long
+    )
+
+    private data class FolderEntry(
+        val name: String,
+        val isDir: Boolean,
+        val modifiedMs: Long
+    )
+
+    // ── Public interface ───────────────────────────────────────────────────────
+
+    override suspend fun search(
+        query: String,
+        directory: String?,
+        sortBy: String,
+        order: String
+    ): Result<String> = withContext(Dispatchers.IO) {
         try {
             val root = DocumentFile.fromTreeUri(context, rootUri)
                 ?: return@withContext Result.failure(Exception("Cannot open Obsidian vault root folder"))
+
+            // Resolve the starting directory
+            val startDir = if (!directory.isNullOrBlank()) {
+                findDirectoryByPath(directory)
+                    ?: return@withContext Result.failure(
+                        Exception("Folder not found in vault: $directory")
+                    )
+            } else {
+                root
+            }
 
             val terms = normalizeTerms(query)
             if (terms.isEmpty()) {
                 return@withContext Result.success("No matching notes found.")
             }
 
-            val mdFiles = mutableListOf<Pair<String, DocumentFile>>()
-            findMarkdownFilesRecursively(context, root, "", mdFiles)
+            val entries = mutableListOf<FileEntry>()
+            findMarkdownFilesRecursively(startDir, "", entries)
 
-            val hits = mdFiles.mapNotNull { (relPath, file) ->
-                val fileName = file.name ?: ""
-                val content = readFileText(file)
+            val hits = entries.mapNotNull { entry ->
+                val fileName = entry.file.name ?: ""
+                val content = readFileText(entry.file)
                 val haystack = "$fileName $content"
                 val score = score(haystack, terms)
                 if (score > 0) {
                     SearchResultHit(
-                        path = relPath,
+                        path = if (!directory.isNullOrBlank()) "${directory.trimEnd('/')}/${entry.relPath}" else entry.relPath,
                         snippet = buildSnippet(content, terms),
-                        score = score
+                        score = score,
+                        modifiedMs = entry.modifiedMs
                     )
                 } else {
                     null
                 }
-            }.sortedByDescending { it.score }
+            }
 
-            if (hits.isEmpty()) {
-                Result.success("No matching notes found.")
+            val sorted = sortHits(hits, sortBy, order)
+
+            if (sorted.isEmpty()) {
+                val scope = if (!directory.isNullOrBlank()) " in folder '$directory'" else ""
+                Result.success("No matching notes found$scope.")
             } else {
+                val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
                 val formatted = buildString {
-                    appendLine("Found ${hits.size} matching notes in your Obsidian vault:")
-                    hits.take(10).forEachIndexed { index, hit ->
-                        appendLine("${index + 1}. [${hit.path}] (score: ${hit.score})")
+                    val scope = if (!directory.isNullOrBlank()) " in '$directory'" else ""
+                    appendLine("Found ${sorted.size} matching notes$scope:")
+                    sorted.take(10).forEachIndexed { index, hit ->
+                        val modDate = dateFormat.format(Date(hit.modifiedMs))
+                        appendLine("${index + 1}. [${hit.path}] (score: ${hit.score}, modified: $modDate)")
                         appendLine("   ${hit.snippet}")
                     }
                 }.trim()
                 Result.success(formatted)
             }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun listFolder(path: String): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val dir = if (path.isBlank()) {
+                DocumentFile.fromTreeUri(context, rootUri)
+                    ?: return@withContext Result.failure(Exception("Cannot open Obsidian vault root folder"))
+            } else {
+                findDirectoryByPath(path)
+                    ?: return@withContext Result.failure(Exception("Folder not found in vault: $path"))
+            }
+
+            val entries = listDirectChildren(dir)
+
+            if (entries.isEmpty()) {
+                val label = if (path.isBlank()) "vault root" else "'$path'"
+                return@withContext Result.success("No files or folders found in $label.")
+            }
+
+            val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+            val label = if (path.isBlank()) "vault root" else "'$path'"
+            val formatted = buildString {
+                appendLine("Contents of $label (${entries.size} items):")
+                appendLine()
+                val dirs = entries.filter { it.isDir }.sortedBy { it.name.lowercase() }
+                val files = entries.filter { !it.isDir }.sortedBy { it.name.lowercase() }
+                for (d in dirs) {
+                    appendLine("[DIR]  ${d.name}/")
+                }
+                for (f in files) {
+                    val modDate = dateFormat.format(Date(f.modifiedMs))
+                    appendLine("[FILE] ${f.name}  (modified: $modDate)")
+                }
+            }.trim()
+            Result.success(formatted)
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -92,11 +178,26 @@ class DocumentObsidianClient(
         }
     }
 
-    private data class SearchResultHit(
-        val path: String,
-        val snippet: String,
-        val score: Int
-    )
+    // ── Sorting ────────────────────────────────────────────────────────────────
+
+    private fun sortHits(
+        hits: List<SearchResultHit>,
+        sortBy: String,
+        order: String
+    ): List<SearchResultHit> {
+        val comparator: Comparator<SearchResultHit> = when (sortBy.lowercase()) {
+            "modified" -> compareBy { it.modifiedMs }
+            "filename" -> compareBy { it.path.lowercase() }
+            else /* "score" */ -> compareBy { it.score }
+        }
+        return if (order.lowercase() == "asc") {
+            hits.sortedWith(comparator)
+        } else {
+            hits.sortedWith(comparator.reversed())
+        }
+    }
+
+    // ── Text helpers ───────────────────────────────────────────────────────────
 
     private fun normalizeTerms(query: String): List<String> {
         return query.lowercase()
@@ -126,6 +227,22 @@ class DocumentObsidianClient(
         return context.contentResolver.openInputStream(file.uri)?.use { stream ->
             stream.bufferedReader().readText()
         } ?: ""
+    }
+
+    // ── SAF navigation ─────────────────────────────────────────────────────────
+
+    /**
+     * Navigate to a relative folder path from the vault root.
+     * Returns null if any segment in the path does not exist or is not a directory.
+     */
+    private fun findDirectoryByPath(path: String): DocumentFile? {
+        val segments = path.split("/").filter { it.isNotBlank() }
+        if (segments.isEmpty()) return DocumentFile.fromTreeUri(context, rootUri)
+        var current = DocumentFile.fromTreeUri(context, rootUri) ?: return null
+        for (segment in segments) {
+            current = findChild(context, current, segment)?.takeIf { it.isDirectory } ?: return null
+        }
+        return current
     }
 
     private fun findFileByPath(path: String): DocumentFile? {
@@ -191,11 +308,48 @@ class DocumentObsidianClient(
         return null
     }
 
+    /**
+     * List immediate children of a directory, returning name, isDir, and last-modified timestamp.
+     */
+    private fun listDirectChildren(parent: DocumentFile): List<FolderEntry> {
+        val result = mutableListOf<FolderEntry>()
+        val parentDocId = DocumentsContract.getDocumentId(parent.uri)
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(parent.uri, parentDocId)
+        val cursor = context.contentResolver.query(
+            childrenUri,
+            arrayOf(
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED
+            ),
+            null, null, null
+        ) ?: return result
+        cursor.use {
+            val nameIndex = it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            val mimeIndex = it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+            val modIndex = it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+            while (it.moveToNext()) {
+                val name = it.getString(nameIndex) ?: continue
+                val mimeType = it.getString(mimeIndex)
+                val modifiedMs = it.getLong(modIndex)
+                val isDir = DocumentsContract.Document.MIME_TYPE_DIR == mimeType
+                // Include directories and .md files only
+                if (isDir || name.endsWith(".md", ignoreCase = true)) {
+                    result.add(FolderEntry(name, isDir, modifiedMs))
+                }
+            }
+        }
+        return result
+    }
+
+    /**
+     * Recursively collect .md files under [parent], populating their last-modified timestamps.
+     * The [currentPath] is relative to the starting directory passed to [search].
+     */
     private fun findMarkdownFilesRecursively(
-        context: Context,
         parent: DocumentFile,
         currentPath: String,
-        list: MutableList<Pair<String, DocumentFile>>
+        list: MutableList<FileEntry>
     ) {
         if (list.size >= 100) return
         val parentDocId = DocumentsContract.getDocumentId(parent.uri)
@@ -205,7 +359,8 @@ class DocumentObsidianClient(
             arrayOf(
                 DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                 DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                DocumentsContract.Document.COLUMN_MIME_TYPE
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED
             ),
             null, null, null
         ) ?: return
@@ -213,11 +368,13 @@ class DocumentObsidianClient(
             val idIndex = it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
             val nameIndex = it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
             val mimeIndex = it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+            val modIndex = it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
             val tempDirectories = mutableListOf<Pair<String, DocumentFile>>()
             while (it.moveToNext()) {
                 val name = it.getString(nameIndex) ?: continue
                 val mimeType = it.getString(mimeIndex)
                 val docId = it.getString(idIndex)
+                val modifiedMs = it.getLong(modIndex)
                 val isDir = DocumentsContract.Document.MIME_TYPE_DIR == mimeType
                 val fileUri = DocumentsContract.buildDocumentUriUsingTree(parent.uri, docId)
                 if (isDir) {
@@ -227,12 +384,12 @@ class DocumentObsidianClient(
                 } else if (name.endsWith(".md", ignoreCase = true)) {
                     val mdFile = DocumentFile.fromSingleUri(context, fileUri) ?: continue
                     val relPath = if (currentPath.isEmpty()) name else "$currentPath/$name"
-                    list.add(relPath to mdFile)
+                    list.add(FileEntry(relPath, mdFile, modifiedMs))
                     if (list.size >= 100) break
                 }
             }
             for ((dirPath, dirFile) in tempDirectories) {
-                findMarkdownFilesRecursively(context, dirFile, dirPath, list)
+                findMarkdownFilesRecursively(dirFile, dirPath, list)
                 if (list.size >= 100) break
             }
         }

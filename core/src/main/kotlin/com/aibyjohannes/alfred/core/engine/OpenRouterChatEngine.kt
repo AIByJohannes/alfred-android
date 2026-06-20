@@ -207,6 +207,7 @@ class OpenRouterChatEngine(
                             result.startsWith("Obsidian search failed", ignoreCase = true) ||
                             result.startsWith("Obsidian read failed", ignoreCase = true) ||
                             result.startsWith("Obsidian write failed", ignoreCase = true) ||
+                            result.startsWith("Obsidian list folder failed", ignoreCase = true) ||
                             result.startsWith("Obsidian integration is not configured", ignoreCase = true)
                         traces.add(
                             ToolCallTrace(
@@ -341,11 +342,42 @@ class OpenRouterChatEngine(
             alfredTools.add(
                 ToolDescriptor(
                     name = OBSIDIAN_SEARCH_TOOL,
-                    description = "Search for notes in the Obsidian vault by matching keywords in filenames or note content.",
+                    description = "Search for notes in the Obsidian vault by matching keywords in filenames or note content. Results include the modification date of each file.",
                     requiredParameters = listOf(
                         ToolParameterDescriptor(
                             name = "query",
                             description = "The search query/terms to look up in the notes",
+                            type = ToolParameterType.String
+                        )
+                    ),
+                    optionalParameters = listOf(
+                        ToolParameterDescriptor(
+                            name = "directory",
+                            description = "Limit search to this sub-folder path within the vault (e.g. 'Projects/2025'). Omit to search the entire vault.",
+                            type = ToolParameterType.String
+                        ),
+                        ToolParameterDescriptor(
+                            name = "sort_by",
+                            description = "How to sort results: 'score' (relevance, default), 'modified' (modification date), or 'filename'.",
+                            type = ToolParameterType.Enum(arrayOf("score", "modified", "filename"))
+                        ),
+                        ToolParameterDescriptor(
+                            name = "order",
+                            description = "Sort direction: 'desc' (default, highest/newest first) or 'asc' (lowest/oldest first).",
+                            type = ToolParameterType.Enum(arrayOf("desc", "asc"))
+                        )
+                    )
+                )
+            )
+            alfredTools.add(
+                ToolDescriptor(
+                    name = OBSIDIAN_LIST_FOLDER_TOOL,
+                    description = "List the immediate contents (subfolders and notes) of a folder in the Obsidian vault with modification dates. Use this to browse the vault structure folder by folder.",
+                    requiredParameters = emptyList(),
+                    optionalParameters = listOf(
+                        ToolParameterDescriptor(
+                            name = "path",
+                            description = "The relative folder path to list (e.g. 'Daily' or 'Projects/2025'). Leave empty to list the vault root.",
                             type = ToolParameterType.String
                         )
                     )
@@ -659,15 +691,28 @@ class OpenRouterChatEngine(
             }
 
             OBSIDIAN_SEARCH_TOOL -> {
-                val query = extractObsidianSearchQuery(arguments)
-                if (query.isNullOrBlank()) {
+                val args = extractObsidianSearchArgs(arguments)
+                if (args == null || args.query.isBlank()) {
                     "Obsidian search failed: missing required 'query' argument."
                 } else {
-                    obsidianClient?.search(query)?.fold(
+                    obsidianClient?.search(
+                        query = args.query,
+                        directory = args.directory,
+                        sortBy = args.sortBy,
+                        order = args.order
+                    )?.fold(
                         onSuccess = { it },
                         onFailure = { "Obsidian search failed: ${it.message}" }
                     ) ?: "Obsidian integration is not configured."
                 }
+            }
+
+            OBSIDIAN_LIST_FOLDER_TOOL -> {
+                val path = extractObsidianFolderPath(arguments)
+                obsidianClient?.listFolder(path ?: "")?.fold(
+                    onSuccess = { it },
+                    onFailure = { "Obsidian list folder failed: ${it.message}" }
+                ) ?: "Obsidian integration is not configured."
             }
 
             OBSIDIAN_READ_TOOL -> {
@@ -833,10 +878,30 @@ class OpenRouterChatEngine(
         val append: Boolean
     )
 
-    internal fun extractObsidianSearchQuery(argumentsJson: String): String? {
+    data class ObsidianSearchArgs(
+        val query: String,
+        val directory: String?,
+        val sortBy: String,
+        val order: String
+    )
+
+    internal fun extractObsidianSearchArgs(argumentsJson: String): ObsidianSearchArgs? {
         return try {
             val node = objectMapper.readTree(argumentsJson)
-            node.path("query").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+            val query = node.path("query").asText(null)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            val directory = node.path("directory").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+            val sortBy = node.path("sort_by").asText(null)?.trim()?.takeIf { it.isNotEmpty() } ?: "score"
+            val order = node.path("order").asText(null)?.trim()?.takeIf { it.isNotEmpty() } ?: "desc"
+            ObsidianSearchArgs(query, directory, sortBy, order)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    internal fun extractObsidianFolderPath(argumentsJson: String): String? {
+        return try {
+            val node = objectMapper.readTree(argumentsJson)
+            node.path("path").asText(null)?.trim()
         } catch (_: Exception) {
             null
         }
@@ -886,6 +951,7 @@ class OpenRouterChatEngine(
         const val TICKTICK_FUNCTION_NAME = "TickTickTool"
         const val ASK_SMART_MODEL_FUNCTION_NAME = "AskSmartModelTool"
         const val OBSIDIAN_SEARCH_TOOL = "SearchObsidianVaultTool"
+        const val OBSIDIAN_LIST_FOLDER_TOOL = "ListObsidianFolderTool"
         const val OBSIDIAN_READ_TOOL = "ReadObsidianNoteTool"
         const val OBSIDIAN_WRITE_TOOL = "WriteObsidianNoteTool"
     }
