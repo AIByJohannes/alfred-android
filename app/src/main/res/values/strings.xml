@@ -104,18 +104,18 @@
     <string name="tts_voice_helper">Changes apply to future voice mode responses.</string>
 
     <!-- TickTick Settings -->
-    <string name="ticktick_title">TickTick Integration</string>
-    <string name="ticktick_description">Connect to your TickTick account. Enter your Client ID and Client Secret from developer.ticktick.com (use redirect URI http://localhost:54321/callback).</string>
+    <string name="ticktick_title">TickTick MCP Connection</string>
+    <string name="ticktick_description">Connect to your TickTick account via Model Context Protocol (MCP). Enter your Client ID and Client Secret from developer.ticktick.com (use redirect URI http://localhost:54321/callback).</string>
     <string name="ticktick_client_id">Client ID</string>
     <string name="ticktick_client_id_hint">Paste TickTick Client ID here</string>
     <string name="ticktick_client_secret">Client Secret</string>
     <string name="ticktick_client_secret_hint">Paste TickTick Client Secret here</string>
-    <string name="ticktick_connect">Connect TickTick</string>
+    <string name="ticktick_connect">Connect TickTick MCP</string>
     <string name="ticktick_disconnect">Disconnect</string>
     <string name="ticktick_status_connected">Connected</string>
     <string name="ticktick_status_not_connected">Not Connected</string>
     <string name="ticktick_save_error">Client ID and Client Secret are required</string>
-    <string name="ticktick_auth_success">TickTick authenticated successfully</string>
-    <string name="ticktick_auth_failed">TickTick authentication failed: %1$s</string>
-    <string name="ticktick_cleared">TickTick credentials disconnected</string>
+    <string name="ticktick_auth_success">TickTick MCP authenticated successfully</string>
+    <string name="ticktick_auth_failed">TickTick MCP authentication failed: %1$s</string>
+    <string name="ticktick_cleared">TickTick MCP credentials disconnected</string>
 </resources>
