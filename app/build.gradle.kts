@@ -74,6 +74,7 @@ dependencies {
     implementation(libs.androidx.navigation.fragment.ktx)
     implementation(libs.androidx.navigation.ui.ktx)
     implementation(libs.androidx.documentfile)
+    implementation(libs.snakeyaml.engine)
 
     // OpenAI Java SDK (includes OkHttp internally)
     implementation(libs.openai.java)
@@ -166,4 +167,3 @@ afterEvaluate {
         dependsOn("adbConnect")
     }
 }
-

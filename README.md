@@ -26,6 +26,21 @@ The storage layout is:
 
 Workspace folder names are stable after creation. Renaming a workspace updates `metadata.json` only and does not rename the folder.
 
+## Agent Skills
+
+Alfred discovers documentation skills from the same user-selected storage location. Add each skill under `Alfred/skills/<skill-id>/SKILL.md`:
+
+```text
+Alfred/
+  skills/
+    meeting-prep/
+      SKILL.md
+      references/
+        checklist.md
+```
+
+Each `SKILL.md` must start with YAML frontmatter containing a lowercase, hyphenated `name` that matches its folder and a non-empty `description`. Alfred adds only this catalog metadata to the prompt, then loads matching instructions and referenced `.md` or `.txt` files on demand. Skill files are rescanned at the start of every chat turn, so external edits apply without restarting the app. Scripts, binary assets, remote downloads, and paths outside the skill directory are not supported.
+
 ## LLM Evals
 
 LLM evals run as a separate verification lane in the `:evals` module, not as unit tests.

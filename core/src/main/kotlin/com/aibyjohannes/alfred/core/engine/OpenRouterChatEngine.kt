@@ -25,6 +25,8 @@ import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchResult
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSource
 import com.aibyjohannes.alfred.core.search.ObsidianClient
 import com.aibyjohannes.alfred.core.search.WebSearchClient
+import com.aibyjohannes.alfred.core.skills.SkillClient
+import com.aibyjohannes.alfred.core.skills.SkillSummary
 import com.aibyjohannes.alfred.core.ticktick.TickTickClient
 import com.fasterxml.jackson.databind.ObjectMapper
 import kotlinx.coroutines.Dispatchers
@@ -43,6 +45,7 @@ class OpenRouterChatEngine(
     private val localKnowledgeSearchClient: LocalKnowledgeSearchClient? = null,
     private val tickTickClient: TickTickClient? = null,
     private val obsidianClient: ObsidianClient? = null,
+    private val skillClient: SkillClient? = null,
     private val maxAgentPasses: Int = 10
 ) : ChatEngine {
     private val objectMapper = ObjectMapper()
@@ -100,7 +103,8 @@ class OpenRouterChatEngine(
             createOpenRouterClient().use { client ->
                 val koogModel = buildKoogModel(model)
                 val mcpTools = tickTickClient?.getMcpTools() ?: emptyList()
-                val tools = buildAlfredToolDescriptors(mcpTools)
+                val skills = skillClient?.listSkills()?.getOrDefault(emptyList()).orEmpty()
+                val tools = buildAlfredToolDescriptors(mcpTools, skills.isNotEmpty())
                 val traces = mutableListOf<ToolCallTrace>()
                 val turnId = System.currentTimeMillis().toString()
                 val promptMessages = conversationHistory
@@ -127,6 +131,7 @@ class OpenRouterChatEngine(
                         tools = tools,
                         passIndex = passIndex,
                         reasoningEnabled = reasoningEnabled,
+                        skills = skills,
                         onEvent = { this@channelFlow.send(it) }
                     )
                     reasoningEnabled = pass.reasoningEnabled
@@ -208,7 +213,9 @@ class OpenRouterChatEngine(
                             result.startsWith("Obsidian read failed", ignoreCase = true) ||
                             result.startsWith("Obsidian write failed", ignoreCase = true) ||
                             result.startsWith("Obsidian list folder failed", ignoreCase = true) ||
-                            result.startsWith("Obsidian integration is not configured", ignoreCase = true)
+                            result.startsWith("Obsidian integration is not configured", ignoreCase = true) ||
+                            result.startsWith("Skill read failed", ignoreCase = true) ||
+                            result.startsWith("Skill reference read failed", ignoreCase = true)
                         traces.add(
                             ToolCallTrace(
                                 id = toolCall.id,
@@ -282,7 +289,14 @@ class OpenRouterChatEngine(
         )
     }
 
-    internal fun buildAlfredToolDescriptors(mcpTools: List<ToolDescriptor> = emptyList()): List<ToolDescriptor> {
+    internal fun buildAlfredToolDescriptors(
+        mcpTools: List<ToolDescriptor> = emptyList()
+    ): List<ToolDescriptor> = buildAlfredToolDescriptors(mcpTools, skillsAvailable = false)
+
+    internal fun buildAlfredToolDescriptors(
+        mcpTools: List<ToolDescriptor>,
+        skillsAvailable: Boolean = false
+    ): List<ToolDescriptor> {
         val alfredTools = mutableListOf(
             ToolDescriptor(
                 name = WEB_SEARCH_FUNCTION_NAME,
@@ -423,12 +437,47 @@ class OpenRouterChatEngine(
             )
         }
 
+        if (skillsAvailable && skillClient != null) {
+            alfredTools.add(
+                ToolDescriptor(
+                    name = READ_SKILL_TOOL,
+                    description = "Read the complete SKILL.md instructions for an available skill before applying it.",
+                    requiredParameters = listOf(
+                        ToolParameterDescriptor(
+                            name = "skill_id",
+                            description = "The skill id from the available skills catalog",
+                            type = ToolParameterType.String
+                        )
+                    )
+                )
+            )
+            alfredTools.add(
+                ToolDescriptor(
+                    name = READ_SKILL_REFERENCE_TOOL,
+                    description = "Read a Markdown or text reference within a previously selected skill directory.",
+                    requiredParameters = listOf(
+                        ToolParameterDescriptor(
+                            name = "skill_id",
+                            description = "The skill id from the available skills catalog",
+                            type = ToolParameterType.String
+                        ),
+                        ToolParameterDescriptor(
+                            name = "path",
+                            description = "Forward-slash relative path named by the skill instructions",
+                            type = ToolParameterType.String
+                        )
+                    )
+                )
+            )
+        }
+
         return alfredTools + mcpTools
     }
 
     private fun buildConversationPrompt(
         messages: List<CoreChatMessage>,
-        reasoningEnabled: Boolean
+        reasoningEnabled: Boolean,
+        skills: List<SkillSummary>
     ): Prompt {
         val params = if (reasoningEnabled) {
             LLMParams(
@@ -442,6 +491,9 @@ class OpenRouterChatEngine(
 
         return prompt("alfred-openrouter-chat", params) {
             system(prompt)
+            if (skills.isNotEmpty()) {
+                system(formatSkillsCatalog(skills))
+            }
 
             for (msg in messages.filter { it.includeInPrompt }) {
                 when (msg.kind) {
@@ -483,9 +535,10 @@ class OpenRouterChatEngine(
         tools: List<ToolDescriptor>,
         passIndex: Int,
         reasoningEnabled: Boolean,
+        skills: List<SkillSummary>,
         onEvent: suspend (ChatStreamEvent) -> Unit
     ): PassWithPromptState {
-        val prompt = buildConversationPrompt(messages, reasoningEnabled)
+        val prompt = buildConversationPrompt(messages, reasoningEnabled, skills)
         return try {
             PassWithPromptState(
                 result = streamSingleCompletion(client, model, prompt, tools, passIndex, onEvent),
@@ -495,7 +548,7 @@ class OpenRouterChatEngine(
             if (!reasoningEnabled) {
                 throw error
             }
-            val fallbackPrompt = buildConversationPrompt(messages, reasoningEnabled = false)
+            val fallbackPrompt = buildConversationPrompt(messages, reasoningEnabled = false, skills = skills)
             PassWithPromptState(
                 result = streamSingleCompletion(client, model, fallbackPrompt, tools, passIndex, onEvent),
                 reasoningEnabled = false
@@ -739,6 +792,30 @@ class OpenRouterChatEngine(
                 }
             }
 
+            READ_SKILL_TOOL -> {
+                val skillId = extractSkillId(arguments)
+                if (skillId == null) {
+                    "Skill read failed: missing required 'skill_id' argument."
+                } else {
+                    skillClient?.readSkill(skillId)?.fold(
+                        onSuccess = { it },
+                        onFailure = { "Skill read failed: ${it.message}" }
+                    ) ?: "Skill read failed: skill support is not configured."
+                }
+            }
+
+            READ_SKILL_REFERENCE_TOOL -> {
+                val request = extractSkillReferenceRequest(arguments)
+                if (request == null) {
+                    "Skill reference read failed: missing required 'skill_id' or 'path' argument."
+                } else {
+                    skillClient?.readReference(request.skillId, request.path)?.fold(
+                        onSuccess = { it },
+                        onFailure = { "Skill reference read failed: ${it.message}" }
+                    ) ?: "Skill reference read failed: skill support is not configured."
+                }
+            }
+
             else -> {
                 val client = tickTickClient
                 if (client == null) {
@@ -751,6 +828,43 @@ class OpenRouterChatEngine(
                     }
                 }
             }
+        }
+    }
+
+    internal fun formatSkillsCatalog(skills: List<SkillSummary>): String = buildString {
+        appendLine("Available skills:")
+        skills.forEach { skill ->
+            appendLine("- ${skill.id}: ${skill.description}")
+        }
+        appendLine()
+        append("When a request clearly matches a skill, call $READ_SKILL_TOOL before answering. ")
+        append("Read only references named by those instructions with $READ_SKILL_REFERENCE_TOOL.")
+    }.trim()
+
+    internal fun extractSkillId(argumentsJson: String): String? {
+        return try {
+            objectMapper.readTree(argumentsJson)
+                .path("skill_id")
+                .asText(null)
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    data class SkillReferenceRequest(val skillId: String, val path: String)
+
+    internal fun extractSkillReferenceRequest(argumentsJson: String): SkillReferenceRequest? {
+        return try {
+            val node = objectMapper.readTree(argumentsJson)
+            val skillId = node.path("skill_id").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+                ?: return null
+            val path = node.path("path").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+                ?: return null
+            SkillReferenceRequest(skillId, path)
+        } catch (_: Exception) {
+            null
         }
     }
 
@@ -954,6 +1068,8 @@ class OpenRouterChatEngine(
         const val OBSIDIAN_LIST_FOLDER_TOOL = "ListObsidianFolderTool"
         const val OBSIDIAN_READ_TOOL = "ReadObsidianNoteTool"
         const val OBSIDIAN_WRITE_TOOL = "WriteObsidianNoteTool"
+        const val READ_SKILL_TOOL = "ReadSkillTool"
+        const val READ_SKILL_REFERENCE_TOOL = "ReadSkillReferenceTool"
     }
 }
 

@@ -9,6 +9,7 @@ import com.aibyjohannes.alfred.core.search.ObsidianClient
 import com.aibyjohannes.alfred.core.model.CoreChatMessage
 import com.aibyjohannes.alfred.core.model.CoreChatMessageKind
 import com.aibyjohannes.alfred.core.search.PerplexitySearchClient
+import com.aibyjohannes.alfred.core.skills.SkillClient
 import com.aibyjohannes.alfred.core.ticktick.TickTickClient
 import com.aibyjohannes.alfred.core.ticktick.TickTickCredentials
 import com.aibyjohannes.alfred.core.ticktick.TickTickCredentialsProvider
@@ -42,25 +43,28 @@ class ChatRepository private constructor(
     private val localKnowledgeSearchClient: LocalKnowledgeSearchClient? = null,
     private val obsidianClient: ObsidianClient? = null,
     private val obsidianClientProvider: (() -> ObsidianClient?)? = null,
+    private val skillClient: SkillClient? = null,
     private val dependencies: ChatRepositoryDependencies
 ) {
     constructor(
         apiKeyStore: ApiKeyStore,
         localKnowledgeSearchClient: LocalKnowledgeSearchClient? = null,
         obsidianClient: ObsidianClient? = null,
-        obsidianClientProvider: (() -> ObsidianClient?)? = null
+        obsidianClientProvider: (() -> ObsidianClient?)? = null,
+        skillClient: SkillClient? = null
     ) : this(
         apiKeyStore,
         localKnowledgeSearchClient,
         obsidianClient,
         obsidianClientProvider,
+        skillClient,
         ChatRepositoryDependencies()
     )
 
     internal constructor(
         apiKeyStore: ApiKeyStore,
         dependencies: ChatRepositoryDependencies
-    ) : this(apiKeyStore, null, null, null, dependencies)
+    ) : this(apiKeyStore, null, null, null, null, dependencies)
 
     suspend fun transcribeAudio(audioFile: java.io.File): Result<String> {
         val apiKey = loadApiKey()
@@ -183,6 +187,7 @@ class ChatRepository private constructor(
             localKnowledgeSearchClient = localKnowledgeSearchClient,
             tickTickClient = tickTickClient,
             obsidianClient = resolveObsidianClient(),
+            skillClient = resolveSkillClient(),
             maxAgentPasses = resolvedMaxPasses
         )
     }
@@ -194,6 +199,8 @@ class ChatRepository private constructor(
     /** Returns the currently active ObsidianClient, preferring the dynamic provider over the fixed one. */
     fun resolveObsidianClient(): ObsidianClient? =
         obsidianClientProvider?.invoke() ?: obsidianClient
+
+    fun resolveSkillClient(): SkillClient? = skillClient
 
     // Retained for test compatibility and tool schema intent.
     @JsonClassDescription("Search the web for current information.")

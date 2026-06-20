@@ -1,6 +1,7 @@
 package com.aibyjohannes.alfred.core.engine
 
 import ai.koog.prompt.executor.clients.openrouter.OpenRouterLLMClient
+import ai.koog.prompt.Prompt
 import ai.koog.prompt.streaming.StreamFrame
 import com.aibyjohannes.alfred.core.model.ChatStreamEvent
 import com.aibyjohannes.alfred.core.model.CoreChatMessageKind
@@ -9,6 +10,8 @@ import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchRequest
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchResult
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSource
 import com.aibyjohannes.alfred.core.search.WebSearchClient
+import com.aibyjohannes.alfred.core.skills.SkillClient
+import com.aibyjohannes.alfred.core.skills.SkillSummary
 import io.mockk.*
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
@@ -453,6 +456,118 @@ class OpenRouterChatEngineToolParsingTest {
 
         val writeResult = executeToolCall(engine, OpenRouterChatEngine.OBSIDIAN_WRITE_TOOL, """{"path":"note","content":"text"}""")
         assertEquals("Obsidian integration is not configured.", writeResult)
+    }
+
+    @Test
+    fun `skill tools are registered only when valid skills are available`() {
+        val skillClient = mockk<SkillClient>()
+        val engine = OpenRouterChatEngine(
+            apiKey = "test",
+            webSearchClient = mockk(),
+            skillClient = skillClient
+        )
+        val method = OpenRouterChatEngine::class.java.declaredMethods.first {
+            it.name.startsWith("buildAlfredToolDescriptors") && it.parameterCount == 2
+        }
+        method.isAccessible = true
+
+        val withoutSkills = method.invoke(engine, emptyList<Any>(), false) as List<*>
+        val withSkills = method.invoke(engine, emptyList<Any>(), true) as List<*>
+        val namesWithout = withoutSkills.map { it?.javaClass?.getMethod("getName")?.invoke(it) }
+        val namesWith = withSkills.map { it?.javaClass?.getMethod("getName")?.invoke(it) }
+
+        assertTrue(OpenRouterChatEngine.READ_SKILL_TOOL !in namesWithout)
+        assertTrue(OpenRouterChatEngine.READ_SKILL_TOOL in namesWith)
+        assertTrue(OpenRouterChatEngine.READ_SKILL_REFERENCE_TOOL in namesWith)
+    }
+
+    @Test
+    fun `skill catalog instructs model to load matching skills on demand`() {
+        val method = OpenRouterChatEngine::class.java.declaredMethods.first {
+            it.name.startsWith("formatSkillsCatalog")
+        }
+        method.isAccessible = true
+
+        val catalog = method.invoke(
+            buildEngine(),
+            listOf(SkillSummary("meeting-prep", "meeting-prep", "Prepare for meetings"))
+        ) as String
+
+        assertTrue(catalog.contains("meeting-prep: Prepare for meetings"))
+        assertTrue(catalog.contains(OpenRouterChatEngine.READ_SKILL_TOOL))
+        assertTrue(catalog.contains(OpenRouterChatEngine.READ_SKILL_REFERENCE_TOOL))
+    }
+
+    @Test
+    fun `stream injects refreshed skill catalog as a system message`() = runTest {
+        val skillClient = mockk<SkillClient>()
+        coEvery { skillClient.listSkills() } returns Result.success(
+            listOf(SkillSummary("meeting-prep", "meeting-prep", "Prepare for meetings"))
+        )
+        val client = mockk<OpenRouterLLMClient>(relaxed = true)
+        val promptSlot = slot<Prompt>()
+        coEvery { client.executeStreaming(capture(promptSlot), any(), any()) } returns flowOf(
+            StreamFrame.TextDelta(text = "Done")
+        )
+        val engine = spyk(
+            OpenRouterChatEngine(
+                apiKey = "test",
+                webSearchClient = mockk(),
+                skillClient = skillClient
+            )
+        ) {
+            every { createOpenRouterClient() } returns client
+        }
+
+        assertTrue(engine.sendMessage("prepare me", emptyList()).isSuccess)
+
+        val messageText = promptSlot.captured.messages.joinToString("\n")
+        assertTrue(messageText.contains("meeting-prep: Prepare for meetings"))
+        coVerify(exactly = 1) { skillClient.listSkills() }
+    }
+
+    @Test
+    fun `executeToolCall dispatches skill and reference reads`() = runTest {
+        val skillClient = mockk<SkillClient>()
+        coEvery { skillClient.readSkill("meeting-prep") } returns Result.success("skill body")
+        coEvery {
+            skillClient.readReference("meeting-prep", "references/checklist.md")
+        } returns Result.success("reference body")
+        val engine = OpenRouterChatEngine(
+            apiKey = "test",
+            webSearchClient = mockk(),
+            skillClient = skillClient
+        )
+
+        val skill = executeToolCall(
+            engine,
+            OpenRouterChatEngine.READ_SKILL_TOOL,
+            """{"skill_id":"meeting-prep"}"""
+        )
+        val reference = executeToolCall(
+            engine,
+            OpenRouterChatEngine.READ_SKILL_REFERENCE_TOOL,
+            """{"skill_id":"meeting-prep","path":"references/checklist.md"}"""
+        )
+
+        assertEquals("skill body", skill)
+        assertEquals("reference body", reference)
+    }
+
+    @Test
+    fun `executeToolCall returns explicit skill argument errors`() = runTest {
+        val engine = OpenRouterChatEngine(
+            apiKey = "test",
+            webSearchClient = mockk(),
+            skillClient = mockk()
+        )
+
+        assertTrue(
+            executeToolCall(engine, OpenRouterChatEngine.READ_SKILL_TOOL, "{}").startsWith("Skill read failed")
+        )
+        assertTrue(
+            executeToolCall(engine, OpenRouterChatEngine.READ_SKILL_REFERENCE_TOOL, "{}").startsWith("Skill reference read failed")
+        )
     }
 }
 

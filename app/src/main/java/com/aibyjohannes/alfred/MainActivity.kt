@@ -20,6 +20,7 @@ import com.aibyjohannes.alfred.data.local.FileConversationStore
 import com.aibyjohannes.alfred.data.local.FileLocalKnowledgeSearchClient
 import com.aibyjohannes.alfred.data.local.FileMemorySearchSource
 import com.aibyjohannes.alfred.data.local.ObsidianVaultStore
+import com.aibyjohannes.alfred.data.local.StorageSkillClient
 import com.aibyjohannes.alfred.ui.home.ConversationAdapter
 import com.aibyjohannes.alfred.ui.home.HomeViewModel
 import com.aibyjohannes.alfred.ui.home.UiConversation
@@ -131,7 +132,8 @@ class MainActivity : AppCompatActivity() {
                 obsidianVaultStore.parentFolderUri
                     ?.takeIf { obsidianVaultStore.hasUsableFolder() }
                     ?.let { DocumentObsidianClient(this, it) }
-            }
+            },
+            skillClient = StorageSkillClient(storage)
         )
         val sysInfoProvider = SysInfoProvider(this)
         homeViewModel.initialize(
