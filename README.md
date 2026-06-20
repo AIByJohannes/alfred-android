@@ -12,6 +12,9 @@ To easily interact with the OpenRouter API during development without manually t
    ```
 This key will be bundled directly into your debug builds.
 
+For building and installing a debug APK directly on a wirelessly connected
+Android phone, see [Wireless APK Deployment](docs/developer-setup-notes.md#4-wireless-apk-deployment).
+
 ## Chat History Storage
 
 On first launch, Alfred asks the user to choose a parent folder for chat history. The app creates a fixed `Alfred/` subfolder inside that location and stores chat data there so users can inspect or back up their histories directly.

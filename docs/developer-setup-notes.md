@@ -80,3 +80,55 @@ $env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-22.0.2.9-hotspot'
 $env:OPENROUTER_API_KEY = 'sk-or-v1-your-key-here'
 .\gradlew.bat evalSmoke
 ```
+
+---
+
+## 4. Wireless APK Deployment
+
+The Galaxy S25 Ultra can receive debug builds over wireless ADB. The phone and
+development machine must be on the same network, and **Developer options >
+Wireless debugging** must remain enabled on the phone.
+
+### Pair the Phone
+
+Pairing is normally required only once:
+
+1. On the phone, open **Developer options > Wireless debugging > Pair device
+   with pairing code**.
+2. Discover the pairing endpoint:
+   ```powershell
+   adb mdns services
+   ```
+3. Pair using the `_adb-tls-pairing._tcp` address and enter the temporary code
+   displayed by the phone:
+   ```powershell
+   adb pair <phone-ip>:<pairing-port>
+   ```
+4. Confirm that the phone is available:
+   ```powershell
+   adb devices -l
+   ```
+
+After pairing, ADB should reconnect through the `_adb-tls-connect._tcp` mDNS
+service whenever wireless debugging is enabled.
+
+### Build and Install
+
+From the repository root, run:
+
+```powershell
+.\gradlew.bat installDebug
+```
+
+This builds `app\build\outputs\apk\debug\app-debug.apk` and installs it on the
+connected phone in one operation.
+
+If `adb devices -l` lists the same phone both by IP address and by mDNS service
+name, remove the redundant explicit connection before deploying:
+
+```powershell
+adb disconnect <phone-ip>:<connect-port>
+```
+
+This prevents Gradle from installing the same APK twice on the same physical
+device.
