@@ -78,7 +78,7 @@
         android:layout_height="0dp"
         android:clipToPadding="false"
         android:padding="8dp"
-        app:layout_constraintBottom_toTopOf="@id/input_layout"
+        app:layout_constraintBottom_toTopOf="@id/loop_limit_continuation_layout"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/api_key_warning" />
@@ -89,9 +89,44 @@
         android:layout_height="wrap_content"
         android:layout_marginBottom="8dp"
         android:visibility="gone"
-        app:layout_constraintBottom_toTopOf="@id/input_layout"
+        app:layout_constraintBottom_toTopOf="@id/loop_limit_continuation_layout"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent" />
+
+    <LinearLayout
+        android:id="@+id/loop_limit_continuation_layout"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#1C1C1E"
+        android:padding="10dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@id/input_layout"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent">
+
+        <TextView
+            android:id="@+id/loop_limit_continuation_text"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Loop limit reached. Continue?"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:layout_marginStart="8dp" />
+
+        <Button
+            android:id="@+id/btn_allow_more_loops"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Allow 5 loops"
+            android:textSize="12sp"
+            android:textColor="#3897F0"
+            android:background="?attr/selectableItemBackground"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:layout_marginEnd="8dp" />
+    </LinearLayout>
 
     <LinearLayout
         android:id="@+id/input_layout"

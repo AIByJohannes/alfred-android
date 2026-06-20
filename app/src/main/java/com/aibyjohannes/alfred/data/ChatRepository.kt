@@ -23,7 +23,8 @@ import java.io.File
 class ChatRepository(
     private val apiKeyStore: ApiKeyStore,
     private val localKnowledgeSearchClient: LocalKnowledgeSearchClient? = null,
-    private val obsidianClient: ObsidianClient? = null
+    private val obsidianClient: ObsidianClient? = null,
+    private val obsidianClientProvider: (() -> ObsidianClient?)? = null
 ) {
     suspend fun transcribeAudio(audioFile: java.io.File): Result<String> {
         val apiKey = apiKeyStore.loadOpenRouterKey()
@@ -73,11 +74,12 @@ class ChatRepository(
     fun streamMessage(
         userMessage: String,
         conversationHistory: List<ChatMessage>,
-        sysInfo: String? = null
+        sysInfo: String? = null,
+        maxPasses: Int? = null
     ): Flow<ChatStreamEvent> {
         val apiKey = apiKeyStore.loadOpenRouterKey()
             ?: throw IllegalStateException("API key not configured. Please add your OpenRouter API key in Settings.")
-        return createEngine(apiKey, sysInfo).streamMessage(
+        return createEngine(apiKey, sysInfo, maxPasses).streamMessage(
             userMessage = userMessage,
             conversationHistory = conversationHistory.toCoreMessages()
         )
@@ -106,7 +108,7 @@ class ChatRepository(
         )
     }
 
-    private fun createEngine(apiKey: String, sysInfo: String? = null): ChatEngine {
+    private fun createEngine(apiKey: String, sysInfo: String? = null, maxPasses: Int? = null): ChatEngine {
         val model = apiKeyStore.loadModel()
 
         val tickTickProvider = object : TickTickCredentialsProvider {
@@ -140,7 +142,8 @@ class ChatRepository(
             ),
             localKnowledgeSearchClient = localKnowledgeSearchClient,
             tickTickClient = tickTickClient,
-            obsidianClient = obsidianClient
+            obsidianClient = obsidianClient ?: obsidianClientProvider?.invoke(),
+            maxAgentPasses = maxPasses ?: 10
         )
     }
 

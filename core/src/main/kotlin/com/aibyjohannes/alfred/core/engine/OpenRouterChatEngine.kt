@@ -42,7 +42,8 @@ class OpenRouterChatEngine(
     private val webSearchClient: WebSearchClient,
     private val localKnowledgeSearchClient: LocalKnowledgeSearchClient? = null,
     private val tickTickClient: TickTickClient? = null,
-    private val obsidianClient: ObsidianClient? = null
+    private val obsidianClient: ObsidianClient? = null,
+    private val maxAgentPasses: Int = 10
 ) : ChatEngine {
     private val objectMapper = ObjectMapper()
     private val effectiveLocalKnowledgeSearchClient: LocalKnowledgeSearchClient =
@@ -117,7 +118,7 @@ class OpenRouterChatEngine(
                 var finalContent: String? = null
                 var passIndex = 0
 
-                while (passIndex < MAX_AGENT_PASSES && finalContent == null) {
+                while (passIndex < maxAgentPasses && finalContent == null) {
                     send(ChatStreamEvent.PassStarted(passIndex))
                     val pass = streamSingleCompletionWithReasoningFallback(
                         client = client,
@@ -243,7 +244,7 @@ class OpenRouterChatEngine(
                     passIndex++
                 }
 
-                val content = finalContent ?: throw Exception("Tool loop exceeded $MAX_AGENT_PASSES passes")
+                val content = finalContent ?: "Agent loop limit reached. I executed $maxAgentPasses passes without producing a final response."
                 val finalMessage = CoreChatMessage(
                     role = "assistant",
                     content = content,
@@ -887,7 +888,6 @@ class OpenRouterChatEngine(
         const val OBSIDIAN_SEARCH_TOOL = "SearchObsidianVaultTool"
         const val OBSIDIAN_READ_TOOL = "ReadObsidianNoteTool"
         const val OBSIDIAN_WRITE_TOOL = "WriteObsidianNoteTool"
-        private const val MAX_AGENT_PASSES = 6
     }
 }
 

@@ -231,6 +231,9 @@ class HomeFragment : Fragment() {
 
         binding.btnMic.setOnClickListener { toggleRecording() }
         binding.btnAdd.setOnClickListener { }
+        binding.btnAllowMoreLoops.setOnClickListener {
+            homeViewModel.allowMoreLoops(5)
+        }
     }
 
     private fun sendMessage() {
@@ -441,6 +444,11 @@ class HomeFragment : Fragment() {
                 }
                 lastMessageCount = messages.size
             }
+
+            val lastMsg = messages.lastOrNull()
+            val isLoopLimitReached = lastMsg != null && !lastMsg.isUser &&
+                lastMsg.content.contains("Agent loop limit reached. I executed ")
+            binding.loopLimitContinuationLayout.visibility = if (isLoopLimitReached) View.VISIBLE else View.GONE
 
             // When a streaming message completes and voice mode is active, synthesize TTS
             if (isInVoiceMode && homeViewModel.voiceModeState.value == VoiceModeState.THINKING) {

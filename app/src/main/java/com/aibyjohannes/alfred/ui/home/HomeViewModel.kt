@@ -76,6 +76,7 @@ class HomeViewModel : ViewModel() {
     private var conversationStore: ConversationStore? = null
     private var sysInfoProvider: SysInfoProvider? = null
     private var onChatActivity: (() -> Unit)? = null
+    private var nextTurnMaxPasses: Int? = null
 
     private val _messages = MutableLiveData<List<UiChatMessage>>(emptyList())
     val messages: LiveData<List<UiChatMessage>> = _messages
@@ -176,6 +177,9 @@ class HomeViewModel : ViewModel() {
         val store = conversationStore ?: return
         val conversationId = currentConversationId ?: return
 
+        val maxPasses = nextTurnMaxPasses
+        nextTurnMaxPasses = null
+
         val userMessageId = nextId()
         val assistantMessageId = nextId()
 
@@ -210,7 +214,7 @@ class HomeViewModel : ViewModel() {
             var lastFlushAtMs = 0L
 
             try {
-                repo.streamMessage(userInput, conversationHistory.toList(), sysInfo).collect { event ->
+                repo.streamMessage(userInput, conversationHistory.toList(), sysInfo, maxPasses).collect { event ->
                     when (event) {
                         is ChatStreamEvent.PassStarted -> {
                             passAssistantContent.clear()
@@ -443,6 +447,11 @@ class HomeViewModel : ViewModel() {
 
             _isLoading.value = false
         }
+    }
+
+    fun allowMoreLoops(count: Int) {
+        nextTurnMaxPasses = count
+        sendMessage("continue")
     }
 
     fun clearChat() {

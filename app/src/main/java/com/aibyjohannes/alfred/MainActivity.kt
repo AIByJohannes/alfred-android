@@ -124,12 +124,15 @@ class MainActivity : AppCompatActivity() {
             memorySearchSource = FileMemorySearchSource(filesDir.resolve("memories.jsonl"))
         )
         val obsidianVaultStore = ObsidianVaultStore(this)
-        val obsidianClient = if (obsidianVaultStore.hasUsableFolder()) {
-            DocumentObsidianClient(this, obsidianVaultStore.parentFolderUri!!)
-        } else {
-            null
-        }
-        val repository = ChatRepository(apiKeyStore, localKnowledgeSearchClient, obsidianClient)
+        val repository = ChatRepository(
+            apiKeyStore = apiKeyStore,
+            localKnowledgeSearchClient = localKnowledgeSearchClient,
+            obsidianClientProvider = {
+                obsidianVaultStore.parentFolderUri
+                    ?.takeIf { obsidianVaultStore.hasUsableFolder() }
+                    ?.let { DocumentObsidianClient(this, it) }
+            }
+        )
         val sysInfoProvider = SysInfoProvider(this)
         homeViewModel.initialize(
             apiKeyStore = apiKeyStore,
