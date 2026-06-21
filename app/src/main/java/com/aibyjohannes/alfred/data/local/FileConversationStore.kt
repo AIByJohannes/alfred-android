@@ -382,12 +382,7 @@ class FileConversationStore private constructor(
     }
 
     private fun parseRecoverableMessages(raw: String): List<MessageRecord> {
-        return runCatching {
-            raw.lineSequence()
-                .filter { it.isNotBlank() }
-                .map { objectMapper.readValue(it, MessageRecord::class.java) }
-                .toList()
-        }.getOrElse { emptyList() }
+        return parseMessageRecords(raw)
     }
 
     private fun workspaceNameFromFolder(slug: String, workspaceId: Long): String {
@@ -514,9 +509,15 @@ class FileConversationStore private constructor(
             )
             is StorageReadResult.Found -> result.text
         }
+        return parseMessageRecords(raw)
+    }
+
+    private fun parseMessageRecords(raw: String): List<MessageRecord> {
         return raw.lineSequence()
             .filter { it.isNotBlank() }
-            .map { objectMapper.readValue(it, MessageRecord::class.java) }
+            .mapNotNull { line ->
+                runCatching { objectMapper.readValue(line, MessageRecord::class.java) }.getOrNull()
+            }
             .toList()
     }
 

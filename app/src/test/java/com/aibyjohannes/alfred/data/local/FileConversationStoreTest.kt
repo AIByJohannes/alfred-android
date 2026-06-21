@@ -80,6 +80,20 @@ class FileConversationStoreTest {
     }
 
     @Test
+    fun `partial trailing jsonl record does not hide intact messages`() = runTest {
+        val root = temporaryFolder.newFolder()
+        val store = FileConversationStore(root)
+        val conversation = store.getOrCreateActiveConversation()
+        store.appendMessage(conversation.id, ChatMessage.ROLE_USER, "Keep the durable message")
+        val jsonl = root.resolve("workspace-1-personal/conversation-${conversation.id}.jsonl")
+
+        jsonl.appendText("{\"id\":")
+
+        val messages = store.loadMessages(conversation.id)
+        assertEquals(listOf("Keep the durable message"), messages.map { it.content })
+    }
+
+    @Test
     fun `active conversation is restored per workspace`() = runTest {
         val store = FileConversationStore(temporaryFolder.newFolder())
 
