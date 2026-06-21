@@ -270,6 +270,50 @@ class HomeViewModelTest {
     }
 
     @Test
+    fun `created workspace is not exposed until its conversation is loaded`() = runTest {
+        val personal = WorkspaceSummary(1L, "Personal")
+        val work = WorkspaceSummary(2L, "Work")
+        val personalConversation = ConversationSummary(1L, "Personal Chat", System.currentTimeMillis())
+        val workConversation = ConversationSummary(2L, null, System.currentTimeMillis())
+        val workConversationLoadStarted = CompletableDeferred<Unit>()
+        val releaseWorkConversation = CompletableDeferred<Unit>()
+        var activeConversationCalls = 0
+
+        every { apiKeyStore.hasApiKey() } returns true
+        coEvery { conversationStore.getOrCreateActiveWorkspace() } returns personal
+        coEvery { conversationStore.listWorkspaces() } returns listOf(personal, work)
+        coEvery { conversationStore.createWorkspace("Work") } returns work
+        coEvery { conversationStore.getOrCreateActiveConversation() } coAnswers {
+            activeConversationCalls++
+            if (activeConversationCalls == 1) {
+                personalConversation
+            } else {
+                workConversationLoadStarted.complete(Unit)
+                releaseWorkConversation.await()
+                workConversation
+            }
+        }
+        coEvery { conversationStore.loadMessages(any()) } returns emptyList()
+        coEvery { conversationStore.listConversations() } returns emptyList()
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.createWorkspace("Work")
+        testScheduler.runCurrent()
+
+        assertTrue(workConversationLoadStarted.isCompleted)
+        assertEquals(1L, viewModel.activeWorkspaceId.value)
+        assertEquals(1L, viewModel.activeConversationId.value)
+
+        releaseWorkConversation.complete(Unit)
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(2L, viewModel.activeWorkspaceId.value)
+        assertEquals(2L, viewModel.activeConversationId.value)
+    }
+
+    @Test
     fun `deleteWorkspace cascades and switches active workspace to remaining one`() = runTest {
         // Arrange
         val workspace1 = WorkspaceSummary(1L, "Personal")

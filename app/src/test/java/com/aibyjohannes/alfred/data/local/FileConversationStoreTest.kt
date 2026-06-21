@@ -115,6 +115,22 @@ class FileConversationStoreTest {
     }
 
     @Test
+    fun `created workspace chat survives store recreation`() = runTest {
+        val root = temporaryFolder.newFolder()
+        val store = FileConversationStore(root)
+        store.getOrCreateActiveConversation()
+        val workspace = store.createWorkspace("Work")
+        val conversation = store.getOrCreateActiveConversation()
+        store.appendMessage(conversation.id, ChatMessage.ROLE_USER, "Persist outside Personal")
+
+        val reopened = FileConversationStore(root)
+
+        assertEquals(workspace.id, reopened.getOrCreateActiveWorkspace().id)
+        assertEquals(conversation.id, reopened.getOrCreateActiveConversation().id)
+        assertEquals("Persist outside Personal", reopened.loadMessages(conversation.id).single().content)
+    }
+
+    @Test
     fun `switchActiveConversation rejects conversations from other workspaces`() = runTest {
         val store = FileConversationStore(temporaryFolder.newFolder())
 

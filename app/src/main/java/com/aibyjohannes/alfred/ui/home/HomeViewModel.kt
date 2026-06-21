@@ -525,11 +525,10 @@ class HomeViewModel : ViewModel() {
         val store = conversationStore ?: return
         viewModelScope.launch {
             val newWs = store.createWorkspace(name)
-            _activeWorkspaceId.value = newWs.id
-            refreshWorkspacesList()
-            
             val activeConversation = store.getOrCreateActiveConversation()
             loadConversation(activeConversation)
+            _activeWorkspaceId.value = newWs.id
+            refreshWorkspacesList()
             refreshConversationList()
         }
     }
@@ -538,11 +537,10 @@ class HomeViewModel : ViewModel() {
         val store = conversationStore ?: return
         viewModelScope.launch {
             val switchedWs = store.switchActiveWorkspace(workspaceId)
-            _activeWorkspaceId.value = switchedWs.id
-            refreshWorkspacesList()
-
             val activeConversation = store.getOrCreateActiveConversation()
             loadConversation(activeConversation)
+            _activeWorkspaceId.value = switchedWs.id
+            refreshWorkspacesList()
             refreshConversationList()
         }
     }
