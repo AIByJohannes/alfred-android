@@ -1,13 +1,15 @@
 package com.aibyjohannes.alfred.data.local
 
+import kotlinx.coroutines.flow.Flow
+
 data class ConversationSummary(
-    val id: Long,
+    val id: String,
     val title: String?,
     val updatedAtEpochMs: Long
 )
 
 data class WorkspaceSummary(
-    val id: Long,
+    val id: String,
     val name: String
 )
 
@@ -47,19 +49,21 @@ data class ConversationMessageDraft(
 interface ConversationStore {
     // Workspace Operations
     suspend fun listWorkspaces(): List<WorkspaceSummary>
+    fun observeWorkspaces(): Flow<List<WorkspaceSummary>>
     suspend fun getOrCreateActiveWorkspace(): WorkspaceSummary
     suspend fun createWorkspace(name: String): WorkspaceSummary
-    suspend fun switchActiveWorkspace(workspaceId: Long): WorkspaceSummary
-    suspend fun renameWorkspace(workspaceId: Long, newName: String)
-    suspend fun deleteWorkspace(workspaceId: Long)
+    suspend fun switchActiveWorkspace(workspaceId: String): WorkspaceSummary
+    suspend fun renameWorkspace(workspaceId: String, newName: String)
+    suspend fun deleteWorkspace(workspaceId: String)
 
     // Conversation Operations (scoped to active workspace)
     suspend fun getOrCreateActiveConversation(): ConversationSummary
     suspend fun listConversations(): List<ConversationSummary>
+    fun observeConversations(workspaceId: String): Flow<List<ConversationSummary>>
     suspend fun createConversation(): ConversationSummary
-    suspend fun switchActiveConversation(conversationId: Long): ConversationSummary
-    suspend fun loadMessages(conversationId: Long): List<StoredChatMessage>
-    suspend fun appendMessage(conversationId: Long, role: String, content: String)
-    suspend fun appendMessages(conversationId: Long, messages: List<ConversationMessageDraft>)
-    suspend fun deleteConversation(conversationId: Long)
+    suspend fun switchActiveConversation(conversationId: String): ConversationSummary
+    suspend fun loadMessages(conversationId: String): List<StoredChatMessage>
+    suspend fun appendMessage(conversationId: String, role: String, content: String)
+    suspend fun appendMessages(conversationId: String, messages: List<ConversationMessageDraft>)
+    suspend fun deleteConversation(conversationId: String)
 }

@@ -4,6 +4,7 @@ import java.io.File
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.ksp)
     alias(libs.plugins.kover)
 }
 
@@ -75,6 +76,9 @@ dependencies {
     implementation(libs.androidx.navigation.ui.ktx)
     implementation(libs.androidx.documentfile)
     implementation(libs.snakeyaml.engine)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
 
     // OpenAI Java SDK (includes OkHttp internally)
     implementation(libs.openai.java)
@@ -100,7 +104,9 @@ dependencies {
     testImplementation(libs.arch.core.testing)
     testImplementation(libs.ktor.client.mock)
     testImplementation(libs.androidx.junit)
+    testImplementation(libs.androidx.room.testing)
     androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(libs.androidx.junit)
 }
 
 tasks.register("adbConnect") {

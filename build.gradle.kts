@@ -1,7 +1,14 @@
+// Room's schema verifier extracts sqlite-jdbc during annotation processing. Some Windows
+// launchers report C:\\WINDOWS as the JVM temp directory, so keep processor temp files in Gradle's cache.
+val roomProcessorTempDir = layout.projectDirectory.dir(".gradle/room-tmp").asFile.apply { mkdirs() }
+System.setProperty("java.io.tmpdir", roomProcessorTempDir.absolutePath)
+System.setProperty("org.sqlite.tmpdir", roomProcessorTempDir.absolutePath)
+
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 plugins {
     alias(libs.plugins.android.application) apply false
     alias(libs.plugins.kotlin.android) apply false
+    alias(libs.plugins.ksp) apply false
     alias(libs.plugins.kotlin.jvm) apply false
     alias(libs.plugins.kover)
 }

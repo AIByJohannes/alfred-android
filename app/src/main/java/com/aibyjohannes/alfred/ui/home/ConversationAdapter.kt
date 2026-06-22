@@ -15,7 +15,7 @@ class ConversationAdapter(
     private val onConversationDeleted: (UiConversation) -> Unit
 ) : ListAdapter<UiConversation, ConversationAdapter.ConversationViewHolder>(ConversationDiffCallback()) {
 
-    private var activeConversationId: Long? = null
+    private var activeConversationId: String? = null
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ConversationViewHolder {
         val binding = ItemConversationBinding.inflate(
@@ -30,7 +30,7 @@ class ConversationAdapter(
         holder.bind(getItem(position), activeConversationId)
     }
 
-    fun setActiveConversationId(conversationId: Long?) {
+    fun setActiveConversationId(conversationId: String?) {
         if (activeConversationId == conversationId) return
         activeConversationId = conversationId
         notifyDataSetChanged()
@@ -42,7 +42,7 @@ class ConversationAdapter(
         private val onConversationDeleted: (UiConversation) -> Unit
     ) : RecyclerView.ViewHolder(binding.root) {
 
-        fun bind(conversation: UiConversation, activeConversationId: Long?) {
+        fun bind(conversation: UiConversation, activeConversationId: String?) {
             val context = binding.root.context
             val isActive = conversation.id == activeConversationId
             val activeColor = ContextCompat.getColor(context, R.color.palette_blue)

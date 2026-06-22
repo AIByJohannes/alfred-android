@@ -21,9 +21,9 @@ class WorkspaceChipAdapter(
 ) : RecyclerView.Adapter<WorkspaceChipAdapter.ViewHolder>() {
 
     private var workspacesList = emptyList<UiWorkspace>()
-    private var activeWorkspaceId: Long? = null
+    private var activeWorkspaceId: String? = null
 
-    fun submitData(workspaces: List<UiWorkspace>, activeId: Long?) {
+    fun submitData(workspaces: List<UiWorkspace>, activeId: String?) {
         workspacesList = workspaces
         activeWorkspaceId = activeId
         notifyDataSetChanged()

@@ -119,7 +119,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val apiKeyStore = ApiKeyStore(this)
-        val conversationStore = FileConversationStore(storage)
+        val conversationStore = FileConversationStore(storage, this)
         val localKnowledgeSearchClient = FileLocalKnowledgeSearchClient(
             conversationStore = conversationStore,
             memorySearchSource = FileMemorySearchSource(filesDir.resolve("memories.jsonl"))

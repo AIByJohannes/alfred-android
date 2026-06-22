@@ -17,7 +17,7 @@ data class LocalKnowledgeSearchResult(
     val title: String,
     val snippet: String,
     val timestampEpochMs: Long,
-    val conversationId: Long? = null,
+    val conversationId: String? = null,
     val messageId: Long? = null,
     val memoryId: String? = null
 )

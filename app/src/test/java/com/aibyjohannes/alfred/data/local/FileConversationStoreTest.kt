@@ -1,6 +1,11 @@
 package com.aibyjohannes.alfred.data.local
 
 import com.aibyjohannes.alfred.data.api.ChatMessage
+import com.fasterxml.jackson.databind.ObjectMapper
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -9,412 +14,204 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
-import java.util.LinkedHashMap
+import java.io.File
 
 class FileConversationStoreTest {
-    @get:Rule
-    val temporaryFolder = TemporaryFolder()
+    @get:Rule val temporaryFolder = TemporaryFolder()
 
     @Test
-    fun `create append load list switch and delete conversations`() = runTest {
-        val store = FileConversationStore(temporaryFolder.newFolder())
-
+    fun `new chat always creates a distinct persisted conversation`() = runTest {
+        val root = temporaryFolder.newFolder()
+        val store = FileConversationStore(root)
         val first = store.getOrCreateActiveConversation()
-        store.appendMessage(first.id, ChatMessage.ROLE_USER, "Remember that I prefer Kotlin.")
-        store.appendMessage(first.id, ChatMessage.ROLE_ASSISTANT, "Understood.")
 
         val second = store.createConversation()
+
         assertNotEquals(first.id, second.id)
-        store.appendMessage(second.id, ChatMessage.ROLE_USER, "This is about Android.")
-
-        val conversations = store.listConversations()
-        assertEquals(2, conversations.size)
-        assertEquals(second.id, conversations.first().id)
-
-        val firstMessages = store.loadMessages(first.id)
-        assertEquals(2, firstMessages.size)
-        assertEquals("Remember that I prefer Kotlin.", firstMessages.first().content)
-
-        val selected = store.switchActiveConversation(first.id)
-        assertEquals(first.id, selected.id)
-
-        store.deleteConversation(first.id)
-        assertEquals(1, store.listConversations().size)
-        assertTrue(store.loadMessages(first.id).isEmpty())
+        assertEquals(2, store.listConversations().size)
+        assertEquals(2, conversationFiles(root).size)
     }
 
     @Test
-    fun `searchSessionMessages returns scored limited matches`() = runTest {
-        val store = FileConversationStore(temporaryFolder.newFolder())
+    fun `workspace switch and new chat never modify previous conversation file`() = runTest {
+        val root = temporaryFolder.newFolder()
+        val store = FileConversationStore(root)
         val first = store.getOrCreateActiveConversation()
-        store.appendMessage(first.id, ChatMessage.ROLE_USER, "Kotlin coroutines are useful for Android work.")
-        store.appendMessage(first.id, ChatMessage.ROLE_ASSISTANT, "Kotlin can keep async code tidy.")
-
-        val second = store.createConversation()
-        store.appendMessage(second.id, ChatMessage.ROLE_USER, "Groceries and calendar reminders.")
-
-        val hits = store.searchSessionMessages("Kotlin Android", limit = 1)
-
-        assertEquals(1, hits.size)
-        assertEquals(first.id, hits.single().conversationId)
-        assertTrue(hits.single().snippet.contains("Kotlin"))
-    }
-
-    @Test
-    fun `stores chat history in stable workspace jsonl files`() = runTest {
-        val root = temporaryFolder.newFolder("Alfred")
-        val store = FileConversationStore(root)
-
-        val personal = store.getOrCreateActiveConversation()
-        store.appendMessage(personal.id, ChatMessage.ROLE_USER, "Hello from personal.")
-
-        val work = store.createWorkspace("Work Stuff")
-        val workConversation = store.getOrCreateActiveConversation()
-        store.appendMessage(workConversation.id, ChatMessage.ROLE_USER, "Hello from work.")
-        store.renameWorkspace(work.id, "Renamed Work")
-
-        assertTrue(root.resolve("metadata.json").exists())
-        assertTrue(root.resolve("workspace-1-personal/conversation-${personal.id}.jsonl").exists())
-        assertTrue(root.resolve("workspace-${work.id}-work-stuff/conversation-${workConversation.id}.jsonl").exists())
-        assertFalse(root.resolve("workspace-${work.id}-renamed-work").exists())
-    }
-
-    @Test
-    fun `partial trailing jsonl record does not hide intact messages`() = runTest {
-        val root = temporaryFolder.newFolder()
-        val store = FileConversationStore(root)
-        val conversation = store.getOrCreateActiveConversation()
-        store.appendMessage(conversation.id, ChatMessage.ROLE_USER, "Keep the durable message")
-        val jsonl = root.resolve("workspace-1-personal/conversation-${conversation.id}.jsonl")
-
-        jsonl.appendText("{\"id\":")
-
-        val messages = store.loadMessages(conversation.id)
-        assertEquals(listOf("Keep the durable message"), messages.map { it.content })
-    }
-
-    @Test
-    fun `active conversation is restored per workspace`() = runTest {
-        val store = FileConversationStore(temporaryFolder.newFolder())
-
-        val personalFirst = store.getOrCreateActiveConversation()
-        store.appendMessage(personalFirst.id, ChatMessage.ROLE_USER, "First personal chat.")
-        val personalSecond = store.createConversation()
-        store.appendMessage(personalSecond.id, ChatMessage.ROLE_USER, "Second personal chat.")
-        store.switchActiveConversation(personalFirst.id)
-
-        val work = store.createWorkspace("Work")
-        val workConversation = store.getOrCreateActiveConversation()
-        store.appendMessage(workConversation.id, ChatMessage.ROLE_USER, "Work chat.")
-
-        store.switchActiveWorkspace(1L)
-        assertEquals(personalFirst.id, store.getOrCreateActiveConversation().id)
-
-        store.switchActiveWorkspace(work.id)
-        assertEquals(workConversation.id, store.getOrCreateActiveConversation().id)
-    }
-
-    @Test
-    fun `created workspace chat survives store recreation`() = runTest {
-        val root = temporaryFolder.newFolder()
-        val store = FileConversationStore(root)
-        store.getOrCreateActiveConversation()
-        val workspace = store.createWorkspace("Work")
-        val conversation = store.getOrCreateActiveConversation()
-        store.appendMessage(conversation.id, ChatMessage.ROLE_USER, "Persist outside Personal")
-
-        val reopened = FileConversationStore(root)
-
-        assertEquals(workspace.id, reopened.getOrCreateActiveWorkspace().id)
-        assertEquals(conversation.id, reopened.getOrCreateActiveConversation().id)
-        assertEquals("Persist outside Personal", reopened.loadMessages(conversation.id).single().content)
-    }
-
-    @Test
-    fun `switchActiveConversation rejects conversations from other workspaces`() = runTest {
-        val store = FileConversationStore(temporaryFolder.newFolder())
-
-        val personal = store.getOrCreateActiveConversation()
-        store.appendMessage(personal.id, ChatMessage.ROLE_USER, "Personal chat.")
+        store.appendMessage(first.id, ChatMessage.ROLE_USER, "This chat must survive")
+        val firstFile = conversationFiles(root).single()
+        val bytesBefore = firstFile.readBytes()
 
         store.createWorkspace("Work")
-        val work = store.getOrCreateActiveConversation()
+        val second = store.getOrCreateActiveConversation()
 
-        val result = runCatching {
-            store.switchActiveConversation(personal.id)
-        }
-
-        assertTrue(result.isFailure)
-        assertEquals(work.id, store.getOrCreateActiveConversation().id)
+        assertNotEquals(first.id, second.id)
+        assertTrue(bytesBefore.contentEquals(firstFile.readBytes()))
+        store.switchActiveWorkspace(store.listWorkspaces().first { it.name == "Personal" }.id)
+        assertEquals("This chat must survive", store.loadMessages(first.id).single().content)
     }
 
     @Test
-    fun `deleteConversation removes jsonl file`() = runTest {
+    fun `reopening store restores workspaces chats titles and messages from files`() = runTest {
+        val root = temporaryFolder.newFolder()
+        val original = FileConversationStore(root)
+        val personal = original.getOrCreateActiveConversation()
+        original.appendMessage(personal.id, ChatMessage.ROLE_USER, "Persistent title and message")
+        val work = original.createWorkspace("Work")
+        val workChat = original.getOrCreateActiveConversation()
+        original.appendMessage(workChat.id, ChatMessage.ROLE_USER, "Work survives")
+
+        val reopened = FileConversationStore(root)
+        reopened.rebuildIndexFromFiles()
+
+        assertEquals(setOf("Personal", "Work"), reopened.listWorkspaces().map { it.name }.toSet())
+        reopened.switchActiveWorkspace(work.id)
+        assertEquals(workChat.id, reopened.listConversations().single().id)
+        assertEquals("Work survives", reopened.loadMessages(workChat.id).single().content)
+        assertTrue(conversationFiles(root).all { it.readLines().first().contains("conversationCreated") })
+    }
+
+    @Test
+    fun `conversation deletion is a tombstone and preserves the event log`() = runTest {
         val root = temporaryFolder.newFolder()
         val store = FileConversationStore(root)
-
         val conversation = store.getOrCreateActiveConversation()
-        store.appendMessage(conversation.id, ChatMessage.ROLE_USER, "Temporary chat.")
-        val jsonl = root.resolve("workspace-1-personal/conversation-${conversation.id}.jsonl")
-        assertTrue(jsonl.exists())
+        store.appendMessage(conversation.id, ChatMessage.ROLE_USER, "Keep recoverable bytes")
+        val file = conversationFiles(root).single()
 
         store.deleteConversation(conversation.id)
 
-        assertFalse(jsonl.exists())
+        assertTrue(file.exists())
+        assertTrue(file.readText().contains("conversationDeleted"))
+        assertTrue(store.listConversations().isEmpty())
         assertTrue(store.loadMessages(conversation.id).isEmpty())
     }
 
     @Test
-    fun `structured trace metadata round trips and is excluded from search`() = runTest {
-        val store = FileConversationStore(temporaryFolder.newFolder())
-        val conversation = store.getOrCreateActiveConversation()
-
-        store.appendMessages(
-            conversation.id,
-            listOf(
-                ConversationMessageDraft(
-                    role = ChatMessage.ROLE_USER,
-                    content = "Find Kotlin release notes",
-                    searchable = true
-                ),
-                ConversationMessageDraft(
-                    role = ChatMessage.ROLE_ASSISTANT,
-                    content = "Searching",
-                    kind = ChatMessage.KIND_TOOL_CALL,
-                    turnId = "turn-1",
-                    toolCallId = "call-1",
-                    toolName = "WebSearchTool",
-                    toolArgumentsJson = """{"query":"Kotlin release notes"}""",
-                    searchable = false
-                ),
-                ConversationMessageDraft(
-                    role = ChatMessage.ROLE_TOOL,
-                    content = "Hidden trace result should not be searchable",
-                    kind = ChatMessage.KIND_TOOL_RESULT,
-                    turnId = "turn-1",
-                    toolCallId = "call-1",
-                    toolName = "WebSearchTool",
-                    searchable = false
-                ),
-                ConversationMessageDraft(
-                    role = ChatMessage.ROLE_ASSISTANT,
-                    content = "Kotlin release notes are available.",
-                    turnId = "turn-1",
-                    searchable = true
-                )
-            )
+    fun `legacy metadata and headerless chat migrate idempotently`() = runTest {
+        val root = temporaryFolder.newFolder()
+        val workspace = root.resolve("workspace-1-personal").apply { mkdirs() }
+        val chat = workspace.resolve("conversation-1.jsonl")
+        chat.writeText(
+            """{"id":1,"conversationId":1,"role":"user","content":"Legacy survives","createdAtEpochMs":123}""" + "\n"
+        )
+        root.resolve("metadata.json").writeText(
+            """
+            {
+              "nextWorkspaceId": 2,
+              "nextConversationId": 2,
+              "workspaces": [{"id":1,"name":"Personal","folderName":"workspace-1-personal","createdAtEpochMs":100}],
+              "conversations": [{"id":1,"title":"Legacy survives","createdAtEpochMs":100,"updatedAtEpochMs":123,"workspaceId":1,"workspaceFolderName":"workspace-1-personal","fileName":"conversation-1.jsonl"}]
+            }
+            """.trimIndent()
         )
 
-        val messages = store.loadMessages(conversation.id)
-        assertEquals(4, messages.size)
-        assertEquals(ChatMessage.KIND_TOOL_CALL, messages[1].kind)
-        assertEquals("call-1", messages[1].toolCallId)
-        assertEquals("""{"query":"Kotlin release notes"}""", messages[1].toolArgumentsJson)
-        assertFalse(messages[1].searchable)
+        val migrated = FileConversationStore(root)
+        val conversation = migrated.getOrCreateActiveConversation()
 
-        val traceHits = store.searchSessionMessages("Hidden trace result", limit = 10)
-        assertTrue(traceHits.isEmpty())
-
-        val visibleHits = store.searchSessionMessages("Kotlin release", limit = 10)
-        assertTrue(visibleHits.isNotEmpty())
+        assertEquals("legacy-1", conversation.id)
+        assertEquals("Legacy survives", migrated.loadMessages(conversation.id).single().content)
+        assertFalse(root.resolve("metadata.json").exists())
+        assertTrue(workspace.resolve("workspace.jsonl").readText().contains("workspaceCreated"))
+        assertTrue(chat.readLines().first().contains("conversationCreated"))
+        val once = chat.readText()
+        FileConversationStore(root).rebuildIndexFromFiles()
+        assertEquals(once, chat.readText())
     }
 
     @Test
-    fun `transient metadata read failure never overwrites the index or chat files`() = runTest {
-        val storage = FaultInjectingStorage()
-        val store = FileConversationStore(storage)
-        val first = store.getOrCreateActiveConversation()
-        store.appendMessage(first.id, ChatMessage.ROLE_USER, "First chat")
-        val second = store.createConversation()
-        store.appendMessage(second.id, ChatMessage.ROLE_USER, "Second chat")
-        val filesBeforeFailure = storage.files.toMap()
+    fun `failed index rebuild keeps legacy metadata for a safe retry`() = runTest {
+        val root = temporaryFolder.newFolder()
+        val workspace = root.resolve("workspace-1-personal").apply { mkdirs() }
+        workspace.resolve("conversation-1.jsonl").writeText(
+            """{"id":1,"conversationId":1,"role":"user","content":"Retry survives","createdAtEpochMs":123}""" + "\n"
+        )
+        root.resolve("metadata.json").writeText(
+            """{"workspaces":[{"id":1,"name":"Personal","folderName":"workspace-1-personal","createdAtEpochMs":100}],"conversations":[{"id":1,"workspaceId":1,"workspaceFolderName":"workspace-1-personal","fileName":"conversation-1.jsonl","createdAtEpochMs":100}]}"""
+        )
+        val failingIndex = FailingConversationIndex().apply { failAfter(1) }
 
-        storage.failNextMetadataRead = true
-        val failure = runCatching { store.getOrCreateActiveWorkspace() }
-
-        assertTrue("A transient read must fail closed", failure.isFailure)
-        assertEquals(filesBeforeFailure, storage.files)
-        assertEquals(2, FileConversationStore(storage).listConversations().size)
-    }
-
-    @Test
-    fun `existing orphan file is never truncated when metadata is missing`() = runTest {
-        val storage = FaultInjectingStorage()
-        storage.files["workspace-1-personal/conversation-1.jsonl"] =
-            """{"id":1,"conversationId":1,"role":"user","content":"Keep me","createdAtEpochMs":123}""" + "\n"
-
-        val result = runCatching { FileConversationStore(storage).getOrCreateActiveConversation() }
-
-        assertTrue("The existing chat should be recovered", result.isSuccess)
-        assertEquals("Keep me", FileConversationStore(storage).loadMessages(1L).single().content)
-        assertTrue(storage.files.getValue("workspace-1-personal/conversation-1.jsonl").isNotBlank())
-    }
-
-    @Test
-    fun `surviving orphan is recovered from an already reset index`() = runTest {
-        val original = FaultInjectingStorage()
-        val originalStore = FileConversationStore(original)
-        val first = originalStore.getOrCreateActiveConversation()
-        originalStore.appendMessage(first.id, ChatMessage.ROLE_USER, "First chat")
-        val second = originalStore.createConversation()
-        originalStore.appendMessage(second.id, ChatMessage.ROLE_USER, "Second chat survives")
-        val survivingSecondChat = original.files.getValue("workspace-1-personal/conversation-2.jsonl")
-
-        val reset = FaultInjectingStorage()
-        FileConversationStore(reset).getOrCreateActiveConversation()
-        reset.files["workspace-1-personal/conversation-2.jsonl"] = survivingSecondChat
-
-        val recoveredStore = FileConversationStore(reset)
-
-        assertEquals(2, recoveredStore.listConversations().size)
-        assertEquals("Second chat survives", recoveredStore.loadMessages(2L).single().content)
-        assertTrue(reset.files.getValue("workspace-1-personal/conversation-2.jsonl").isNotBlank())
-    }
-
-    @Test
-    fun `blank metadata is treated as corruption and is not overwritten`() = runTest {
-        val storage = FaultInjectingStorage().apply {
-            files["metadata.json"] = ""
+        val failure = runCatching {
+            FileConversationStore(FileChatHistoryStorage(root), ObjectMapper(), failingIndex)
+                .getOrCreateActiveConversation()
         }
 
-        val failure = runCatching { FileConversationStore(storage).listConversations() }
-
         assertTrue(failure.isFailure)
-        assertEquals("", storage.files.getValue("metadata.json"))
+        assertTrue(root.resolve("metadata.json").exists())
+        val recovered = FileConversationStore(root)
+        assertEquals("Retry survives", recovered.loadMessages("legacy-1").single().content)
+        assertFalse(root.resolve("metadata.json").exists())
     }
 
     @Test
-    fun `failed chat file deletion keeps metadata indexed`() = runTest {
-        val storage = FaultInjectingStorage()
-        val store = FileConversationStore(storage)
+    fun `concurrent appends and new chats preserve all target files`() = runTest {
+        val root = temporaryFolder.newFolder()
+        val store = FileConversationStore(root)
+        val original = store.getOrCreateActiveConversation()
+
+        val jobs = (1..20).map { number ->
+            async { store.appendMessage(original.id, ChatMessage.ROLE_USER, "message-$number") }
+        } + (1..8).map { async { store.createConversation() } }
+        jobs.awaitAll()
+
+        assertEquals(20, store.loadMessages(original.id).size)
+        assertEquals(9, store.listConversations().size)
+        assertEquals(9, conversationFiles(root).size)
+        assertTrue(conversationFiles(root).all { it.readLines().first().contains("conversationCreated") })
+    }
+
+    @Test
+    fun `file success followed by index failure is repaired from files`() = runTest {
+        val root = temporaryFolder.newFolder()
+        val index = FailingConversationIndex()
+        val store = FileConversationStore(FileChatHistoryStorage(root), ObjectMapper(), index)
         val conversation = store.getOrCreateActiveConversation()
-        store.appendMessage(conversation.id, ChatMessage.ROLE_USER, "Do not lose me")
-        val metadataBeforeDelete = storage.files.getValue("metadata.json")
-        storage.failDelete = true
+        index.failAfter(2)
 
-        val failure = runCatching { store.deleteConversation(conversation.id) }
+        val failure = runCatching {
+            store.appendMessage(conversation.id, ChatMessage.ROLE_USER, "File wins")
+        }
 
         assertTrue(failure.isFailure)
-        assertEquals(metadataBeforeDelete, storage.files.getValue("metadata.json"))
-        assertEquals(1, FileConversationStore(storage).listConversations().size)
+        val recovered = FileConversationStore(root)
+        assertEquals("File wins", recovered.loadMessages(conversation.id).single().content)
     }
 
     @Test
-    fun `failed metadata write during new chat preserves the existing index`() = runTest {
-        val storage = FaultInjectingStorage()
-        val store = FileConversationStore(storage)
-        val existing = store.getOrCreateActiveConversation()
-        store.appendMessage(existing.id, ChatMessage.ROLE_USER, "Keep this chat")
-        val metadataBeforeCreate = storage.files.getValue("metadata.json")
-        storage.failNextMetadataWriteAfterTruncate = true
+    fun `partial final JSONL record does not hide earlier durable events`() = runTest {
+        val root = temporaryFolder.newFolder()
+        val store = FileConversationStore(root)
+        val conversation = store.getOrCreateActiveConversation()
+        store.appendMessage(conversation.id, ChatMessage.ROLE_USER, "Durable")
+        conversationFiles(root).single().appendText("{partial")
 
-        val failure = runCatching { store.createConversation() }
-
-        assertTrue(failure.isFailure)
-        assertEquals(metadataBeforeCreate, storage.files.getValue("metadata.json"))
-        assertEquals(listOf(existing.id), FileConversationStore(storage).listConversations().map { it.id })
-        assertEquals("Keep this chat", FileConversationStore(storage).loadMessages(existing.id).single().content)
+        assertEquals("Durable", FileConversationStore(root).loadMessages(conversation.id).single().content)
     }
 
-    @Test
-    fun `valid metadata backup repairs a truncated primary index`() = runTest {
-        val storage = FaultInjectingStorage()
-        val store = FileConversationStore(storage)
-        val existing = store.getOrCreateActiveConversation()
-        store.appendMessage(existing.id, ChatMessage.ROLE_USER, "Recover from backup")
-        val validMetadata = storage.files.getValue("metadata.json")
-        storage.files["metadata.backup.json"] = validMetadata
-        storage.files["metadata.json"] = ""
+    private fun conversationFiles(root: File): List<File> = root.walkTopDown()
+        .filter { it.isFile && it.name.startsWith("conversation-") && it.extension == "jsonl" }
+        .toList()
 
-        val recovered = FileConversationStore(storage)
-
-        assertEquals(listOf(existing.id), recovered.listConversations().map { it.id })
-        assertEquals("Recover from backup", recovered.loadMessages(existing.id).single().content)
-        assertTrue(storage.files.getValue("metadata.json").isNotBlank())
-    }
-
-    @Test
-    fun `orphan conversation is recovered when multiple conversations remain indexed`() = runTest {
-        val storage = FaultInjectingStorage()
-        val store = FileConversationStore(storage)
-        val first = store.getOrCreateActiveConversation()
-        store.appendMessage(first.id, ChatMessage.ROLE_USER, "First")
-        val second = store.createConversation()
-        store.appendMessage(second.id, ChatMessage.ROLE_USER, "Second")
-        val metadataWithTwoChats = storage.files.getValue("metadata.json")
-        val third = store.createConversation()
-        store.appendMessage(third.id, ChatMessage.ROLE_USER, "Recover me")
-
-        storage.files["metadata.json"] = metadataWithTwoChats
-
-        val recovered = FileConversationStore(storage)
-        assertEquals(3, recovered.listConversations().size)
-        assertEquals("Recover me", recovered.loadMessages(third.id).single().content)
-    }
-
-    private class FaultInjectingStorage : ChatHistoryStorage {
-        val files = LinkedHashMap<String, String>()
-        var failNextMetadataRead = false
-        var failNextMetadataWriteAfterTruncate = false
-        var failDelete = false
-
-        override fun ensureReady() = Unit
-
-        override fun ensureDirectory(path: List<String>) = Unit
-
-        override fun readText(path: List<String>): StorageReadResult {
-            val key = path.joinToString("/")
-            if (key == "metadata.json" && failNextMetadataRead) {
-                failNextMetadataRead = false
-                throw IllegalStateException("Transient provider failure")
+    private class FailingConversationIndex : ConversationIndex {
+        private val delegate = MemoryConversationIndex()
+        private var failOnReplaceCall: Int? = null
+        private var replaceCount = 0
+        fun failAfter(replaces: Int) {
+            failOnReplaceCall = replaceCount + replaces
+        }
+        override suspend fun replaceFrom(snapshot: ConversationIndexSnapshot) {
+            replaceCount++
+            if (replaceCount == failOnReplaceCall) {
+                failOnReplaceCall = null
+                throw IllegalStateException("Injected Room failure")
             }
-            return files[key]?.let(StorageReadResult::Found) ?: StorageReadResult.Missing
+            delegate.replaceFrom(snapshot)
         }
-
-        override fun listChildren(path: List<String>): List<StorageEntry> {
-            val prefix = path.joinToString("/").let { if (it.isBlank()) "" else "$it/" }
-            return files.keys
-                .asSequence()
-                .filter { it.startsWith(prefix) }
-                .map { it.removePrefix(prefix) }
-                .filter { it.isNotBlank() }
-                .map { it.substringBefore('/') }
-                .distinct()
-                .map { name ->
-                    val key = "$prefix$name"
-                    val isDirectory = files.keys.any { it.startsWith("$key/") }
-                    StorageEntry(name, isDirectory, if (isDirectory) 0L else files[key]?.length?.toLong() ?: 0L)
-                }
-                .toList()
-        }
-
-        override fun createFileExclusive(path: List<String>, mimeType: String) {
-            val key = path.joinToString("/")
-            check(!files.containsKey(key)) { "File already exists: $key" }
-            files[key] = ""
-        }
-
-        override fun writeText(path: List<String>, text: String, mimeType: String) {
-            val key = path.joinToString("/")
-            if (key == "metadata.json" && failNextMetadataWriteAfterTruncate) {
-                failNextMetadataWriteAfterTruncate = false
-                files[key] = ""
-                throw IllegalStateException("Metadata write failed after truncation")
-            }
-            files[key] = text
-        }
-
-        override fun appendLine(path: List<String>, line: String, mimeType: String) {
-            files.merge(path.joinToString("/"), "$line\n", String::plus)
-        }
-
-        override fun delete(path: List<String>) {
-            if (failDelete) {
-                failDelete = false
-                throw IllegalStateException("Delete failed")
-            }
-            val key = path.joinToString("/")
-            files.keys.removeAll { it == key || it.startsWith("$key/") }
-        }
+        override suspend fun activeWorkspaceId() = delegate.activeWorkspaceId()
+        override suspend fun setActiveWorkspaceId(id: String?) = delegate.setActiveWorkspaceId(id)
+        override suspend fun activeConversationId(workspaceId: String) = delegate.activeConversationId(workspaceId)
+        override suspend fun setActiveConversationId(workspaceId: String, id: String?) =
+            delegate.setActiveConversationId(workspaceId, id)
+        override fun observeWorkspaces(): Flow<List<WorkspaceSummary>> = flowOf(emptyList())
+        override fun observeConversations(workspaceId: String): Flow<List<ConversationSummary>> = flowOf(emptyList())
     }
 }

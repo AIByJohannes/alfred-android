@@ -43,9 +43,10 @@ class HomeViewModelTest {
         Dispatchers.setMain(testDispatcher)
         viewModel = HomeViewModel()
 
-        val defaultWorkspace = WorkspaceSummary(1L, "Personal")
+        val defaultWorkspace = WorkspaceSummary("1", "Personal")
         coEvery { conversationStore.getOrCreateActiveWorkspace() } returns defaultWorkspace
         coEvery { conversationStore.listWorkspaces() } returns listOf(defaultWorkspace)
+        coEvery { conversationStore.observeConversations(any()) } returns flowOf(emptyList())
     }
 
     @After
@@ -55,8 +56,8 @@ class HomeViewModelTest {
 
     @Test
     fun `chat history load failure is retryable without replacing current state`() = runTest {
-        val workspace = WorkspaceSummary(1L, "Personal")
-        val conversation = ConversationSummary(1L, "Recovered", System.currentTimeMillis())
+        val workspace = WorkspaceSummary("1", "Personal")
+        val conversation = ConversationSummary("1", "Recovered", System.currentTimeMillis())
         coEvery { conversationStore.getOrCreateActiveWorkspace() } throws
             IllegalStateException("Provider temporarily unavailable")
 
@@ -69,7 +70,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveWorkspace() } returns workspace
         coEvery { conversationStore.listWorkspaces() } returns listOf(workspace)
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
-        coEvery { conversationStore.loadMessages(1L) } returns listOf(
+        coEvery { conversationStore.loadMessages("1") } returns listOf(
             StoredChatMessage(1L, ChatMessage.ROLE_USER, "Still here")
         )
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
@@ -78,24 +79,24 @@ class HomeViewModelTest {
         testScheduler.advanceUntilIdle()
 
         assert(viewModel.storageError.value == null)
-        assert(viewModel.activeConversationId.value == 1L)
+        assert(viewModel.activeConversationId.value == "1")
         assert(viewModel.messages.value.orEmpty().single().content == "Still here")
     }
 
     @Test
     fun `createConversationAndSwitch creates new conversation if current is non-empty`() = runTest {
         // Arrange
-        val initialConversation = ConversationSummary(1L, "First Chat", System.currentTimeMillis())
-        val newConversation = ConversationSummary(2L, null, System.currentTimeMillis())
+        val initialConversation = ConversationSummary("1", "First Chat", System.currentTimeMillis())
+        val newConversation = ConversationSummary("2", null, System.currentTimeMillis())
 
         every { apiKeyStore.hasApiKey() } returns true
         every { apiKeyStore.loadModel() } returns "google/gemini-3.1-flash-lite-preview"
         coEvery { conversationStore.getOrCreateActiveConversation() } returns initialConversation
-        coEvery { conversationStore.loadMessages(1L) } returns listOf(
+        coEvery { conversationStore.loadMessages("1") } returns listOf(
             StoredChatMessage(id = 1L, role = "user", content = "Hello")
         )
         coEvery { conversationStore.createConversation() } returns newConversation
-        coEvery { conversationStore.loadMessages(2L) } returns emptyList()
+        coEvery { conversationStore.loadMessages("2") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(initialConversation, newConversation)
 
         // Act
@@ -112,12 +113,15 @@ class HomeViewModelTest {
     @Test
     fun `createConversationAndSwitch is idempotent if current is empty`() = runTest {
         // Arrange
-        val initialConversation = ConversationSummary(1L, null, System.currentTimeMillis())
+        val initialConversation = ConversationSummary("1", null, System.currentTimeMillis())
+        val newConversation = ConversationSummary("2", null, System.currentTimeMillis())
 
         every { apiKeyStore.hasApiKey() } returns true
         every { apiKeyStore.loadModel() } returns "google/gemini-3.1-flash-lite-preview"
         coEvery { conversationStore.getOrCreateActiveConversation() } returns initialConversation
-        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.loadMessages("1") } returns emptyList()
+        coEvery { conversationStore.createConversation() } returns newConversation
+        coEvery { conversationStore.loadMessages("2") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(initialConversation)
 
         // Act
@@ -133,18 +137,18 @@ class HomeViewModelTest {
 
     @Test
     fun `overlapping new chat requests create only one empty conversation`() = runTest {
-        val initialConversation = ConversationSummary(1L, "First Chat", System.currentTimeMillis())
-        val newConversation = ConversationSummary(2L, null, System.currentTimeMillis())
+        val initialConversation = ConversationSummary("1", "First Chat", System.currentTimeMillis())
+        val newConversation = ConversationSummary("2", null, System.currentTimeMillis())
         val firstCreateStarted = CompletableDeferred<Unit>()
         val releaseFirstCreate = CompletableDeferred<Unit>()
         var createCalls = 0
 
         every { apiKeyStore.hasApiKey() } returns true
         coEvery { conversationStore.getOrCreateActiveConversation() } returns initialConversation
-        coEvery { conversationStore.loadMessages(1L) } returns listOf(
+        coEvery { conversationStore.loadMessages("1") } returns listOf(
             StoredChatMessage(id = 1L, role = ChatMessage.ROLE_USER, content = "Hello")
         )
-        coEvery { conversationStore.loadMessages(2L) } returns emptyList()
+        coEvery { conversationStore.loadMessages("2") } returns emptyList()
         coEvery { conversationStore.createConversation() } coAnswers {
             createCalls++
             if (createCalls == 1) {
@@ -170,12 +174,12 @@ class HomeViewModelTest {
 
     @Test
     fun `new chat is ignored while a response is streaming`() = runTest {
-        val conversation = ConversationSummary(1L, "Current", System.currentTimeMillis())
+        val conversation = ConversationSummary("1", "Current", System.currentTimeMillis())
         val flow = kotlinx.coroutines.flow.MutableSharedFlow<ChatStreamEvent>()
 
         every { apiKeyStore.hasApiKey() } returns true
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
-        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
         every { repository.streamMessage(any(), any(), any()) } returns flow
 
@@ -192,89 +196,90 @@ class HomeViewModelTest {
     @Test
     fun `deleteConversation deletes active conversation and switches to remaining one`() = runTest {
         // Arrange
-        val initialConversation = ConversationSummary(1L, "First Chat", System.currentTimeMillis())
-        val remainingConversation = ConversationSummary(2L, "Second Chat", System.currentTimeMillis() + 1000)
+        val initialConversation = ConversationSummary("1", "First Chat", System.currentTimeMillis())
+        val remainingConversation = ConversationSummary("2", "Second Chat", System.currentTimeMillis() + 1000)
 
         every { apiKeyStore.hasApiKey() } returns true
         coEvery { conversationStore.getOrCreateActiveConversation() } returns initialConversation
-        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
-        coEvery { conversationStore.loadMessages(2L) } returns emptyList()
+        coEvery { conversationStore.loadMessages("1") } returns emptyList()
+        coEvery { conversationStore.loadMessages("2") } returns emptyList()
         coEvery { conversationStore.listConversations() } returnsMany listOf(
             listOf(initialConversation, remainingConversation),
             listOf(remainingConversation)
         )
-        coEvery { conversationStore.switchActiveConversation(2L) } returns remainingConversation
+        coEvery { conversationStore.switchActiveConversation("2") } returns remainingConversation
 
         // Act
         viewModel.initialize(apiKeyStore, repository, conversationStore)
         testScheduler.advanceUntilIdle()
 
-        viewModel.deleteConversation(1L)
+        viewModel.deleteConversation("1")
         testScheduler.advanceUntilIdle()
 
         // Assert
-        coVerify(exactly = 1) { conversationStore.deleteConversation(1L) }
-        coVerify(exactly = 1) { conversationStore.switchActiveConversation(2L) }
+        coVerify(exactly = 1) { conversationStore.deleteConversation("1") }
+        coVerify(exactly = 1) { conversationStore.switchActiveConversation("2") }
     }
 
     @Test
     fun `selectConversation reloads active conversation when selected id is invalid`() = runTest {
         // Arrange
-        val activeConversation = ConversationSummary(1L, "Active Chat", System.currentTimeMillis())
+        val activeConversation = ConversationSummary("1", "Active Chat", System.currentTimeMillis())
 
         every { apiKeyStore.hasApiKey() } returns true
         coEvery { conversationStore.getOrCreateActiveConversation() } returns activeConversation
-        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(activeConversation)
-        coEvery { conversationStore.switchActiveConversation(99L) } throws IllegalArgumentException("Invalid")
+        coEvery { conversationStore.switchActiveConversation("99") } throws IllegalArgumentException("Invalid")
 
         // Act
         viewModel.initialize(apiKeyStore, repository, conversationStore)
         testScheduler.advanceUntilIdle()
 
-        viewModel.selectConversation(99L)
+        viewModel.selectConversation("99")
         testScheduler.advanceUntilIdle()
 
         // Assert
-        assert(viewModel.activeConversationId.value == 1L)
-        coVerify(exactly = 1) { conversationStore.switchActiveConversation(99L) }
+        assert(viewModel.activeConversationId.value == "1")
+        coVerify(exactly = 1) { conversationStore.switchActiveConversation("99") }
         coVerify(atLeast = 2) { conversationStore.getOrCreateActiveConversation() }
     }
 
     @Test
     fun `switchWorkspace updates active workspace and loads its active conversation`() = runTest {
         // Arrange
-        val workspace1 = WorkspaceSummary(1L, "Personal")
-        val workspace2 = WorkspaceSummary(2L, "Work")
-        val conversationInW2 = ConversationSummary(3L, "Work Chat", System.currentTimeMillis())
+        val workspace1 = WorkspaceSummary("1", "Personal")
+        val workspace2 = WorkspaceSummary("2", "Work")
+        val conversationInW2 = ConversationSummary("3", "Work Chat", System.currentTimeMillis())
 
         coEvery { conversationStore.getOrCreateActiveWorkspace() } returns workspace1
         coEvery { conversationStore.listWorkspaces() } returns listOf(workspace1, workspace2)
-        coEvery { conversationStore.switchActiveWorkspace(2L) } returns workspace2
+        coEvery { conversationStore.switchActiveWorkspace("2") } returns workspace2
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversationInW2
-        coEvery { conversationStore.loadMessages(3L) } returns emptyList()
+        coEvery { conversationStore.loadMessages("3") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversationInW2)
+        coEvery { conversationStore.observeConversations("2") } returns flowOf(listOf(conversationInW2))
 
         // Act
         viewModel.initialize(apiKeyStore, repository, conversationStore)
         testScheduler.advanceUntilIdle()
 
-        viewModel.switchWorkspace(2L)
+        viewModel.switchWorkspace("2")
         testScheduler.advanceUntilIdle()
 
         // Assert
-        coVerify(exactly = 1) { conversationStore.switchActiveWorkspace(2L) }
-        assert(viewModel.activeWorkspaceId.value == 2L)
-        assert(viewModel.activeConversationId.value == 3L)
-        assert(viewModel.conversations.value?.firstOrNull()?.id == 3L)
+        coVerify(exactly = 1) { conversationStore.switchActiveWorkspace("2") }
+        assert(viewModel.activeWorkspaceId.value == "2")
+        assert(viewModel.activeConversationId.value == "3")
+        assert(viewModel.conversations.value?.firstOrNull()?.id == "3")
     }
 
     @Test
     fun `created workspace is not exposed until its conversation is loaded`() = runTest {
-        val personal = WorkspaceSummary(1L, "Personal")
-        val work = WorkspaceSummary(2L, "Work")
-        val personalConversation = ConversationSummary(1L, "Personal Chat", System.currentTimeMillis())
-        val workConversation = ConversationSummary(2L, null, System.currentTimeMillis())
+        val personal = WorkspaceSummary("1", "Personal")
+        val work = WorkspaceSummary("2", "Work")
+        val personalConversation = ConversationSummary("1", "Personal Chat", System.currentTimeMillis())
+        val workConversation = ConversationSummary("2", null, System.currentTimeMillis())
         val workConversationLoadStarted = CompletableDeferred<Unit>()
         val releaseWorkConversation = CompletableDeferred<Unit>()
         var activeConversationCalls = 0
@@ -303,22 +308,22 @@ class HomeViewModelTest {
         testScheduler.runCurrent()
 
         assertTrue(workConversationLoadStarted.isCompleted)
-        assertEquals(1L, viewModel.activeWorkspaceId.value)
-        assertEquals(1L, viewModel.activeConversationId.value)
+        assertEquals("1", viewModel.activeWorkspaceId.value)
+        assertEquals("1", viewModel.activeConversationId.value)
 
         releaseWorkConversation.complete(Unit)
         testScheduler.advanceUntilIdle()
 
-        assertEquals(2L, viewModel.activeWorkspaceId.value)
-        assertEquals(2L, viewModel.activeConversationId.value)
+        assertEquals("2", viewModel.activeWorkspaceId.value)
+        assertEquals("2", viewModel.activeConversationId.value)
     }
 
     @Test
     fun `deleteWorkspace cascades and switches active workspace to remaining one`() = runTest {
         // Arrange
-        val workspace1 = WorkspaceSummary(1L, "Personal")
-        val workspace2 = WorkspaceSummary(2L, "Work")
-        val conversationInW2 = ConversationSummary(3L, "Work Chat", System.currentTimeMillis())
+        val workspace1 = WorkspaceSummary("1", "Personal")
+        val workspace2 = WorkspaceSummary("2", "Work")
+        val conversationInW2 = ConversationSummary("3", "Work Chat", System.currentTimeMillis())
 
         coEvery { conversationStore.getOrCreateActiveWorkspace() } returnsMany listOf(workspace1, workspace2, workspace2)
         coEvery { conversationStore.listWorkspaces() } returnsMany listOf(
@@ -327,30 +332,30 @@ class HomeViewModelTest {
             listOf(workspace2)              // 3. post-delete refresh
         )
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversationInW2
-        coEvery { conversationStore.loadMessages(3L) } returns emptyList()
+        coEvery { conversationStore.loadMessages("3") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversationInW2)
 
         // Act
         viewModel.initialize(apiKeyStore, repository, conversationStore)
         testScheduler.advanceUntilIdle()
 
-        viewModel.deleteWorkspace(1L)
+        viewModel.deleteWorkspace("1")
         testScheduler.advanceUntilIdle()
 
         // Assert
-        coVerify(exactly = 1) { conversationStore.deleteWorkspace(1L) }
+        coVerify(exactly = 1) { conversationStore.deleteWorkspace("1") }
         coVerify(atLeast = 1) { conversationStore.getOrCreateActiveWorkspace() }
-        assert(viewModel.activeWorkspaceId.value == 2L)
-        assert(viewModel.activeConversationId.value == 3L)
+        assert(viewModel.activeWorkspaceId.value == "2")
+        assert(viewModel.activeConversationId.value == "3")
     }
 
     @Test
     fun `sendMessage persists completed structured stream atomically`() = runTest {
-        val conversation = ConversationSummary(1L, null, System.currentTimeMillis())
+        val conversation = ConversationSummary("1", null, System.currentTimeMillis())
 
         every { apiKeyStore.hasApiKey() } returns true
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
-        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
         every { repository.streamMessage(any(), any(), any()) } returns flowOf(
             ChatStreamEvent.PassStarted(0),
@@ -373,17 +378,17 @@ class HomeViewModelTest {
         testScheduler.advanceUntilIdle()
 
         assert(viewModel.messages.value?.lastOrNull()?.content == "Hello")
-        coVerify(exactly = 1) { conversationStore.appendMessages(eq(1L), match { it.size == 2 }) }
+        coVerify(exactly = 1) { conversationStore.appendMessages(eq("1"), match { it.size == 2 }) }
         coVerify(exactly = 0) { conversationStore.appendMessage(any(), any(), any()) }
     }
 
     @Test
     fun `sendMessage renders compact reasoning and tool traces`() = runTest {
-        val conversation = ConversationSummary(1L, null, System.currentTimeMillis())
+        val conversation = ConversationSummary("1", null, System.currentTimeMillis())
 
         every { apiKeyStore.hasApiKey() } returns true
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
-        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
         every { repository.streamMessage(any(), any(), any()) } returns flowOf(
             ChatStreamEvent.PassStarted(0),
@@ -465,7 +470,7 @@ class HomeViewModelTest {
         assert(assistant.traceItems.any { it.kind == UiTraceKind.TOOL_RESULT && it.content.contains("Kotlin 2.2") })
         coVerify(exactly = 1) {
             conversationStore.appendMessages(
-                eq(1L),
+                eq("1"),
                 match { drafts ->
                     drafts.any { it.kind == ChatMessage.KIND_TOOL_CALL && it.searchable == false } &&
                         drafts.any { it.kind == ChatMessage.KIND_TOOL_RESULT && it.searchable == false }
@@ -476,11 +481,11 @@ class HomeViewModelTest {
 
     @Test
     fun `sendMessage moves pre tool draft into trace before final answer`() = runTest {
-        val conversation = ConversationSummary(1L, null, System.currentTimeMillis())
+        val conversation = ConversationSummary("1", null, System.currentTimeMillis())
 
         every { apiKeyStore.hasApiKey() } returns true
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
-        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
         every { repository.streamMessage(any(), any(), any()) } returns flowOf(
             ChatStreamEvent.PassStarted(0),
@@ -532,11 +537,11 @@ class HomeViewModelTest {
 
     @Test
     fun `sendMessage groups reasoning chunks into a single trace item even if they have different ids`() = runTest {
-        val conversation = ConversationSummary(1L, null, System.currentTimeMillis())
+        val conversation = ConversationSummary("1", null, System.currentTimeMillis())
 
         every { apiKeyStore.hasApiKey() } returns true
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
-        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
         every { repository.streamMessage(any(), any(), any()) } returns flowOf(
             ChatStreamEvent.PassStarted(0),
@@ -583,11 +588,11 @@ class HomeViewModelTest {
 
     @Test
     fun `sendMessage preserves accumulated reasoning when completion contains only final chunk`() = runTest {
-        val conversation = ConversationSummary(1L, null, System.currentTimeMillis())
+        val conversation = ConversationSummary("1", null, System.currentTimeMillis())
 
         every { apiKeyStore.hasApiKey() } returns true
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
-        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
         every { repository.streamMessage(any(), any(), any()) } returns flowOf(
             ChatStreamEvent.PassStarted(0),
@@ -642,11 +647,11 @@ class HomeViewModelTest {
 
     @Test
     fun `sendMessage groups tool call chunks into a single trace item even if subsequent chunks have null ids`() = runTest {
-        val conversation = ConversationSummary(1L, null, System.currentTimeMillis())
+        val conversation = ConversationSummary("1", null, System.currentTimeMillis())
 
         every { apiKeyStore.hasApiKey() } returns true
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
-        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
         every { repository.streamMessage(any(), any(), any()) } returns flowOf(
             ChatStreamEvent.PassStarted(0),
@@ -698,12 +703,12 @@ class HomeViewModelTest {
 
     @Test
     fun `sendMessage updates messages list incrementally during streaming`() = runTest {
-        val conversation = ConversationSummary(1L, null, System.currentTimeMillis())
+        val conversation = ConversationSummary("1", null, System.currentTimeMillis())
         val flow = kotlinx.coroutines.flow.MutableSharedFlow<ChatStreamEvent>()
 
         every { apiKeyStore.hasApiKey() } returns true
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
-        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
         every { repository.streamMessage(any(), any(), any()) } returns flow
 
@@ -809,12 +814,12 @@ class HomeViewModelTest {
 
     @Test
     fun `sendMessage preserves user message content during reasoning and tool call streaming`() = runTest {
-        val conversation = ConversationSummary(1L, null, System.currentTimeMillis())
+        val conversation = ConversationSummary("1", null, System.currentTimeMillis())
         val flow = kotlinx.coroutines.flow.MutableSharedFlow<ChatStreamEvent>()
 
         every { apiKeyStore.hasApiKey() } returns true
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
-        coEvery { conversationStore.loadMessages(1L) } returns emptyList()
+        coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
         every { repository.streamMessage(any(), any(), any()) } returns flow
 
@@ -875,12 +880,12 @@ class HomeViewModelTest {
 
     @Test
     fun `createWorkspace creates new workspace and switches to it`() = runTest {
-        val newWorkspace = WorkspaceSummary(2L, "Work")
-        val activeConversation = ConversationSummary(3L, null, System.currentTimeMillis())
+        val newWorkspace = WorkspaceSummary("2", "Work")
+        val activeConversation = ConversationSummary("3", null, System.currentTimeMillis())
 
         coEvery { conversationStore.createWorkspace("Work") } returns newWorkspace
         coEvery { conversationStore.getOrCreateActiveConversation() } returns activeConversation
-        coEvery { conversationStore.listWorkspaces() } returns listOf(WorkspaceSummary(1L, "Personal"), newWorkspace)
+        coEvery { conversationStore.listWorkspaces() } returns listOf(WorkspaceSummary("1", "Personal"), newWorkspace)
         coEvery { conversationStore.listConversations() } returns listOf(activeConversation)
 
         viewModel.initialize(apiKeyStore, repository, conversationStore)
@@ -889,57 +894,57 @@ class HomeViewModelTest {
         viewModel.createWorkspace("Work")
         testScheduler.advanceUntilIdle()
 
-        assertEquals(2L, viewModel.activeWorkspaceId.value)
-        assertEquals(3L, viewModel.activeConversationId.value)
+        assertEquals("2", viewModel.activeWorkspaceId.value)
+        assertEquals("3", viewModel.activeConversationId.value)
         coVerify { conversationStore.createWorkspace("Work") }
     }
 
     @Test
     fun `switchWorkspace switches active workspace and loads active conversation`() = runTest {
-        val workWorkspace = WorkspaceSummary(2L, "Work")
-        val activeConversation = ConversationSummary(4L, "Work Chat", System.currentTimeMillis())
+        val workWorkspace = WorkspaceSummary("2", "Work")
+        val activeConversation = ConversationSummary("4", "Work Chat", System.currentTimeMillis())
 
-        coEvery { conversationStore.switchActiveWorkspace(2L) } returns workWorkspace
+        coEvery { conversationStore.switchActiveWorkspace("2") } returns workWorkspace
         coEvery { conversationStore.getOrCreateActiveConversation() } returns activeConversation
         coEvery { conversationStore.listConversations() } returns listOf(activeConversation)
 
         viewModel.initialize(apiKeyStore, repository, conversationStore)
         testScheduler.advanceUntilIdle()
 
-        viewModel.switchWorkspace(2L)
+        viewModel.switchWorkspace("2")
         testScheduler.advanceUntilIdle()
 
-        assertEquals(2L, viewModel.activeWorkspaceId.value)
-        assertEquals(4L, viewModel.activeConversationId.value)
-        coVerify { conversationStore.switchActiveWorkspace(2L) }
+        assertEquals("2", viewModel.activeWorkspaceId.value)
+        assertEquals("4", viewModel.activeConversationId.value)
+        coVerify { conversationStore.switchActiveWorkspace("2") }
     }
 
     @Test
     fun `renameWorkspace renames workspace and keeps active workspace id`() = runTest {
-        val activeWs = WorkspaceSummary(1L, "Personal Renamed")
+        val activeWs = WorkspaceSummary("1", "Personal Renamed")
         coEvery { conversationStore.getOrCreateActiveWorkspace() } returns activeWs
 
         viewModel.initialize(apiKeyStore, repository, conversationStore)
         testScheduler.advanceUntilIdle()
 
-        viewModel.renameWorkspace(1L, "Personal Renamed")
+        viewModel.renameWorkspace("1", "Personal Renamed")
         testScheduler.advanceUntilIdle()
 
-        coVerify { conversationStore.renameWorkspace(1L, "Personal Renamed") }
-        assertEquals(1L, viewModel.activeWorkspaceId.value)
+        coVerify { conversationStore.renameWorkspace("1", "Personal Renamed") }
+        assertEquals("1", viewModel.activeWorkspaceId.value)
     }
 
     @Test
     fun `deleteWorkspace deletes workspace only when multiple workspaces exist`() = runTest {
-        val ws1 = WorkspaceSummary(1L, "Personal")
-        val ws2 = WorkspaceSummary(2L, "Work")
+        val ws1 = WorkspaceSummary("1", "Personal")
+        val ws2 = WorkspaceSummary("2", "Work")
 
         // Case 1: Only 1 workspace exists -> delete does nothing
         coEvery { conversationStore.listWorkspaces() } returns listOf(ws1)
         viewModel.initialize(apiKeyStore, repository, conversationStore)
         testScheduler.advanceUntilIdle()
 
-        viewModel.deleteWorkspace(1L)
+        viewModel.deleteWorkspace("1")
         testScheduler.advanceUntilIdle()
         coVerify(exactly = 0) { conversationStore.deleteWorkspace(any()) }
 
@@ -949,18 +954,18 @@ class HomeViewModelTest {
         viewModel.retryChatHistoryLoad()
         testScheduler.advanceUntilIdle()
 
-        viewModel.deleteWorkspace(1L)
+        viewModel.deleteWorkspace("1")
         testScheduler.advanceUntilIdle()
-        coVerify(exactly = 1) { conversationStore.deleteWorkspace(1L) }
-        assertEquals(2L, viewModel.activeWorkspaceId.value)
+        coVerify(exactly = 1) { conversationStore.deleteWorkspace("1") }
+        assertEquals("2", viewModel.activeWorkspaceId.value)
     }
 
     @Test
     fun `clearChat deletes active conversation and creates new empty conversation`() = runTest {
-        val activeConversation = ConversationSummary(1L, "Chat", System.currentTimeMillis())
-        val newConversation = ConversationSummary(2L, null, System.currentTimeMillis())
+        val activeConversation = ConversationSummary("1", "Chat", System.currentTimeMillis())
+        val newConversation = ConversationSummary("2", null, System.currentTimeMillis())
         coEvery { conversationStore.getOrCreateActiveConversation() } returns activeConversation
-        coEvery { conversationStore.loadMessages(1L) } returns listOf(
+        coEvery { conversationStore.loadMessages("1") } returns listOf(
             StoredChatMessage(1L, ChatMessage.ROLE_USER, "Hello"),
             StoredChatMessage(2L, ChatMessage.ROLE_ASSISTANT, "Hi")
         )
@@ -969,15 +974,15 @@ class HomeViewModelTest {
         testScheduler.advanceUntilIdle()
         assertEquals(2, viewModel.messages.value.orEmpty().size)
 
-        coEvery { conversationStore.deleteConversation(1L) } just Runs
+        coEvery { conversationStore.deleteConversation("1") } just Runs
         coEvery { conversationStore.createConversation() } returns newConversation
-        coEvery { conversationStore.loadMessages(2L) } returns emptyList()
+        coEvery { conversationStore.loadMessages("2") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(newConversation)
 
         viewModel.clearChat()
         testScheduler.advanceUntilIdle()
 
-        coVerify { conversationStore.deleteConversation(1L) }
+        coVerify { conversationStore.deleteConversation("1") }
         coVerify { conversationStore.createConversation() }
         assertTrue(viewModel.messages.value.orEmpty().isEmpty())
     }

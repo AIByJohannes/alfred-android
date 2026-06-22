@@ -73,7 +73,7 @@ class AlfredNotificationReceiver : BroadcastReceiver() {
             ChatHistoryLocationStore(context).createStorage()
         }.getOrNull()
         val prompt = if (storage != null) {
-            NotificationPersonalizer(FileConversationStore(storage)).buildPrompt(kind)
+            NotificationPersonalizer(FileConversationStore(storage, context)).buildPrompt(kind)
         } else {
             NotificationPersonalizer.genericPrompt(kind)
         }

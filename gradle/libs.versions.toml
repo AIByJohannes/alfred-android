@@ -27,6 +27,8 @@ openaiJava = "4.23.0"
 koog = "1.0.0"
 kover = "0.9.8"
 snakeyamlEngine = "3.0.1"
+room = "2.8.4"
+ksp = "2.2.21-2.0.5"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -64,8 +66,13 @@ openai-java = { group = "com.openai", name = "openai-java", version.ref = "opena
 koog-openrouter-client-jvm = { group = "ai.koog", name = "prompt-executor-openrouter-client-jvm", version.ref = "koog" }
 koog-http-client-ktor = { group = "ai.koog", name = "http-client-ktor", version.ref = "koog" }
 snakeyaml-engine = { group = "org.snakeyaml", name = "snakeyaml-engine", version.ref = "snakeyamlEngine" }
+androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+androidx-room-testing = { group = "androidx.room", name = "room-testing", version.ref = "room" }
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }

@@ -57,13 +57,13 @@ data class UiTraceItem(
 )
 
 data class UiConversation(
-    val id: Long,
+    val id: String,
     val title: String,
     val updatedAtEpochMs: Long
 )
 
 data class UiWorkspace(
-    val id: Long,
+    val id: String,
     val name: String
 )
 
@@ -87,14 +87,14 @@ class HomeViewModel : ViewModel() {
     private val _conversations = MutableLiveData<List<UiConversation>>(emptyList())
     val conversations: LiveData<List<UiConversation>> = _conversations
 
-    private val _activeConversationId = MutableLiveData<Long?>(null)
-    val activeConversationId: LiveData<Long?> = _activeConversationId
+    private val _activeConversationId = MutableLiveData<String?>(null)
+    val activeConversationId: LiveData<String?> = _activeConversationId
 
     private val _workspaces = MutableLiveData<List<UiWorkspace>>(emptyList())
     val workspaces: LiveData<List<UiWorkspace>> = _workspaces
 
-    private val _activeWorkspaceId = MutableLiveData<Long?>(null)
-    val activeWorkspaceId: LiveData<Long?> = _activeWorkspaceId
+    private val _activeWorkspaceId = MutableLiveData<String?>(null)
+    val activeWorkspaceId: LiveData<String?> = _activeWorkspaceId
 
     private val _isLoading = MutableLiveData(false)
     val isLoading: LiveData<Boolean> = _isLoading
@@ -116,8 +116,9 @@ class HomeViewModel : ViewModel() {
 
     // Keep track of conversation history for context
     private val conversationHistory = mutableListOf<ChatMessage>()
-    private var currentConversationId: Long? = null
+    private var currentConversationId: String? = null
     private var nextMessageId = 1L
+    private var conversationsJob: kotlinx.coroutines.Job? = null
 
     fun initialize(
         apiKeyStore: ApiKeyStore,
@@ -410,7 +411,6 @@ class HomeViewModel : ViewModel() {
                                 }
                             )
                             onChatActivity?.invoke()
-                            refreshConversationList()
 
                             updateUiMessage(
                                 messageId = assistantMessageId,
@@ -457,6 +457,23 @@ class HomeViewModel : ViewModel() {
         sendMessage("continue")
     }
 
+    private fun observeConversationsForActiveWorkspace(workspaceId: String) {
+        conversationsJob?.cancel()
+        val store = conversationStore ?: return
+        conversationsJob = viewModelScope.launch {
+            store.observeConversations(workspaceId).collect { list ->
+                val uiList = list.map { summary ->
+                    UiConversation(
+                        id = summary.id,
+                        title = summary.title?.takeIf { it.isNotBlank() } ?: "Conversation ${summary.id}",
+                        updatedAtEpochMs = summary.updatedAtEpochMs
+                    )
+                }
+                _conversations.postValue(uiList)
+            }
+        }
+    }
+
     fun clearChat() {
         val store = conversationStore ?: return
         val activeId = currentConversationId ?: return
@@ -464,11 +481,10 @@ class HomeViewModel : ViewModel() {
             store.deleteConversation(activeId)
             val newConversation = store.createConversation()
             loadConversation(newConversation)
-            refreshConversationList()
         }
     }
 
-    fun deleteConversation(conversationId: Long) {
+    fun deleteConversation(conversationId: String) {
         val store = conversationStore ?: return
         viewModelScope.launch {
             store.deleteConversation(conversationId)
@@ -484,8 +500,6 @@ class HomeViewModel : ViewModel() {
                     loadConversation(newConversation)
                 }
             }
-
-            refreshConversationList()
         }
     }
 
@@ -502,12 +516,11 @@ class HomeViewModel : ViewModel() {
                 }
                 val newConversation = store.createConversation()
                 loadConversation(newConversation)
-                refreshConversationList()
             }
         }
     }
 
-    fun selectConversation(conversationId: Long) {
+    fun selectConversation(conversationId: String) {
         val store = conversationStore ?: return
         viewModelScope.launch {
             try {
@@ -517,7 +530,6 @@ class HomeViewModel : ViewModel() {
                 val activeConversation = store.getOrCreateActiveConversation()
                 loadConversation(activeConversation)
             }
-            refreshConversationList()
         }
     }
 
@@ -529,11 +541,11 @@ class HomeViewModel : ViewModel() {
             loadConversation(activeConversation)
             _activeWorkspaceId.value = newWs.id
             refreshWorkspacesList()
-            refreshConversationList()
+            observeConversationsForActiveWorkspace(newWs.id)
         }
     }
 
-    fun switchWorkspace(workspaceId: Long) {
+    fun switchWorkspace(workspaceId: String) {
         val store = conversationStore ?: return
         viewModelScope.launch {
             val switchedWs = store.switchActiveWorkspace(workspaceId)
@@ -541,11 +553,11 @@ class HomeViewModel : ViewModel() {
             loadConversation(activeConversation)
             _activeWorkspaceId.value = switchedWs.id
             refreshWorkspacesList()
-            refreshConversationList()
+            observeConversationsForActiveWorkspace(switchedWs.id)
         }
     }
 
-    fun renameWorkspace(workspaceId: Long, newName: String) {
+    fun renameWorkspace(workspaceId: String, newName: String) {
         val store = conversationStore ?: return
         viewModelScope.launch {
             store.renameWorkspace(workspaceId, newName)
@@ -555,7 +567,7 @@ class HomeViewModel : ViewModel() {
         }
     }
 
-    fun deleteWorkspace(workspaceId: Long) {
+    fun deleteWorkspace(workspaceId: String) {
         val store = conversationStore ?: return
         viewModelScope.launch {
             val currentList = store.listWorkspaces()
@@ -569,7 +581,7 @@ class HomeViewModel : ViewModel() {
 
             val activeConversation = store.getOrCreateActiveConversation()
             loadConversation(activeConversation)
-            refreshConversationList()
+            observeConversationsForActiveWorkspace(activeWs.id)
         }
     }
 
@@ -591,7 +603,7 @@ class HomeViewModel : ViewModel() {
 
                 val activeConversation = store.getOrCreateActiveConversation()
                 loadConversation(activeConversation)
-                refreshConversationList()
+                observeConversationsForActiveWorkspace(activeWs.id)
                 _storageError.value = null
             } catch (error: Exception) {
                 _storageError.value = error.message ?: "Chat history is temporarily unavailable"
@@ -602,9 +614,10 @@ class HomeViewModel : ViewModel() {
     private fun loadOrCreateActiveConversation() {
         val store = conversationStore ?: return
         viewModelScope.launch {
+            val activeWs = store.getOrCreateActiveWorkspace()
             val activeConversation = store.getOrCreateActiveConversation()
             loadConversation(activeConversation)
-            refreshConversationList()
+            observeConversationsForActiveWorkspace(activeWs.id)
         }
     }
 
@@ -652,18 +665,6 @@ class HomeViewModel : ViewModel() {
         )
 
         nextMessageId = (uiMessages.maxOfOrNull { it.id } ?: 0L) + 1L
-    }
-
-    private suspend fun refreshConversationList() {
-        val store = conversationStore ?: return
-        val list = store.listConversations().map { summary ->
-            UiConversation(
-                id = summary.id,
-                title = summary.title?.takeIf { it.isNotBlank() } ?: "Conversation ${summary.id}",
-                updatedAtEpochMs = summary.updatedAtEpochMs
-            )
-        }
-        _conversations.postValue(list)
     }
 
     private fun nextId(): Long = nextMessageId++

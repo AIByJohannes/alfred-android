@@ -17,7 +17,7 @@ class DrawerProjectsAdapter(
     private val onWorkspaceLongPressed: (UiWorkspace, View) -> Unit
 ) : ListAdapter<UiWorkspace, DrawerProjectsAdapter.ProjectViewHolder>(WorkspaceDiffCallback()) {
 
-    private var activeWorkspaceId: Long? = null
+    private var activeWorkspaceId: String? = null
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ProjectViewHolder {
         val binding = ItemDrawerProjectBinding.inflate(
@@ -32,7 +32,7 @@ class DrawerProjectsAdapter(
         holder.bind(getItem(position), activeWorkspaceId)
     }
 
-    fun submitData(list: List<UiWorkspace>, activeId: Long?) {
+    fun submitData(list: List<UiWorkspace>, activeId: String?) {
         val activeChanged = activeWorkspaceId != activeId
         activeWorkspaceId = activeId
         submitList(list.toList()) {
@@ -48,14 +48,16 @@ class DrawerProjectsAdapter(
         private val onWorkspaceLongPressed: (UiWorkspace, View) -> Unit
     ) : RecyclerView.ViewHolder(binding.root) {
 
-        fun bind(workspace: UiWorkspace, activeId: Long?) {
+        fun bind(workspace: UiWorkspace, activeId: String?) {
             val context = binding.root.context
             val isActive = workspace.id == activeId
 
             binding.projectName.text = workspace.name
 
-            val iconRes = ICONS[Math.floorMod(workspace.id, ICONS.size).toInt()]
-            val tintColor = COLORS[Math.floorMod(workspace.id, COLORS.size).toInt()]
+            val iconIndex = Math.floorMod(workspace.id.hashCode(), ICONS.size)
+            val colorIndex = Math.floorMod(workspace.id.hashCode(), COLORS.size)
+            val iconRes = ICONS[iconIndex]
+            val tintColor = COLORS[colorIndex]
 
             binding.projectIcon.setImageResource(iconRes)
             binding.projectIcon.imageTintList = ColorStateList.valueOf(tintColor)
