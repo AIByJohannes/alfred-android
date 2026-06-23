@@ -35,7 +35,9 @@ import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.aibyjohannes.alfred.data.SysInfoProvider
@@ -44,6 +46,7 @@ import android.Manifest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
+import kotlin.math.abs
 
 
 class MainActivity : AppCompatActivity() {
@@ -55,6 +58,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var workspaceAdapter: DrawerProjectsAdapter
     private lateinit var profilePreferencesStore: ProfilePreferencesStore
     private lateinit var chatHistoryLocationStore: ChatHistoryLocationStore
+    private var drawerSwipeStartX = 0f
+    private var drawerSwipeStartY = 0f
+    private var drawerSwipeTracking = false
+    private var drawerSwipeTouchSlop = 0
+    private var drawerSwipeMinDistance = 0f
 
     private val chatHistoryFolderLauncher = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri == null) {
@@ -77,6 +85,8 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
         profilePreferencesStore = ProfilePreferencesStore(this)
         chatHistoryLocationStore = ChatHistoryLocationStore(this)
+        drawerSwipeTouchSlop = ViewConfiguration.get(this).scaledTouchSlop
+        drawerSwipeMinDistance = 48 * resources.displayMetrics.density
 
         homeViewModel = ViewModelProvider(this)[HomeViewModel::class.java]
         initializeHomeViewModel()
@@ -105,6 +115,13 @@ class MainActivity : AppCompatActivity() {
         binding.appBarMain.toolbar.navigationIcon = ContextCompat.getDrawable(this, R.drawable.ic_hamburger_two_lines)
         setupModelSelector()
         navController.addOnDestinationChangedListener { _, destination, _ ->
+            val isTopLevel = destination.id == R.id.nav_home || destination.id == R.id.nav_settings
+            if (isTopLevel) {
+                drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_UNLOCKED)
+            } else {
+                drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_LOCKED_CLOSED)
+            }
+
             val isChatOpen = destination.id == R.id.nav_home
             binding.appBarMain.toolbarModelSelectionPill.isVisible = isChatOpen
             if (isChatOpen) {
@@ -114,6 +131,47 @@ class MainActivity : AppCompatActivity() {
             binding.appBarMain.toolbar.navigationIcon = ContextCompat.getDrawable(this, R.drawable.ic_hamburger_two_lines)
         }
         setupDrawer()
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        handleDrawerSwipeFromAnywhere(event)
+        return super.dispatchTouchEvent(event)
+    }
+
+    private fun handleDrawerSwipeFromAnywhere(event: MotionEvent) {
+        if (!::binding.isInitialized) return
+
+        val drawerLayout = binding.drawerLayout
+        val drawerLocked = drawerLayout.getDrawerLockMode(GravityCompat.START) != DrawerLayout.LOCK_MODE_UNLOCKED
+        if (drawerLocked || drawerLayout.isDrawerOpen(GravityCompat.START)) {
+            drawerSwipeTracking = false
+            return
+        }
+
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                drawerSwipeStartX = event.rawX
+                drawerSwipeStartY = event.rawY
+                drawerSwipeTracking = true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (!drawerSwipeTracking) return
+
+                val deltaX = event.rawX - drawerSwipeStartX
+                val deltaY = event.rawY - drawerSwipeStartY
+                val minDistance = maxOf(drawerSwipeMinDistance, drawerSwipeTouchSlop * 2f)
+                if (deltaX > minDistance && deltaX > abs(deltaY) * 1.5f) {
+                    drawerSwipeTracking = false
+                    drawerLayout.openDrawer(GravityCompat.START)
+                } else if (abs(deltaY) > drawerSwipeTouchSlop * 2f && abs(deltaY) > abs(deltaX)) {
+                    drawerSwipeTracking = false
+                }
+            }
+            MotionEvent.ACTION_UP,
+            MotionEvent.ACTION_CANCEL -> {
+                drawerSwipeTracking = false
+            }
+        }
     }
 
     private fun initializeHomeViewModel() {
