@@ -21,6 +21,11 @@ import com.aibyjohannes.alfred.data.local.FileLocalKnowledgeSearchClient
 import com.aibyjohannes.alfred.data.local.FileMemorySearchSource
 import com.aibyjohannes.alfred.data.local.ObsidianVaultStore
 import com.aibyjohannes.alfred.data.local.StorageSkillClient
+import com.aibyjohannes.alfred.data.local.NoteSearchIndexDatabase
+import com.aibyjohannes.alfred.data.local.VaultSearchIndexer
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import com.aibyjohannes.alfred.ui.home.ConversationAdapter
 import com.aibyjohannes.alfred.ui.home.HomeViewModel
 import com.aibyjohannes.alfred.ui.home.UiConversation
@@ -125,6 +130,17 @@ class MainActivity : AppCompatActivity() {
             memorySearchSource = FileMemorySearchSource(filesDir.resolve("memories.jsonl"))
         )
         val obsidianVaultStore = ObsidianVaultStore(this)
+        obsidianVaultStore.parentFolderUri?.takeIf { obsidianVaultStore.hasUsableFolder() }?.let { uri ->
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    val db = NoteSearchIndexDatabase.get(applicationContext)
+                    val indexer = VaultSearchIndexer(applicationContext, db)
+                    indexer.syncIndex(uri)
+                } catch (e: Exception) {
+                    android.util.Log.e("AlfredSearch", "Failed to sync index on startup", e)
+                }
+            }
+        }
         val repository = ChatRepository(
             apiKeyStore = apiKeyStore,
             localKnowledgeSearchClient = localKnowledgeSearchClient,

@@ -16,6 +16,8 @@ import com.aibyjohannes.alfred.R
 import com.aibyjohannes.alfred.data.ApiKeyStore
 import com.aibyjohannes.alfred.data.ProfilePreferencesStore
 import com.aibyjohannes.alfred.data.local.ObsidianVaultStore
+import com.aibyjohannes.alfred.data.local.NoteSearchIndexDatabase
+import com.aibyjohannes.alfred.data.local.VaultSearchIndexer
 import com.aibyjohannes.alfred.databinding.FragmentSettingsBinding
 import com.aibyjohannes.alfred.notifications.NotificationPreferencesStore
 import com.aibyjohannes.alfred.notifications.NotificationScheduler
@@ -72,6 +74,19 @@ class SettingsFragment : Fragment() {
                 try {
                     obsidianVaultStore.persistFolder(uri)
                     updateObsidianStatus()
+                    
+                    // Trigger asynchronous sync of the search index
+                    val appContext = requireContext().applicationContext
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        try {
+                            val db = NoteSearchIndexDatabase.get(appContext)
+                            val indexer = VaultSearchIndexer(appContext, db)
+                            indexer.syncIndex(uri)
+                        } catch (e: Exception) {
+                            android.util.Log.e("AlfredSearch", "Failed to sync index on vault connect", e)
+                        }
+                    }
+                    
                     Snackbar.make(binding.root, R.string.obsidian_connected_success, Snackbar.LENGTH_SHORT).show()
                 } catch (e: Exception) {
                     Snackbar.make(binding.root, "Failed to connect vault: ${e.message}", Snackbar.LENGTH_LONG).show()

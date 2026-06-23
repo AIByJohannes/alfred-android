@@ -16,6 +16,9 @@ class DocumentObsidianClient(
     private val rootUri: Uri
 ) : ObsidianClient {
 
+    private val db = NoteSearchIndexDatabase.get(context)
+    private val indexer = VaultSearchIndexer(context, db)
+
     // ── Data types ─────────────────────────────────────────────────────────────
 
     private data class SearchResultHit(
@@ -64,23 +67,53 @@ class DocumentObsidianClient(
                 return@withContext Result.success("No matching notes found.")
             }
 
-            val entries = mutableListOf<FileEntry>()
-            findMarkdownFilesRecursively(startDir, "", entries)
+            val isIndexEmpty = db.dao().getAllMetadata().isEmpty()
+            val hits = if (isIndexEmpty) {
+                // Fallback to disk scan
+                val entries = mutableListOf<FileEntry>()
+                findMarkdownFilesRecursively(startDir, "", entries)
 
-            val hits = entries.mapNotNull { entry ->
-                val fileName = entry.file.name ?: ""
-                val content = readFileText(entry.file)
-                val haystack = "$fileName $content"
-                val score = score(haystack, terms)
-                if (score > 0) {
-                    SearchResultHit(
-                        path = if (!directory.isNullOrBlank()) "${directory.trimEnd('/')}/${entry.relPath}" else entry.relPath,
-                        snippet = buildSnippet(content, terms),
-                        score = score,
-                        modifiedMs = entry.modifiedMs
-                    )
-                } else {
-                    null
+                entries.mapNotNull { entry ->
+                    val fileName = entry.file.name ?: ""
+                    val content = readFileText(entry.file)
+                    val haystack = "$fileName $content"
+                    val score = score(haystack, terms)
+                    if (score > 0) {
+                        SearchResultHit(
+                            path = if (!directory.isNullOrBlank()) "${directory.trimEnd('/')}/${entry.relPath}" else entry.relPath,
+                            snippet = buildSnippet(content, terms),
+                            score = score,
+                            modifiedMs = entry.modifiedMs
+                        )
+                    } else {
+                        null
+                    }
+                }
+            } else {
+                val ftsQuery = FtsQueryBuilder.build(query)
+                if (ftsQuery.isBlank()) {
+                    return@withContext Result.success("No matching notes found.")
+                }
+                val dbHits = db.dao().search(ftsQuery, 200)
+                dbHits.mapNotNull { entity ->
+                    if (!directory.isNullOrBlank()) {
+                        val normalizedDir = directory.trimEnd('/')
+                        val isWithinDir = entity.path.startsWith("$normalizedDir/") || entity.path == normalizedDir
+                        if (!isWithinDir) return@mapNotNull null
+                    }
+                    val fileName = entity.path.substringAfterLast('/')
+                    val haystack = "$fileName ${entity.content}"
+                    val score = score(haystack, terms)
+                    if (score > 0) {
+                        SearchResultHit(
+                            path = entity.path,
+                            snippet = buildSnippet(entity.content, terms),
+                            score = score,
+                            modifiedMs = entity.modifiedAt
+                        )
+                    } else {
+                        null
+                    }
                 }
             }
 
@@ -171,6 +204,10 @@ class DocumentObsidianClient(
                 }
                 writer.write(content)
             }
+            
+            // Update search index for single file
+            indexer.indexSingleFile(rootUri, path)
+
             val action = if (append) "appended to" else "written to"
             Result.success("Successfully $action note at relative path: $path")
         } catch (e: Exception) {
@@ -200,16 +237,18 @@ class DocumentObsidianClient(
     // ── Text helpers ───────────────────────────────────────────────────────────
 
     private fun normalizeTerms(query: String): List<String> {
-        return query.lowercase()
-            .split(Regex("[^a-z0-9]+"))
-            .filter { it.length >= 2 }
+        return query.lowercase(Locale.US)
+            .split(Regex("[^\\p{L}\\p{N}]+"))
+            .filter { it.isNotBlank() }
             .distinct()
     }
 
     private fun score(content: String, terms: List<String>): Int {
-        val normalized = content.lowercase()
+        val normalized = content.lowercase(Locale.US)
         return terms.sumOf { term ->
-            Regex("\\b${Regex.escape(term)}\\b").findAll(normalized).count()
+            Regex("(?U)\\b${Regex.escape(term)}\\b", RegexOption.IGNORE_CASE)
+                .findAll(normalized)
+                .count()
         }
     }
 
