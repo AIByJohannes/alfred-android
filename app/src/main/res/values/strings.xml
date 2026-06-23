@@ -28,6 +28,10 @@
 
     <!-- Settings -->
     <string name="settings_title">Settings</string>
+    <string name="settings_models_title">Model Selection</string>
+    <string name="settings_models_description">Configure language, speech, and voice models</string>
+    <string name="settings_tools_title">Tools</string>
+    <string name="settings_tools_description">Manage TickTick and Obsidian integrations</string>
     <string name="api_credentials_title">API Credentials</string>
     <string name="api_credentials_description">Get an API key at openrouter.ai</string>
     <string name="language_model_title">Language Model</string>
