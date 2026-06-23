@@ -16,14 +16,16 @@
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
             android:background="@color/top_bar_bg"
-            app:popupTheme="@style/Theme.Alfred.PopupOverlay">
+            app:popupTheme="@style/Theme.Alfred.PopupOverlay"
+            app:contentInsetStart="0dp"
+            app:contentInsetStartWithNavigation="0dp">
 
             <LinearLayout
                 android:id="@+id/toolbar_model_selection_pill"
                 android:layout_width="wrap_content"
                 android:layout_height="36dp"
                 android:layout_gravity="start|center_vertical"
-                android:layout_marginStart="72dp"
+                android:layout_marginStart="12dp"
                 android:background="@drawable/bg_model_selector_pill"
                 android:clickable="true"
                 android:contentDescription="@string/choose_model"

@@ -35,4 +35,13 @@
     <style name="Widget.Alfred.AutoCompleteTextView" parent="Widget.AppCompat.AutoCompleteTextView">
         <item name="android:popupBackground">@drawable/bg_dropdown_popup</item>
     </style>
+
+    <style name="Theme.Alfred.BottomSheetDialog" parent="Theme.MaterialComponents.BottomSheetDialog">
+        <item name="bottomSheetStyle">@style/Widget.Alfred.BottomSheet</item>
+    </style>
+
+    <style name="Widget.Alfred.BottomSheet" parent="Widget.MaterialComponents.BottomSheet.Modal">
+        <item name="android:background">@android:color/transparent</item>
+        <item name="backgroundTint">@android:color/transparent</item>
+    </style>
 </resources>

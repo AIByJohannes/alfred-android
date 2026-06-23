@@ -280,7 +280,7 @@ class MainActivity : AppCompatActivity() {
         val values = resources.getStringArray(R.array.model_values)
         val apiKeyStore = ApiKeyStore(this)
         val currentModel = apiKeyStore.loadModel()
-        val dialog = BottomSheetDialog(this)
+        val dialog = BottomSheetDialog(this, R.style.Theme_Alfred_BottomSheetDialog)
         val sheet = layoutInflater.inflate(R.layout.bottom_sheet_model_selector, null)
         val optionsContainer = sheet.findViewById<LinearLayout>(R.id.model_options_container)
 
