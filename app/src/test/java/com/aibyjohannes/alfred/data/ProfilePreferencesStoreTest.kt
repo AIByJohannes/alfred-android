@@ -58,13 +58,4 @@ class ProfilePreferencesStoreTest {
         store.displayName = "Charlie"
         assertEquals("Charlie", store.displayName)
     }
-
-    @Test
-    fun `test set and get statusLabel trims input`() {
-        store.statusLabel = "   Active Status   "
-        assertEquals("Active Status", store.statusLabel)
-
-        store.statusLabel = "Away"
-        assertEquals("Away", store.statusLabel)
-    }
 }

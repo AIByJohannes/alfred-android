@@ -50,7 +50,6 @@
     <string name="profile_title">Profile</string>
     <string name="profile_description">Shown in the drawer on this device.</string>
     <string name="profile_display_name">Display name</string>
-    <string name="profile_status_label">Status label</string>
     <string name="save_profile">Save Profile</string>
     <string name="profile_saved">Profile saved</string>
     <string name="notifications_title">Notifications</string>

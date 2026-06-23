@@ -12,11 +12,8 @@ class ProfilePreferencesStore(context: Context) {
             prefs.edit().putString(KEY_DISPLAY_NAME, value.trim()).apply()
         }
 
-    var statusLabel: String
-        get() = prefs.getString(KEY_STATUS_LABEL, DEFAULT_STATUS_LABEL) ?: DEFAULT_STATUS_LABEL
-        set(value) {
-            prefs.edit().putString(KEY_STATUS_LABEL, value.trim()).apply()
-        }
+    val statusLabel: String
+        get() = DEFAULT_STATUS_LABEL
 
     companion object {
         private const val PREFS_FILE_NAME = "alfred_profile_prefs"

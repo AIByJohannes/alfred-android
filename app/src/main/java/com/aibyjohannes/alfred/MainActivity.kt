@@ -303,11 +303,8 @@ class MainActivity : AppCompatActivity() {
         val displayName = profilePreferencesStore.displayName.ifBlank {
             ProfilePreferencesStore.DEFAULT_DISPLAY_NAME
         }
-        val statusLabel = profilePreferencesStore.statusLabel.ifBlank {
-            ProfilePreferencesStore.DEFAULT_STATUS_LABEL
-        }
         binding.drawerProfileName.text = displayName
-        binding.drawerProfileStatus.text = statusLabel
+        binding.drawerProfileStatus.text = profilePreferencesStore.statusLabel
         binding.drawerProfileInitials.text = initialsFor(displayName)
     }
 

@@ -209,21 +209,15 @@ class SettingsFragment : Fragment() {
 
     private fun setupProfileControls() {
         binding.profileDisplayNameInput.setText(profilePreferencesStore.displayName)
-        binding.profileStatusInput.setText(profilePreferencesStore.statusLabel)
 
         binding.saveProfileButton.setOnClickListener {
             val displayName = binding.profileDisplayNameInput.text?.toString()?.trim().orEmpty()
-            val statusLabel = binding.profileStatusInput.text?.toString()?.trim().orEmpty()
 
             profilePreferencesStore.displayName = displayName.ifBlank {
                 ProfilePreferencesStore.DEFAULT_DISPLAY_NAME
             }
-            profilePreferencesStore.statusLabel = statusLabel.ifBlank {
-                ProfilePreferencesStore.DEFAULT_STATUS_LABEL
-            }
 
             binding.profileDisplayNameInput.setText(profilePreferencesStore.displayName)
-            binding.profileStatusInput.setText(profilePreferencesStore.statusLabel)
             Snackbar.make(binding.root, R.string.profile_saved, Snackbar.LENGTH_SHORT).show()
         }
     }
