@@ -59,7 +59,7 @@ class ApiKeyStore internal constructor(
 
     fun loadModel(): String {
         return try {
-            prefs.getString(KEY_MODEL, null) ?: DEFAULT_MODEL_VAL
+            normalizeChatModel(prefs.getString(KEY_MODEL, null) ?: DEFAULT_MODEL_VAL)
         } catch (e: Exception) {
             Log.e(TAG, "Error loading model", e)
             DEFAULT_MODEL_VAL
@@ -221,6 +221,12 @@ class ApiKeyStore internal constructor(
         private const val KEY_TICKTICK_REFRESH_TOKEN = "ticktick_refresh_token"
         private const val KEY_MODEL = "selected_model"
         private const val DEFAULT_MODEL_VAL = "deepseek/deepseek-v4-flash"
+        private val LEGACY_FREE_CHAT_MODEL_MIGRATIONS = mapOf(
+            "google/gemma-4-31b-it:free" to "google/gemma-4-31b-it",
+            "google/gemma-4-26b-a4b-it:free" to "google/gemma-4-26b-a4b-it",
+            "qwen/qwen3-next-80b-a3b-instruct:free" to "qwen/qwen3-next-80b-a3b-instruct",
+            "openrouter/free" to "openrouter/auto"
+        )
         private const val KEY_STT_MODEL = "selected_stt_model"
         private const val DEFAULT_STT_MODEL_VAL = "openai/whisper-1"
         private const val KEY_TTS_MODEL = "selected_tts_model"
@@ -239,6 +245,11 @@ class ApiKeyStore internal constructor(
             "nova" to "af_nova",
             "shimmer" to "af_sky"
         )
+
+        private fun normalizeChatModel(model: String): String {
+            val trimmed = model.trim()
+            return LEGACY_FREE_CHAT_MODEL_MIGRATIONS[trimmed] ?: trimmed
+        }
 
         private fun createPreferences(context: Context): SharedPreferences {
             return try {

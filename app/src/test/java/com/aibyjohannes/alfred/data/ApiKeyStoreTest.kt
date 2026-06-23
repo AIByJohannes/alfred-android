@@ -84,6 +84,20 @@ class ApiKeyStoreTest {
     }
 
     @Test
+    fun `legacy free chat model selections migrate to paid equivalents`() {
+        mapOf(
+            "google/gemma-4-31b-it:free" to "google/gemma-4-31b-it",
+            "google/gemma-4-26b-a4b-it:free" to "google/gemma-4-26b-a4b-it",
+            "qwen/qwen3-next-80b-a3b-instruct:free" to "qwen/qwen3-next-80b-a3b-instruct",
+            "openrouter/free" to "openrouter/auto"
+        ).forEach { (legacy, current) ->
+            apiKeyStore.saveModel(legacy)
+
+            assertEquals(current, apiKeyStore.loadModel())
+        }
+    }
+
+    @Test
     fun `speech models default and legacy TTS models migrate`() {
         assertEquals("openai/whisper-1", apiKeyStore.loadSttModel())
         assertEquals("hexgrad/kokoro-82m", apiKeyStore.loadTtsModel())
