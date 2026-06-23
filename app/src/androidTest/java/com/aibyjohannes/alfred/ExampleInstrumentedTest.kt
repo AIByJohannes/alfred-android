@@ -51,7 +51,8 @@ class AlfredInstrumentedTest {
             store.appendMessage(secondChat.id, ChatMessage.ROLE_USER, "Hello, second chat")
             
             // Confirm we have two files in the workspace directory
-            val workspaceFolders = testDir.listFiles { f -> f.isDirectory && f.name.startsWith("workspace-") }
+            val workspacesDir = File(testDir, "workspaces")
+            val workspaceFolders = workspacesDir.listFiles()
             assertNotNull(workspaceFolders)
             val workspaceFolder = workspaceFolders!!.first()
             val files = workspaceFolder.listFiles { f -> f.isFile && f.name.startsWith("conversation-") }

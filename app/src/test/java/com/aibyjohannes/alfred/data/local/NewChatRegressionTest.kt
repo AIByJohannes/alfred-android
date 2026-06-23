@@ -106,7 +106,8 @@ class NewChatRegressionTest {
         waitForViewModelLoad(viewModel, testScheduler, targetToChangeFrom = chatA.id, expectedMessageCount = 0)
 
         // Assert (1): A's file contains NO conversationDeleted event
-        val workspaceFolders = tempDir.listFiles { f -> f.isDirectory && f.name.startsWith("workspace-") }
+        val workspacesDir = tempDir.resolve("workspaces")
+        val workspaceFolders = workspacesDir.listFiles()
         assertTrue("Workspace directory should exist", workspaceFolders != null && workspaceFolders.isNotEmpty())
         val workspaceFolder = workspaceFolders!!.first()
         val fileA = workspaceFolder.listFiles { f -> f.isFile && f.name.contains(chatA.id) }?.firstOrNull()

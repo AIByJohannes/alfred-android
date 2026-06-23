@@ -43,9 +43,9 @@ class FileConversationStore internal constructor(
     override suspend fun createWorkspace(name: String): WorkspaceSummary = withStoreLock {
         require(name.isNotBlank()) { "Workspace name must not be blank" }
         val id = UUID.randomUUID().toString()
-        val folderName = "workspace-$id-${slugify(name)}"
-        storage.ensureDirectory(listOf(folderName))
-        val path = listOf(folderName, WORKSPACE_FILE)
+        val folderName = "$id-${slugify(name)}"
+        storage.ensureDirectory(listOf(WORKSPACES_DIR, folderName))
+        val path = listOf(WORKSPACES_DIR, folderName, WORKSPACE_FILE)
         storage.createFileExclusive(path, JSONL_MIME_TYPE)
         appendEvent(path, workspaceEvent(WORKSPACE_CREATED, id, name))
         val snapshot = refreshIndex()
@@ -66,7 +66,7 @@ class FileConversationStore internal constructor(
         val workspace = loadSnapshot().activeWorkspaces().firstOrNull { it.id == workspaceId }
             ?: throw IllegalArgumentException("Workspace not found: $workspaceId")
         appendEvent(
-            listOf(workspace.folderName, WORKSPACE_FILE),
+            listOf(WORKSPACES_DIR, workspace.folderName, WORKSPACE_FILE),
             workspaceEvent(WORKSPACE_RENAMED, workspaceId, newName)
         )
         refreshIndex()
@@ -78,7 +78,7 @@ class FileConversationStore internal constructor(
         val workspace = snapshot.activeWorkspaces().firstOrNull { it.id == workspaceId }
             ?: throw IllegalArgumentException("Workspace not found: $workspaceId")
         appendEvent(
-            listOf(workspace.folderName, WORKSPACE_FILE),
+            listOf(WORKSPACES_DIR, workspace.folderName, WORKSPACE_FILE),
             workspaceEvent(WORKSPACE_DELETED, workspaceId, workspace.name)
         )
         if (index.activeWorkspaceId() == workspaceId) index.setActiveWorkspaceId(null)
@@ -200,7 +200,7 @@ class FileConversationStore internal constructor(
     private suspend fun createConversationInternal(workspace: IndexedWorkspace): ConversationSummary {
         repeat(8) {
             val id = UUID.randomUUID().toString()
-            val path = listOf(workspace.folderName, "conversation-$id.jsonl")
+            val path = listOf(WORKSPACES_DIR, workspace.folderName, "conversation-$id.jsonl")
             if (storage.readText(path) !is StorageReadResult.Missing) return@repeat
             storage.createFileExclusive(path, JSONL_MIME_TYPE)
             appendEvent(path, conversationCreatedEvent(id, workspace.id, System.currentTimeMillis()))
@@ -223,15 +223,16 @@ class FileConversationStore internal constructor(
     private suspend fun ensureWorkspace(snapshot: ConversationIndexSnapshot): ConversationIndexSnapshot {
         if (snapshot.activeWorkspaces().isNotEmpty()) return snapshot
         val id = UUID.randomUUID().toString()
-        val folderName = "workspace-$id-personal"
-        storage.ensureDirectory(listOf(folderName))
-        val path = listOf(folderName, WORKSPACE_FILE)
+        val folderName = "$id-personal"
+        storage.ensureDirectory(listOf(WORKSPACES_DIR, folderName))
+        val path = listOf(WORKSPACES_DIR, folderName, WORKSPACE_FILE)
         storage.createFileExclusive(path, JSONL_MIME_TYPE)
         appendEvent(path, workspaceEvent(WORKSPACE_CREATED, id, "Personal"))
         return refreshIndex().also { index.setActiveWorkspaceId(id) }
     }
 
     private suspend fun loadSnapshot(): ConversationIndexSnapshot {
+        migrateLegacyFolders()
         val legacySelections = migrateLegacyStorage()
         val snapshot = refreshIndex()
         if (legacySelections != null) {
@@ -250,6 +251,33 @@ class FileConversationStore internal constructor(
         return snapshot
     }
 
+    private fun migrateLegacyFolders() {
+        val rootChildren = storage.listChildren(emptyList())
+        val legacyFolders = rootChildren.filter { it.isDirectory && it.name.startsWith("workspace-") }
+        if (legacyFolders.isEmpty()) return
+
+        storage.ensureDirectory(listOf(WORKSPACES_DIR))
+        legacyFolders.forEach { folder ->
+            val oldFolder = folder.name
+            val newFolder = oldFolder.removePrefix("workspace-")
+            if (newFolder.isNotBlank()) {
+                val newFolderPath = listOf(WORKSPACES_DIR, newFolder)
+                storage.ensureDirectory(newFolderPath)
+
+                val children = storage.listChildren(listOf(oldFolder))
+                children.filter { !it.isDirectory }.forEach { child ->
+                    val oldFilePath = listOf(oldFolder, child.name)
+                    val newFilePath = newFolderPath + child.name
+                    val result = storage.readText(oldFilePath)
+                    if (result is StorageReadResult.Found) {
+                        storage.writeText(newFilePath, result.text, JSONL_MIME_TYPE)
+                    }
+                }
+                storage.delete(listOf(oldFolder))
+            }
+        }
+    }
+
     private suspend fun refreshIndex(): ConversationIndexSnapshot {
         val snapshot = scanEventFiles()
         index.replaceFrom(snapshot)
@@ -263,15 +291,15 @@ class FileConversationStore internal constructor(
     private fun scanEventFiles(): ConversationIndexSnapshot {
         val workspaces = mutableListOf<IndexedWorkspace>()
         val conversations = mutableListOf<IndexedConversation>()
-        val folders = storage.listChildren(emptyList()).filter { it.isDirectory && it.name.startsWith("workspace-") }
+        val folders = storage.listChildren(listOf(WORKSPACES_DIR)).filter { it.isDirectory }
         folders.forEach { folder ->
-            val manifestPath = listOf(folder.name, WORKSPACE_FILE)
+            val manifestPath = listOf(WORKSPACES_DIR, folder.name, WORKSPACE_FILE)
             val manifest = (storage.readText(manifestPath) as? StorageReadResult.Found)?.text ?: return@forEach
             foldWorkspace(manifest, folder.name)?.let(workspaces::add)
-            storage.listChildren(listOf(folder.name))
+            storage.listChildren(listOf(WORKSPACES_DIR, folder.name))
                 .filter { !it.isDirectory && CONVERSATION_FILE_REGEX.matches(it.name) }
                 .forEach { entry ->
-                    val path = listOf(folder.name, entry.name)
+                    val path = listOf(WORKSPACES_DIR, folder.name, entry.name)
                     val raw = (storage.readText(path) as? StorageReadResult.Found)?.text ?: return@forEach
                     foldConversation(raw, path)?.let(conversations::add)
                 }
@@ -380,9 +408,11 @@ class FileConversationStore internal constructor(
             val legacyId = workspace.path("id").asLong()
             val id = legacyId.toLegacyId()
             val name = workspace.path("name").asText("Recovered Workspace")
-            val folder = workspace.path("folderName").asText("workspace-$legacyId-${slugify(name)}")
+            val folder = workspace.path("folderName").asText("workspace-$legacyId-${slugify(name)}").let { oldFolder ->
+                if (oldFolder.startsWith("workspace-")) oldFolder.removePrefix("workspace-") else oldFolder
+            }
             workspaceFolders[legacyId] = folder
-            storage.ensureDirectory(listOf(folder))
+            storage.ensureDirectory(listOf(WORKSPACES_DIR, folder))
             ensureWorkspaceManifest(folder, id, name, workspace.path("createdAtEpochMs").asLong(System.currentTimeMillis()))
         }
         root.path("conversations").forEach { conversation ->
@@ -391,12 +421,14 @@ class FileConversationStore internal constructor(
             val workspaceId = legacyWorkspaceId.toLegacyId()
             val folder = conversation.path("workspaceFolderName").asText(
                 workspaceFolders[legacyWorkspaceId] ?: "workspace-$legacyWorkspaceId-personal"
-            )
-            storage.ensureDirectory(listOf(folder))
+            ).let { oldFolder ->
+                if (oldFolder.startsWith("workspace-")) oldFolder.removePrefix("workspace-") else oldFolder
+            }
+            storage.ensureDirectory(listOf(WORKSPACES_DIR, folder))
             ensureWorkspaceManifest(folder, workspaceId, "Recovered Workspace", conversation.path("createdAtEpochMs").asLong())
             val fileName = conversation.path("fileName").asText("conversation-$legacyId.jsonl")
             ensureConversationHeader(
-                listOf(folder, fileName), legacyId.toLegacyId(), workspaceId,
+                listOf(WORKSPACES_DIR, folder, fileName), legacyId.toLegacyId(), workspaceId,
                 conversation.path("title").takeUnless { it.isMissingNode || it.isNull }?.asText(),
                 conversation.path("createdAtEpochMs").asLong(System.currentTimeMillis())
             )
@@ -419,17 +451,21 @@ class FileConversationStore internal constructor(
     }
 
     private fun migrateHeaderlessFiles() {
-        storage.listChildren(emptyList()).filter { it.isDirectory && it.name.startsWith("workspace-") }.forEach { folder ->
-            val numericWorkspaceId = WORKSPACE_LEGACY_REGEX.find(folder.name)?.groupValues?.get(1)?.toLongOrNull()
+        if (!storage.listChildren(emptyList()).any { it.isDirectory && it.name == WORKSPACES_DIR }) {
+            return
+        }
+        storage.listChildren(listOf(WORKSPACES_DIR)).filter { it.isDirectory }.forEach { folder ->
+            val numericWorkspaceId = WORKSPACE_NEW_LEGACY_REGEX.find(folder.name)?.groupValues?.get(1)?.toLongOrNull()
+                ?: WORKSPACE_LEGACY_REGEX.find(folder.name)?.groupValues?.get(1)?.toLongOrNull()
             val workspaceId = numericWorkspaceId?.toLegacyId() ?: return@forEach
-            val inferredName = folder.name.substringAfter("workspace-${numericWorkspaceId}-", "Recovered Workspace")
+            val inferredName = folder.name.substringAfter("${numericWorkspaceId}-", "Recovered Workspace")
                 .split('-').joinToString(" ") { it.replaceFirstChar { char -> char.titlecase(Locale.US) } }
             ensureWorkspaceManifest(folder.name, workspaceId, inferredName, System.currentTimeMillis())
-            storage.listChildren(listOf(folder.name)).filter { !it.isDirectory }.forEach { entry ->
+            storage.listChildren(listOf(WORKSPACES_DIR, folder.name)).filter { !it.isDirectory }.forEach { entry ->
                 val legacyConversationId = CONVERSATION_LEGACY_REGEX.matchEntire(entry.name)
                     ?.groupValues?.get(1)?.toLongOrNull() ?: return@forEach
                 ensureConversationHeader(
-                    listOf(folder.name, entry.name), legacyConversationId.toLegacyId(), workspaceId,
+                    listOf(WORKSPACES_DIR, folder.name, entry.name), legacyConversationId.toLegacyId(), workspaceId,
                     null, System.currentTimeMillis()
                 )
             }
@@ -437,14 +473,14 @@ class FileConversationStore internal constructor(
     }
 
     private fun ensureWorkspaceManifest(folder: String, id: String, name: String, createdAt: Long) {
-        val path = listOf(folder, WORKSPACE_FILE)
+        val path = listOf(WORKSPACES_DIR, folder, WORKSPACE_FILE)
         when (val result = storage.readText(path)) {
             StorageReadResult.Missing -> {
                 storage.createFileExclusive(path, JSONL_MIME_TYPE)
                 appendEvent(path, workspaceEvent(WORKSPACE_CREATED, id, name, createdAt))
             }
             is StorageReadResult.Found -> check(foldWorkspace(result.text, folder) != null) {
-                "Workspace manifest is invalid: $folder/$WORKSPACE_FILE"
+                "Workspace manifest is invalid: $WORKSPACES_DIR/$folder/$WORKSPACE_FILE"
             }
         }
     }
@@ -625,6 +661,7 @@ class FileConversationStore internal constructor(
         private val PROCESS_WRITER_MUTEX = Mutex()
         private const val SCHEMA_VERSION = 1
         private const val JSONL_MIME_TYPE = "application/x-ndjson"
+        private const val WORKSPACES_DIR = "workspaces"
         private const val WORKSPACE_FILE = "workspace.jsonl"
         private const val WORKSPACE_CREATED = "workspaceCreated"
         private const val WORKSPACE_RENAMED = "workspaceRenamed"
@@ -639,6 +676,7 @@ class FileConversationStore internal constructor(
         private val CONVERSATION_FILE_REGEX = Regex("^conversation-.+\\.jsonl$")
         private val CONVERSATION_LEGACY_REGEX = Regex("^conversation-(\\d+)\\.jsonl$")
         private val WORKSPACE_LEGACY_REGEX = Regex("^workspace-(\\d+)(?:-|$)")
+        private val WORKSPACE_NEW_LEGACY_REGEX = Regex("^(\\d+)(?:-|$)")
     }
 }
 

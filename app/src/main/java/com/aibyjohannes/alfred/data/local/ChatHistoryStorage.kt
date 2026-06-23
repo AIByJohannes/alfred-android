@@ -317,7 +317,9 @@ class DocumentChatHistoryStorage private constructor(
         }
 
         private fun hasEventStorage(context: Context, parent: DocumentFile): Boolean = runCatching {
-            queryChildren(context, parent).any { it.isDirectory && it.name.startsWith("workspace-") }
+            queryChildren(context, parent).any { 
+                (it.isDirectory && it.name == "workspaces") || (it.isDirectory && it.name.startsWith("workspace-"))
+            }
         }.getOrDefault(false)
 
         private fun findChild(context: Context, parent: DocumentFile, displayName: String): DocumentFile? {

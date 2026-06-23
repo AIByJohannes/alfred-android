@@ -111,11 +111,13 @@ class FileConversationStoreTest {
         assertEquals("legacy-1", conversation.id)
         assertEquals("Legacy survives", migrated.loadMessages(conversation.id).single().content)
         assertFalse(root.resolve("metadata.json").exists())
-        assertTrue(workspace.resolve("workspace.jsonl").readText().contains("workspaceCreated"))
-        assertTrue(chat.readLines().first().contains("conversationCreated"))
-        val once = chat.readText()
+        val newWorkspace = root.resolve("workspaces/1-personal")
+        val newChat = newWorkspace.resolve("conversation-1.jsonl")
+        assertTrue(newWorkspace.resolve("workspace.jsonl").readText().contains("workspaceCreated"))
+        assertTrue(newChat.readLines().first().contains("conversationCreated"))
+        val once = newChat.readText()
         FileConversationStore(root).rebuildIndexFromFiles()
-        assertEquals(once, chat.readText())
+        assertEquals(once, newChat.readText())
     }
 
     @Test
@@ -240,6 +242,57 @@ class FileConversationStoreTest {
         store.restoreConversation(conversation.id)
         assertEquals(conversation.id, store.listConversations().single().id)
     }
+
+    @Test
+    fun `new workspaces are stored inside workspaces directory`() = runTest {
+        val root = temporaryFolder.newFolder()
+        val store = FileConversationStore(root)
+        val conversation = store.getOrCreateActiveConversation()
+        
+        val workspacesDir = root.resolve("workspaces")
+        assertTrue("workspaces directory should exist", workspacesDir.exists() && workspacesDir.isDirectory)
+        
+        val workspaceFolders = workspacesDir.listFiles()
+        assertTrue("Should contain personal workspace folder", workspaceFolders != null && workspaceFolders.size == 1)
+        val personalFolder = workspaceFolders!![0]
+        assertFalse("Workspace folder name should not start with workspace-", personalFolder.name.startsWith("workspace-"))
+        assertTrue("Workspace folder name should end with -personal", personalFolder.name.endsWith("-personal"))
+        
+        val manifest = personalFolder.resolve("workspace.jsonl")
+        assertTrue("Workspace manifest should exist", manifest.exists())
+    }
+
+    @Test
+    fun `old workspace- folders are migrated into workspaces directory on open`() = runTest {
+        val root = temporaryFolder.newFolder()
+        // Create an old workspace folder at root
+        val oldFolder = root.resolve("workspace-12345-my-workspace").apply { mkdirs() }
+        oldFolder.resolve("workspace.jsonl").writeText(
+            """{"schemaVersion":1,"eventType":"workspaceCreated","workspaceId":"12345","name":"My Workspace","createdAtEpochMs":100}""" + "\n"
+        )
+        oldFolder.resolve("conversation-abc.jsonl").writeText(
+            """{"schemaVersion":1,"eventType":"conversationCreated","conversationId":"abc","workspaceId":"12345","title":"Test Chat","createdAtEpochMs":120}""" + "\n"
+        )
+
+        val store = FileConversationStore(root)
+        val activeWorkspace = store.switchActiveWorkspace("12345")
+        assertEquals("My Workspace", activeWorkspace.name)
+        
+        // Verify old folder is gone
+        assertFalse("Old folder should be deleted", oldFolder.exists())
+        
+        // Verify new folder exists in workspaces/
+        val newFolder = root.resolve("workspaces/12345-my-workspace")
+        assertTrue("New folder should exist", newFolder.exists())
+        assertTrue("Workspace manifest should exist in new folder", newFolder.resolve("workspace.jsonl").exists())
+        assertTrue("Conversation file should exist in new folder", newFolder.resolve("conversation-abc.jsonl").exists())
+        
+        // Verify data is readable
+        val conversations = store.listConversations()
+        assertEquals(1, conversations.size)
+        assertEquals("abc", conversations[0].id)
+    }
+
 
     private fun conversationFiles(root: File): List<File> = root.walkTopDown()
         .filter { it.isFile && it.name.startsWith("conversation-") && it.extension == "jsonl" }
