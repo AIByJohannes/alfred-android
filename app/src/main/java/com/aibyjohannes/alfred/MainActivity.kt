@@ -1,5 +1,6 @@
 package com.aibyjohannes.alfred
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.core.view.GravityCompat
 import androidx.navigation.findNavController
@@ -131,6 +132,7 @@ class MainActivity : AppCompatActivity() {
             binding.appBarMain.toolbar.navigationIcon = ContextCompat.getDrawable(this, R.drawable.ic_hamburger_two_lines)
         }
         setupDrawer()
+        handleIntent(intent)
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
@@ -506,6 +508,25 @@ class MainActivity : AppCompatActivity() {
                 homeViewModel.deleteWorkspace(workspace.id)
             }
             .show()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        if (intent == null) return
+        if (Intent.ACTION_SEND == intent.action && intent.type != null) {
+            if (intent.type?.startsWith("text/") == true) {
+                val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
+                if (!sharedText.isNullOrBlank()) {
+                    homeViewModel.setSharedText(sharedText)
+                    navigateToHome()
+                }
+            }
+        }
     }
 
     override fun onSupportNavigateUp(): Boolean {

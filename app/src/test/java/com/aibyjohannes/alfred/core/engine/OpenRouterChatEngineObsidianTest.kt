@@ -37,6 +37,10 @@ class OpenRouterChatEngineObsidianTest {
         assertTrue(names.contains(OpenRouterChatEngine.OBSIDIAN_SEARCH_TOOL))
         assertTrue(names.contains(OpenRouterChatEngine.OBSIDIAN_LIST_FOLDER_TOOL))
         assertTrue(names.contains(OpenRouterChatEngine.OBSIDIAN_READ_TOOL))
+        assertTrue(names.contains(OpenRouterChatEngine.OBSIDIAN_CREATE_TOOL))
+        assertTrue(names.contains(OpenRouterChatEngine.OBSIDIAN_UPDATE_TOOL))
+        assertTrue(names.contains(OpenRouterChatEngine.OBSIDIAN_RENAME_TOOL))
+        assertTrue(names.contains(OpenRouterChatEngine.OBSIDIAN_DELETE_TOOL))
         assertTrue(names.contains(OpenRouterChatEngine.OBSIDIAN_WRITE_TOOL))
     }
 
@@ -60,6 +64,10 @@ class OpenRouterChatEngineObsidianTest {
         assertTrue(!names.contains(OpenRouterChatEngine.OBSIDIAN_SEARCH_TOOL))
         assertTrue(!names.contains(OpenRouterChatEngine.OBSIDIAN_LIST_FOLDER_TOOL))
         assertTrue(!names.contains(OpenRouterChatEngine.OBSIDIAN_READ_TOOL))
+        assertTrue(!names.contains(OpenRouterChatEngine.OBSIDIAN_CREATE_TOOL))
+        assertTrue(!names.contains(OpenRouterChatEngine.OBSIDIAN_UPDATE_TOOL))
+        assertTrue(!names.contains(OpenRouterChatEngine.OBSIDIAN_RENAME_TOOL))
+        assertTrue(!names.contains(OpenRouterChatEngine.OBSIDIAN_DELETE_TOOL))
         assertTrue(!names.contains(OpenRouterChatEngine.OBSIDIAN_WRITE_TOOL))
     }
 
@@ -162,6 +170,30 @@ class OpenRouterChatEngineObsidianTest {
     }
 
     @Test
+    fun `argument extraction parses rename request`() {
+        val engine = OpenRouterChatEngine(apiKey = "test", webSearchClient = mockWebSearch)
+        val method = OpenRouterChatEngine::class.java.declaredMethods.first {
+            it.name.startsWith("extractObsidianRenameRequest")
+        }
+        method.isAccessible = true
+
+        val req = method.invoke(
+            engine,
+            """{"from_path":"Work/Old.md","to_path":"Work/New.md"}"""
+        )
+        requireNotNull(req)
+
+        val getFromPathMethod = req.javaClass.declaredMethods.first { it.name.startsWith("getFromPath") }
+        val getToPathMethod = req.javaClass.declaredMethods.first { it.name.startsWith("getToPath") }
+
+        assertEquals("Work/Old.md", getFromPathMethod.invoke(req))
+        assertEquals("Work/New.md", getToPathMethod.invoke(req))
+
+        val missingReq = method.invoke(engine, """{"from_path":"Work/Old.md"}""")
+        assertNull(missingReq)
+    }
+
+    @Test
     fun `executeToolCall delegates to obsidian client with all search params`() = runTest {
         val mockObsidian = mockk<ObsidianClient>()
         val engine = OpenRouterChatEngine(
@@ -228,7 +260,7 @@ class OpenRouterChatEngineObsidianTest {
     }
 
     @Test
-    fun `executeToolCall delegates to obsidian client (basic search, read, write)`() = runTest {
+    fun `executeToolCall delegates to obsidian client for note CRUD`() = runTest {
         val mockObsidian = mockk<ObsidianClient>()
         val engine = OpenRouterChatEngine(
             apiKey = "test",
@@ -237,8 +269,11 @@ class OpenRouterChatEngineObsidianTest {
         )
 
         coEvery { mockObsidian.search("test query", null, "score", "desc") } returns Result.success("search result text")
-        coEvery { mockObsidian.read("test path") } returns Result.success("read content text")
-        coEvery { mockObsidian.write("test path", "test content", true) } returns Result.success("write success text")
+        coEvery { mockObsidian.read("test path.md") } returns Result.success("read content text")
+        coEvery { mockObsidian.create("test path.md", "initial content") } returns Result.success("create success text")
+        coEvery { mockObsidian.update("test path.md", "test content", true) } returns Result.success("update success text")
+        coEvery { mockObsidian.rename("test path.md", "renamed path.md") } returns Result.success("rename success text")
+        coEvery { mockObsidian.delete("renamed path.md") } returns Result.success("delete success text")
 
         val method = OpenRouterChatEngine::class.java.declaredMethods.first {
             it.name.startsWith("executeToolCall")
@@ -253,10 +288,27 @@ class OpenRouterChatEngineObsidianTest {
         val searchRes = method.invoke(engine, OpenRouterChatEngine.OBSIDIAN_SEARCH_TOOL, """{"query":"test query"}""", continuation) as String
         assertEquals("search result text", searchRes)
 
-        val readRes = method.invoke(engine, OpenRouterChatEngine.OBSIDIAN_READ_TOOL, """{"path":"test path"}""", continuation) as String
+        val readRes = method.invoke(engine, OpenRouterChatEngine.OBSIDIAN_READ_TOOL, """{"path":"test path.md"}""", continuation) as String
         assertEquals("read content text", readRes)
 
-        val writeRes = method.invoke(engine, OpenRouterChatEngine.OBSIDIAN_WRITE_TOOL, """{"path":"test path","content":"test content","append":true}""", continuation) as String
-        assertEquals("write success text", writeRes)
+        val createRes = method.invoke(engine, OpenRouterChatEngine.OBSIDIAN_CREATE_TOOL, """{"path":"test path.md","content":"initial content"}""", continuation) as String
+        assertEquals("create success text", createRes)
+
+        val updateRes = method.invoke(engine, OpenRouterChatEngine.OBSIDIAN_UPDATE_TOOL, """{"path":"test path.md","content":"test content","append":true}""", continuation) as String
+        assertEquals("update success text", updateRes)
+
+        val renameRes = method.invoke(engine, OpenRouterChatEngine.OBSIDIAN_RENAME_TOOL, """{"from_path":"test path.md","to_path":"renamed path.md"}""", continuation) as String
+        assertEquals("rename success text", renameRes)
+
+        val deleteRes = method.invoke(engine, OpenRouterChatEngine.OBSIDIAN_DELETE_TOOL, """{"path":"renamed path.md"}""", continuation) as String
+        assertEquals("delete success text", deleteRes)
+
+        val writeRes = method.invoke(engine, OpenRouterChatEngine.OBSIDIAN_WRITE_TOOL, """{"path":"test path.md","content":"test content","append":true}""", continuation) as String
+        assertEquals("update success text", writeRes)
+
+        coVerify { mockObsidian.create("test path.md", "initial content") }
+        coVerify(exactly = 2) { mockObsidian.update("test path.md", "test content", true) }
+        coVerify { mockObsidian.rename("test path.md", "renamed path.md") }
+        coVerify { mockObsidian.delete("renamed path.md") }
     }
 }

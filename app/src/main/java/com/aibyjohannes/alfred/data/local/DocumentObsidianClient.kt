@@ -180,8 +180,9 @@ class DocumentObsidianClient(
 
     override suspend fun read(path: String): Result<String> = withContext(Dispatchers.IO) {
         try {
-            val file = findFileByPath(path)
-                ?: return@withContext Result.failure(Exception("Note not found: $path"))
+            val notePath = validateNotePath(path).getOrElse { return@withContext Result.failure(it) }
+            val file = findFileByPath(notePath)
+                ?: return@withContext Result.failure(Exception("Note not found: $notePath"))
             val text = readFileText(file)
             Result.success(text)
         } catch (e: Exception) {
@@ -189,27 +190,86 @@ class DocumentObsidianClient(
         }
     }
 
-    override suspend fun write(path: String, content: String, append: Boolean): Result<String> = withContext(Dispatchers.IO) {
+    override suspend fun create(path: String, content: String): Result<String> = withContext(Dispatchers.IO) {
         try {
-            val file = getOrCreateFileByPath(path)
-                ?: return@withContext Result.failure(Exception("Could not create note: $path"))
-
-            val mode = if (append) "wa" else "wt"
-            val stream = context.contentResolver.openOutputStream(file.uri, mode)
-                ?: return@withContext Result.failure(Exception("Could not open note for writing: $path"))
-
-            stream.bufferedWriter().use { writer ->
-                if (append && readFileText(file).isNotEmpty()) {
-                    writer.newLine()
-                }
-                writer.write(content)
+            val notePath = validateNotePath(path).getOrElse { return@withContext Result.failure(it) }
+            if (findFileByPath(notePath) != null) {
+                return@withContext Result.failure(Exception("Note already exists: $notePath"))
             }
-            
-            // Update search index for single file
-            indexer.indexSingleFile(rootUri, path)
+            val file = createFileByPath(notePath)
+                ?: return@withContext Result.failure(Exception("Could not create note: $notePath"))
+            writeFileText(file, content, append = false)
+            indexer.indexSingleFile(rootUri, notePath)
+            Result.success("Successfully created note at relative path: $notePath")
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 
-            val action = if (append) "appended to" else "written to"
-            Result.success("Successfully $action note at relative path: $path")
+    override suspend fun update(path: String, content: String, append: Boolean): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val notePath = validateNotePath(path).getOrElse { return@withContext Result.failure(it) }
+            val file = findFileByPath(notePath)
+                ?: return@withContext Result.failure(Exception("Note not found: $notePath"))
+
+            writeFileText(file, content, append)
+            indexer.indexSingleFile(rootUri, notePath)
+
+            val action = if (append) "appended to" else "updated"
+            Result.success("Successfully $action note at relative path: $notePath")
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun rename(fromPath: String, toPath: String): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val sourcePath = validateNotePath(fromPath).getOrElse { return@withContext Result.failure(it) }
+            val destinationPath = validateNotePath(toPath).getOrElse { return@withContext Result.failure(it) }
+            if (sourcePath == destinationPath) {
+                return@withContext Result.failure(Exception("Source and destination paths must differ."))
+            }
+            val source = findFileByPath(sourcePath)
+                ?: return@withContext Result.failure(Exception("Note not found: $sourcePath"))
+            if (findFileByPath(destinationPath) != null) {
+                return@withContext Result.failure(Exception("Destination note already exists: $destinationPath"))
+            }
+
+            val sameParent = parentPath(sourcePath) == parentPath(destinationPath)
+            val renamed = if (sameParent) {
+                source.renameTo(destinationPath.substringAfterLast('/'))
+            } else {
+                val destination = createFileByPath(destinationPath)
+                    ?: return@withContext Result.failure(Exception("Could not create destination note: $destinationPath"))
+                writeFileText(destination, readFileText(source), append = false)
+                if (!source.delete()) {
+                    destination.delete()
+                    return@withContext Result.failure(Exception("Could not delete original note after rename: $sourcePath"))
+                }
+                true
+            }
+
+            if (!renamed) {
+                return@withContext Result.failure(Exception("Could not rename note: $sourcePath"))
+            }
+            db.dao().deleteByPath(sourcePath)
+            indexer.indexSingleFile(rootUri, destinationPath)
+            Result.success("Successfully renamed note from $sourcePath to $destinationPath")
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun delete(path: String): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val notePath = validateNotePath(path).getOrElse { return@withContext Result.failure(it) }
+            val file = findFileByPath(notePath)
+                ?: return@withContext Result.failure(Exception("Note not found: $notePath"))
+            if (!file.delete()) {
+                return@withContext Result.failure(Exception("Could not delete note: $notePath"))
+            }
+            db.dao().deleteByPath(notePath)
+            Result.success("Successfully deleted note at relative path: $notePath")
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -268,6 +328,48 @@ class DocumentObsidianClient(
         } ?: ""
     }
 
+    private fun writeFileText(file: DocumentFile, content: String, append: Boolean) {
+        val mode = if (append) "wa" else "wt"
+        val stream = context.contentResolver.openOutputStream(file.uri, mode)
+            ?: throw IllegalStateException("Could not open note for writing: ${file.name.orEmpty()}")
+        stream.bufferedWriter().use { writer ->
+            if (append && readFileText(file).isNotEmpty()) {
+                writer.newLine()
+            }
+            writer.write(content)
+        }
+    }
+
+    private fun validateNotePath(path: String): Result<String> {
+        val normalized = path.trim()
+        if (normalized.isBlank()) {
+            return Result.failure(Exception("Note path must not be blank."))
+        }
+        if (
+            normalized.startsWith("/") ||
+            normalized.startsWith("\\") ||
+            normalized.contains("\\") ||
+            Regex("^[A-Za-z]:").containsMatchIn(normalized)
+        ) {
+            return Result.failure(Exception("Note path must be relative to the vault and use forward slashes."))
+        }
+        val segments = normalized.split("/")
+        if (segments.any { it.isBlank() || it == "." || it == ".." }) {
+            return Result.failure(Exception("Note path must not contain empty, current, or parent directory segments."))
+        }
+        if (segments.any { it.startsWith(".") }) {
+            return Result.failure(Exception("Note path must not target hidden files or folders."))
+        }
+        if (!segments.last().endsWith(".md", ignoreCase = true)) {
+            return Result.failure(Exception("Note path must end with .md."))
+        }
+        return Result.success(segments.joinToString("/"))
+    }
+
+    private fun parentPath(path: String): String {
+        return path.substringBeforeLast('/', missingDelimiterValue = "")
+    }
+
     // ── SAF navigation ─────────────────────────────────────────────────────────
 
     /**
@@ -294,7 +396,7 @@ class DocumentObsidianClient(
         return findChild(context, current, segments.last())?.takeIf { it.isFile }
     }
 
-    private fun getOrCreateFileByPath(path: String, mimeType: String = "text/markdown"): DocumentFile? {
+    private fun createFileByPath(path: String, mimeType: String = "text/markdown"): DocumentFile? {
         val segments = path.split("/").filter { it.isNotBlank() }
         if (segments.isEmpty()) return null
         var current = DocumentFile.fromTreeUri(context, rootUri) ?: return null
@@ -304,8 +406,8 @@ class DocumentObsidianClient(
                 ?: return null
         }
         val filename = segments.last()
-        return findChild(context, current, filename)?.takeIf { it.isFile }
-            ?: current.createFile(mimeType, filename)
+        if (findChild(context, current, filename) != null) return null
+        return current.createFile(mimeType, filename)
     }
 
     private fun findChild(context: Context, parent: DocumentFile, displayName: String): DocumentFile? {

@@ -212,6 +212,10 @@ class OpenRouterChatEngine(
                             result.startsWith("Obsidian search failed", ignoreCase = true) ||
                             result.startsWith("Obsidian read failed", ignoreCase = true) ||
                             result.startsWith("Obsidian write failed", ignoreCase = true) ||
+                            result.startsWith("Obsidian create failed", ignoreCase = true) ||
+                            result.startsWith("Obsidian update failed", ignoreCase = true) ||
+                            result.startsWith("Obsidian rename failed", ignoreCase = true) ||
+                            result.startsWith("Obsidian delete failed", ignoreCase = true) ||
                             result.startsWith("Obsidian list folder failed", ignoreCase = true) ||
                             result.startsWith("Obsidian integration is not configured", ignoreCase = true) ||
                             result.startsWith("Skill read failed", ignoreCase = true) ||
@@ -412,8 +416,82 @@ class OpenRouterChatEngine(
             )
             alfredTools.add(
                 ToolDescriptor(
+                    name = OBSIDIAN_CREATE_TOOL,
+                    description = "Create a new Obsidian note at the specified relative .md path. Fails if the note already exists.",
+                    requiredParameters = listOf(
+                        ToolParameterDescriptor(
+                            name = "path",
+                            description = "The relative .md path of the new note within the vault (e.g. 'Project/Planning.md')",
+                            type = ToolParameterType.String
+                        ),
+                        ToolParameterDescriptor(
+                            name = "content",
+                            description = "The initial text content to write to the note",
+                            type = ToolParameterType.String
+                        )
+                    )
+                )
+            )
+            alfredTools.add(
+                ToolDescriptor(
+                    name = OBSIDIAN_UPDATE_TOOL,
+                    description = "Update an existing Obsidian note by overwriting or appending content. Fails if the note does not exist.",
+                    requiredParameters = listOf(
+                        ToolParameterDescriptor(
+                            name = "path",
+                            description = "The relative .md path of the existing note within the vault (e.g. 'Project/Planning.md')",
+                            type = ToolParameterType.String
+                        ),
+                        ToolParameterDescriptor(
+                            name = "content",
+                            description = "The text content to write or append to the note",
+                            type = ToolParameterType.String
+                        )
+                    ),
+                    optionalParameters = listOf(
+                        ToolParameterDescriptor(
+                            name = "append",
+                            description = "If true, appends the content to the end of the note instead of overwriting. Defaults to false.",
+                            type = ToolParameterType.Boolean
+                        )
+                    )
+                )
+            )
+            alfredTools.add(
+                ToolDescriptor(
+                    name = OBSIDIAN_RENAME_TOOL,
+                    description = "Rename or move an Obsidian note from one relative .md path to another. Fails if the destination already exists.",
+                    requiredParameters = listOf(
+                        ToolParameterDescriptor(
+                            name = "from_path",
+                            description = "The current relative .md path of the note",
+                            type = ToolParameterType.String
+                        ),
+                        ToolParameterDescriptor(
+                            name = "to_path",
+                            description = "The destination relative .md path for the note",
+                            type = ToolParameterType.String
+                        )
+                    )
+                )
+            )
+            alfredTools.add(
+                ToolDescriptor(
+                    name = OBSIDIAN_DELETE_TOOL,
+                    description = "Hard-delete an Obsidian note by its relative .md path.",
+                    requiredParameters = listOf(
+                        ToolParameterDescriptor(
+                            name = "path",
+                            description = "The relative .md path of the note to delete",
+                            type = ToolParameterType.String
+                        )
+                    )
+                )
+            )
+            alfredTools.add(
+                ToolDescriptor(
                     name = OBSIDIAN_WRITE_TOOL,
-                    description = "Write or append content to an Obsidian note at the specified relative path.",
+                    description = "Legacy alias for updating an existing Obsidian note at the specified relative path.",
                     requiredParameters = listOf(
                         ToolParameterDescriptor(
                             name = "path",
@@ -780,12 +858,60 @@ class OpenRouterChatEngine(
                 }
             }
 
+            OBSIDIAN_CREATE_TOOL -> {
+                val request = extractObsidianWriteRequest(arguments)
+                if (request == null || request.path.isBlank() || request.content.isBlank()) {
+                    "Obsidian create failed: missing required 'path' or 'content' argument."
+                } else {
+                    obsidianClient?.create(request.path, request.content)?.fold(
+                        onSuccess = { it },
+                        onFailure = { "Obsidian create failed: ${it.message}" }
+                    ) ?: "Obsidian integration is not configured."
+                }
+            }
+
+            OBSIDIAN_UPDATE_TOOL -> {
+                val request = extractObsidianWriteRequest(arguments)
+                if (request == null || request.path.isBlank() || request.content.isBlank()) {
+                    "Obsidian update failed: missing required 'path' or 'content' argument."
+                } else {
+                    obsidianClient?.update(request.path, request.content, request.append)?.fold(
+                        onSuccess = { it },
+                        onFailure = { "Obsidian update failed: ${it.message}" }
+                    ) ?: "Obsidian integration is not configured."
+                }
+            }
+
+            OBSIDIAN_RENAME_TOOL -> {
+                val request = extractObsidianRenameRequest(arguments)
+                if (request == null || request.fromPath.isBlank() || request.toPath.isBlank()) {
+                    "Obsidian rename failed: missing required 'from_path' or 'to_path' argument."
+                } else {
+                    obsidianClient?.rename(request.fromPath, request.toPath)?.fold(
+                        onSuccess = { it },
+                        onFailure = { "Obsidian rename failed: ${it.message}" }
+                    ) ?: "Obsidian integration is not configured."
+                }
+            }
+
+            OBSIDIAN_DELETE_TOOL -> {
+                val path = extractObsidianReadPath(arguments)
+                if (path.isNullOrBlank()) {
+                    "Obsidian delete failed: missing required 'path' argument."
+                } else {
+                    obsidianClient?.delete(path)?.fold(
+                        onSuccess = { it },
+                        onFailure = { "Obsidian delete failed: ${it.message}" }
+                    ) ?: "Obsidian integration is not configured."
+                }
+            }
+
             OBSIDIAN_WRITE_TOOL -> {
                 val request = extractObsidianWriteRequest(arguments)
                 if (request == null || request.path.isBlank() || request.content.isBlank()) {
                     "Obsidian write failed: missing required 'path' or 'content' argument."
                 } else {
-                    obsidianClient?.write(request.path, request.content, request.append)?.fold(
+                    obsidianClient?.update(request.path, request.content, request.append)?.fold(
                         onSuccess = { it },
                         onFailure = { "Obsidian write failed: ${it.message}" }
                     ) ?: "Obsidian integration is not configured."
@@ -992,6 +1118,11 @@ class OpenRouterChatEngine(
         val append: Boolean
     )
 
+    data class ObsidianRenameRequest(
+        val fromPath: String,
+        val toPath: String
+    )
+
     data class ObsidianSearchArgs(
         val query: String,
         val directory: String?,
@@ -1042,6 +1173,17 @@ class OpenRouterChatEngine(
         }
     }
 
+    internal fun extractObsidianRenameRequest(argumentsJson: String): ObsidianRenameRequest? {
+        return try {
+            val node = objectMapper.readTree(argumentsJson)
+            val fromPath = node.path("from_path").asText(null)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            val toPath = node.path("to_path").asText(null)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            ObsidianRenameRequest(fromPath, toPath)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     internal fun preferFullerReasoning(completedParts: List<String>, streamedText: String?): List<String> {
         val streamed = streamedText?.takeIf { it.isNotBlank() } ?: return completedParts
         val completedText = completedParts.joinToString("\n")
@@ -1059,7 +1201,7 @@ class OpenRouterChatEngine(
     }
 
     companion object {
-        const val DEFAULT_MODEL = "google/gemini-3.5-flash"
+        const val DEFAULT_MODEL = "deepseek/deepseek-v4-flash"
         const val WEB_SEARCH_FUNCTION_NAME = "WebSearchTool"
         const val LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME = "SearchLocalKnowledgeTool"
         const val TICKTICK_FUNCTION_NAME = "TickTickTool"
@@ -1067,6 +1209,10 @@ class OpenRouterChatEngine(
         const val OBSIDIAN_SEARCH_TOOL = "SearchObsidianVaultTool"
         const val OBSIDIAN_LIST_FOLDER_TOOL = "ListObsidianFolderTool"
         const val OBSIDIAN_READ_TOOL = "ReadObsidianNoteTool"
+        const val OBSIDIAN_CREATE_TOOL = "CreateObsidianNoteTool"
+        const val OBSIDIAN_UPDATE_TOOL = "UpdateObsidianNoteTool"
+        const val OBSIDIAN_RENAME_TOOL = "RenameObsidianNoteTool"
+        const val OBSIDIAN_DELETE_TOOL = "DeleteObsidianNoteTool"
         const val OBSIDIAN_WRITE_TOOL = "WriteObsidianNoteTool"
         const val READ_SKILL_TOOL = "ReadSkillTool"
         const val READ_SKILL_REFERENCE_TOOL = "ReadSkillReferenceTool"

@@ -985,4 +985,18 @@ class HomeViewModelTest {
         coVerify(exactly = 1) { conversationStore.createConversation() }
         assertTrue(viewModel.messages.value.orEmpty().isEmpty())
     }
+
+    @Test
+    fun `sharedText live data updates on setSharedText and clears on consumeSharedText`() = runTest {
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        assert(viewModel.sharedText.value == null)
+
+        viewModel.setSharedText("Shared content example")
+        assertEquals("Shared content example", viewModel.sharedText.value)
+
+        viewModel.consumeSharedText()
+        assert(viewModel.sharedText.value == null)
+    }
 }

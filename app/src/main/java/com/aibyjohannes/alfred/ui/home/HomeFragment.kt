@@ -494,6 +494,15 @@ class HomeFragment : Fragment() {
                 playTtsFile(file)
             }
         }
+
+        homeViewModel.sharedText.observe(viewLifecycleOwner) { text ->
+            if (!text.isNullOrBlank()) {
+                binding.messageInput.setText(text)
+                binding.messageInput.requestFocus()
+                binding.messageInput.setSelection(text.length)
+                homeViewModel.consumeSharedText()
+            }
+        }
     }
 
     private fun synthesizeAndEmitTts(text: String) {

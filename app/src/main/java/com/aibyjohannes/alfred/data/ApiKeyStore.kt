@@ -220,7 +220,7 @@ class ApiKeyStore internal constructor(
         private const val KEY_TICKTICK_ACCESS_TOKEN = "ticktick_access_token"
         private const val KEY_TICKTICK_REFRESH_TOKEN = "ticktick_refresh_token"
         private const val KEY_MODEL = "selected_model"
-        private const val DEFAULT_MODEL_VAL = "google/gemini-3.5-flash"
+        private const val DEFAULT_MODEL_VAL = "deepseek/deepseek-v4-flash"
         private const val KEY_STT_MODEL = "selected_stt_model"
         private const val DEFAULT_STT_MODEL_VAL = "openai/whisper-1"
         private const val KEY_TTS_MODEL = "selected_tts_model"

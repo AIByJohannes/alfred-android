@@ -26,5 +26,12 @@ interface ObsidianClient {
     suspend fun listFolder(path: String = ""): Result<String>
 
     suspend fun read(path: String): Result<String>
-    suspend fun write(path: String, content: String, append: Boolean): Result<String>
+    suspend fun create(path: String, content: String): Result<String>
+    suspend fun update(path: String, content: String, append: Boolean): Result<String>
+    suspend fun rename(fromPath: String, toPath: String): Result<String>
+    suspend fun delete(path: String): Result<String>
+
+    suspend fun write(path: String, content: String, append: Boolean): Result<String> {
+        return update(path, content, append)
+    }
 }

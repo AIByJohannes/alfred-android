@@ -179,7 +179,11 @@ class OpenRouterChatEngineToolParsingTest {
                 result.startsWith("TickTick integration is not configured", ignoreCase = true) ||
                 result.startsWith("Error:", ignoreCase = true) ||
                 result.startsWith("Unknown TickTick action", ignoreCase = true) ||
-                result.startsWith("Smart model delegation failed", ignoreCase = true)
+                result.startsWith("Smart model delegation failed", ignoreCase = true) ||
+                result.startsWith("Obsidian create failed", ignoreCase = true) ||
+                result.startsWith("Obsidian update failed", ignoreCase = true) ||
+                result.startsWith("Obsidian rename failed", ignoreCase = true) ||
+                result.startsWith("Obsidian delete failed", ignoreCase = true)
         }
 
         assertTrue(checkIsError(result1))
@@ -453,6 +457,18 @@ class OpenRouterChatEngineToolParsingTest {
 
         val readResult = executeToolCall(engine, OpenRouterChatEngine.OBSIDIAN_READ_TOOL, """{"path":"note"}""")
         assertEquals("Obsidian integration is not configured.", readResult)
+
+        val createResult = executeToolCall(engine, OpenRouterChatEngine.OBSIDIAN_CREATE_TOOL, """{"path":"note.md","content":"text"}""")
+        assertEquals("Obsidian integration is not configured.", createResult)
+
+        val updateResult = executeToolCall(engine, OpenRouterChatEngine.OBSIDIAN_UPDATE_TOOL, """{"path":"note.md","content":"text"}""")
+        assertEquals("Obsidian integration is not configured.", updateResult)
+
+        val renameResult = executeToolCall(engine, OpenRouterChatEngine.OBSIDIAN_RENAME_TOOL, """{"from_path":"note.md","to_path":"renamed.md"}""")
+        assertEquals("Obsidian integration is not configured.", renameResult)
+
+        val deleteResult = executeToolCall(engine, OpenRouterChatEngine.OBSIDIAN_DELETE_TOOL, """{"path":"note.md"}""")
+        assertEquals("Obsidian integration is not configured.", deleteResult)
 
         val writeResult = executeToolCall(engine, OpenRouterChatEngine.OBSIDIAN_WRITE_TOOL, """{"path":"note","content":"text"}""")
         assertEquals("Obsidian integration is not configured.", writeResult)

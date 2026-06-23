@@ -76,7 +76,7 @@ class ApiKeyStoreTest {
 
     @Test
     fun `chat model defaults and custom selection round trip`() {
-        assertEquals("google/gemini-3.5-flash", apiKeyStore.loadModel())
+        assertEquals("deepseek/deepseek-v4-flash", apiKeyStore.loadModel())
 
         apiKeyStore.saveModel("  custom-model  ")
 
@@ -143,7 +143,7 @@ class ApiKeyStoreTest {
         val store = ApiKeyStore(throwingPrefs, fallbackApiKey = "fallback-key")
 
         assertNull(store.loadOpenRouterKey())
-        assertEquals("google/gemini-3.5-flash", store.loadModel())
+        assertEquals("deepseek/deepseek-v4-flash", store.loadModel())
         assertEquals("openai/whisper-1", store.loadSttModel())
         assertEquals("hexgrad/kokoro-82m", store.loadTtsModel())
         assertEquals("af_alloy", store.loadTtsVoice())

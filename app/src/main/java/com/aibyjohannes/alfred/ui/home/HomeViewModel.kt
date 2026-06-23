@@ -111,6 +111,9 @@ class HomeViewModel : ViewModel() {
     private val _ttsAudioFile = MutableLiveData<java.io.File?>(null)
     val ttsAudioFile: LiveData<java.io.File?> = _ttsAudioFile
 
+    private val _sharedText = MutableLiveData<String?>(null)
+    val sharedText: LiveData<String?> = _sharedText
+
     /** Set to true when the next completed message should trigger TTS. */
     private var voiceModeActive = false
 
@@ -172,6 +175,14 @@ class HomeViewModel : ViewModel() {
 
     fun emitTtsFile(file: java.io.File?) {
         _ttsAudioFile.value = file
+    }
+
+    fun setSharedText(text: String) {
+        _sharedText.value = text
+    }
+
+    fun consumeSharedText() {
+        _sharedText.value = null
     }
 
     fun sendMessage(userInput: String) {
