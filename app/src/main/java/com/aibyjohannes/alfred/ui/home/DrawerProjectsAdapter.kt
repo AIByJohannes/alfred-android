@@ -54,9 +54,8 @@ class DrawerProjectsAdapter(
 
             binding.projectName.text = workspace.name
 
-            val iconIndex = Math.floorMod(workspace.id.hashCode(), ICONS.size)
             val colorIndex = Math.floorMod(workspace.id.hashCode(), COLORS.size)
-            val iconRes = ICONS[iconIndex]
+            val iconRes = R.drawable.ic_folder
             val tintColor = COLORS[colorIndex]
 
             binding.projectIcon.setImageResource(iconRes)
@@ -90,12 +89,6 @@ class DrawerProjectsAdapter(
     }
 
     companion object {
-        private val ICONS = intArrayOf(
-            R.drawable.ic_folder,
-            R.drawable.ic_globe,
-            R.drawable.ic_code,
-            R.drawable.ic_brain
-        )
         private val COLORS = intArrayOf(
             Color.parseColor("#61afef"),
             Color.parseColor("#56b6c2"),
