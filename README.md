@@ -39,7 +39,9 @@ Alfred/
         checklist.md
 ```
 
-Each `SKILL.md` must start with YAML frontmatter containing a lowercase, hyphenated `name` that matches its folder and a non-empty `description`. Alfred adds only this catalog metadata to the prompt, then loads matching instructions and referenced `.md` or `.txt` files on demand. Skill files are rescanned at the start of every chat turn, so external edits apply without restarting the app. Scripts, binary assets, remote downloads, and paths outside the skill directory are not supported.
+Each `SKILL.md` must start with YAML frontmatter containing a lowercase, hyphenated `name` that matches its folder and a non-empty `description`. Alfred adds only this catalog metadata to the prompt, then loads matching instructions and referenced `.md` or `.txt` files on demand. Skill files are rescanned at the start of every chat turn, so external edits apply without restarting the app.
+
+Chats can also manage skills through Alfred tools: create a new skill, rename an existing skill, and write `.md` or `.txt` reference files inside a skill directory. Renaming preserves bundled files and updates the `name` frontmatter in `SKILL.md`. Scripts, binary assets, remote downloads, and paths outside the skill directory are not supported.
 
 ## LLM Evals
 

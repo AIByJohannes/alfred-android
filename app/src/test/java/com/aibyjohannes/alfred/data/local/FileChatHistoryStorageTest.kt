@@ -160,6 +160,33 @@ class FileChatHistoryStorageTest {
     }
 
     @Test
+    fun `renameDirectory renames a directory and preserves contents`() {
+        val rootDir = temporaryFolder.newFolder()
+        val storage = FileChatHistoryStorage(rootDir)
+        storage.writeText(listOf("skills", "old-skill", "references", "guide.md"), "guide")
+
+        storage.renameDirectory(listOf("skills", "old-skill"), "new-skill")
+
+        assertFalse(File(rootDir, "skills/old-skill").exists())
+        assertEquals("guide", File(rootDir, "skills/new-skill/references/guide.md").readText())
+    }
+
+    @Test
+    fun `renameDirectory rejects missing source and existing destination`() {
+        val rootDir = temporaryFolder.newFolder()
+        val storage = FileChatHistoryStorage(rootDir)
+        storage.ensureDirectory(listOf("skills", "existing"))
+        storage.ensureDirectory(listOf("skills", "destination"))
+
+        assertThrows(IllegalStateException::class.java) {
+            storage.renameDirectory(listOf("skills", "missing"), "new-name")
+        }
+        assertThrows(IllegalStateException::class.java) {
+            storage.renameDirectory(listOf("skills", "existing"), "destination")
+        }
+    }
+
+    @Test
     fun `writeText creates nested paths and replaces existing content`() {
         val rootDir = temporaryFolder.newFolder()
         val storage = FileChatHistoryStorage(rootDir)
@@ -217,6 +244,7 @@ class FileChatHistoryStorageTest {
 
         assertThrows(IllegalArgumentException::class.java) { storage.readText(emptyList()) }
         assertThrows(IllegalArgumentException::class.java) { storage.createFileExclusive(emptyList()) }
+        assertThrows(IllegalArgumentException::class.java) { storage.renameDirectory(emptyList(), "new-name") }
         assertThrows(IllegalArgumentException::class.java) { storage.writeText(emptyList(), "content") }
         assertThrows(IllegalArgumentException::class.java) { storage.appendLine(emptyList(), "content") }
         assertThrows(IllegalArgumentException::class.java) { storage.delete(emptyList()) }

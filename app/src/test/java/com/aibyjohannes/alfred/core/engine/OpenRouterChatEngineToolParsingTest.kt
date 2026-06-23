@@ -475,7 +475,7 @@ class OpenRouterChatEngineToolParsingTest {
     }
 
     @Test
-    fun `skill tools are registered only when valid skills are available`() {
+    fun `skill tools register management always and read tools only when valid skills are available`() {
         val skillClient = mockk<SkillClient>()
         val engine = OpenRouterChatEngine(
             apiKey = "test",
@@ -493,8 +493,14 @@ class OpenRouterChatEngineToolParsingTest {
         val namesWith = withSkills.map { it?.javaClass?.getMethod("getName")?.invoke(it) }
 
         assertTrue(OpenRouterChatEngine.READ_SKILL_TOOL !in namesWithout)
+        assertTrue(OpenRouterChatEngine.CREATE_SKILL_TOOL in namesWithout)
+        assertTrue(OpenRouterChatEngine.RENAME_SKILL_TOOL in namesWithout)
+        assertTrue(OpenRouterChatEngine.WRITE_SKILL_REFERENCE_TOOL in namesWithout)
         assertTrue(OpenRouterChatEngine.READ_SKILL_TOOL in namesWith)
         assertTrue(OpenRouterChatEngine.READ_SKILL_REFERENCE_TOOL in namesWith)
+        assertTrue(OpenRouterChatEngine.CREATE_SKILL_TOOL in namesWith)
+        assertTrue(OpenRouterChatEngine.RENAME_SKILL_TOOL in namesWith)
+        assertTrue(OpenRouterChatEngine.WRITE_SKILL_REFERENCE_TOOL in namesWith)
     }
 
     @Test
@@ -512,6 +518,9 @@ class OpenRouterChatEngineToolParsingTest {
         assertTrue(catalog.contains("meeting-prep: Prepare for meetings"))
         assertTrue(catalog.contains(OpenRouterChatEngine.READ_SKILL_TOOL))
         assertTrue(catalog.contains(OpenRouterChatEngine.READ_SKILL_REFERENCE_TOOL))
+        assertTrue(catalog.contains(OpenRouterChatEngine.CREATE_SKILL_TOOL))
+        assertTrue(catalog.contains(OpenRouterChatEngine.RENAME_SKILL_TOOL))
+        assertTrue(catalog.contains(OpenRouterChatEngine.WRITE_SKILL_REFERENCE_TOOL))
     }
 
     @Test
@@ -571,6 +580,45 @@ class OpenRouterChatEngineToolParsingTest {
     }
 
     @Test
+    fun `executeToolCall dispatches skill lifecycle operations`() = runTest {
+        val skillClient = mockk<SkillClient>()
+        coEvery {
+            skillClient.createSkill("meeting-prep", "Prepare for meetings", "# Meeting Prep")
+        } returns Result.success("created")
+        coEvery {
+            skillClient.renameSkill("meeting-prep", "meeting-planning")
+        } returns Result.success("renamed")
+        coEvery {
+            skillClient.writeReference("meeting-planning", "references/checklist.md", "Checklist")
+        } returns Result.success("wrote")
+        val engine = OpenRouterChatEngine(
+            apiKey = "test",
+            webSearchClient = mockk(),
+            skillClient = skillClient
+        )
+
+        val create = executeToolCall(
+            engine,
+            OpenRouterChatEngine.CREATE_SKILL_TOOL,
+            """{"skill_id":"meeting-prep","description":"Prepare for meetings","instructions":"# Meeting Prep"}"""
+        )
+        val rename = executeToolCall(
+            engine,
+            OpenRouterChatEngine.RENAME_SKILL_TOOL,
+            """{"from_skill_id":"meeting-prep","to_skill_id":"meeting-planning"}"""
+        )
+        val writeReference = executeToolCall(
+            engine,
+            OpenRouterChatEngine.WRITE_SKILL_REFERENCE_TOOL,
+            """{"skill_id":"meeting-planning","path":"references/checklist.md","content":"Checklist"}"""
+        )
+
+        assertEquals("created", create)
+        assertEquals("renamed", rename)
+        assertEquals("wrote", writeReference)
+    }
+
+    @Test
     fun `executeToolCall returns explicit skill argument errors`() = runTest {
         val engine = OpenRouterChatEngine(
             apiKey = "test",
@@ -583,6 +631,15 @@ class OpenRouterChatEngineToolParsingTest {
         )
         assertTrue(
             executeToolCall(engine, OpenRouterChatEngine.READ_SKILL_REFERENCE_TOOL, "{}").startsWith("Skill reference read failed")
+        )
+        assertTrue(
+            executeToolCall(engine, OpenRouterChatEngine.CREATE_SKILL_TOOL, "{}").startsWith("Skill create failed")
+        )
+        assertTrue(
+            executeToolCall(engine, OpenRouterChatEngine.RENAME_SKILL_TOOL, "{}").startsWith("Skill rename failed")
+        )
+        assertTrue(
+            executeToolCall(engine, OpenRouterChatEngine.WRITE_SKILL_REFERENCE_TOOL, "{}").startsWith("Skill reference write failed")
         )
     }
 }

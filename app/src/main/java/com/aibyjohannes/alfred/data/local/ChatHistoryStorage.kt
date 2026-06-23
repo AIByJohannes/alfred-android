@@ -18,6 +18,7 @@ interface ChatHistoryStorage {
     fun readText(path: List<String>): StorageReadResult
     fun listChildren(path: List<String>): List<StorageEntry>
     fun createFileExclusive(path: List<String>, mimeType: String = "text/plain")
+    fun renameDirectory(path: List<String>, newName: String)
     fun writeText(path: List<String>, text: String, mimeType: String = "text/plain")
     fun appendLine(path: List<String>, line: String, mimeType: String = "text/plain")
     fun replaceTextVerified(path: List<String>, text: String, mimeType: String = "text/plain")
@@ -76,6 +77,22 @@ class FileChatHistoryStorage(
         val file = fileAt(path)
         file.parentFile?.mkdirs()
         check(file.createNewFile()) { "File already exists: ${path.joinToString("/")}" }
+    }
+
+    override fun renameDirectory(path: List<String>, newName: String) {
+        require(path.isNotEmpty()) { "Path must not be empty" }
+        requireValidNewName(newName)
+        val source = directoryAt(path)
+        check(source.isDirectory) { "Directory does not exist: ${path.joinToString("/")}" }
+        val parent = source.parentFile ?: throw IllegalStateException("Directory has no parent: ${path.joinToString("/")}")
+        val target = File(parent, newName)
+        check(!target.exists()) { "Directory already exists: ${path.dropLast(1).plus(newName).joinToString("/")}" }
+        runCatching {
+            Files.move(source.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+        }.getOrElse {
+            Files.move(source.toPath(), target.toPath())
+        }
+        check(target.isDirectory && !source.exists()) { "Rename verification failed: ${path.joinToString("/")}" }
     }
 
     override fun writeText(path: List<String>, text: String, mimeType: String) {
@@ -182,6 +199,26 @@ class DocumentChatHistoryStorage private constructor(
         }
         current.createFile(mimeType, path.last())
             ?: throw IllegalStateException("Could not create file ${path.last()}")
+    }
+
+    override fun renameDirectory(path: List<String>, newName: String) {
+        require(path.isNotEmpty()) { "Path must not be empty" }
+        requireValidNewName(newName)
+        val parent = if (path.size == 1) {
+            rootDirectory
+        } else {
+            findFile(path.dropLast(1))?.takeIf { it.isDirectory }
+                ?: throw IllegalStateException("Parent directory does not exist: ${path.dropLast(1).joinToString("/")}")
+        }
+        val source = findChild(context, parent, path.last())?.takeIf { it.isDirectory }
+            ?: throw IllegalStateException("Directory does not exist: ${path.joinToString("/")}")
+        check(findChild(context, parent, newName) == null) {
+            "Directory already exists: ${path.dropLast(1).plus(newName).joinToString("/")}"
+        }
+        renameDocument(source, newName)
+        check(findChild(context, parent, newName)?.isDirectory == true) {
+            "Rename verification failed: ${path.joinToString("/")}"
+        }
     }
 
     override fun writeText(path: List<String>, text: String, mimeType: String) {
@@ -393,4 +430,10 @@ class DocumentChatHistoryStorage private constructor(
             }
         }
     }
+}
+
+private fun requireValidNewName(newName: String) {
+    require(newName.isNotBlank()) { "New name must not be blank" }
+    require('/' !in newName && '\\' !in newName) { "New name must be a single path segment" }
+    require(newName != "." && newName != "..") { "New name must be a single path segment" }
 }

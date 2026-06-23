@@ -44,6 +44,71 @@ class StorageSkillClient(
         }
     }
 
+    override suspend fun createSkill(
+        skillId: String,
+        description: String,
+        instructions: String
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            requireValidSkillId(skillId)
+            val normalizedDescription = requireValidDescription(description)
+            requireDocumentWithinLimit(instructions)
+            storage.ensureDirectory(SKILLS_ROOT)
+            if (skillDirectoryExists(skillId)) {
+                throw IllegalArgumentException("Skill already exists: $skillId")
+            }
+            val skillText = buildSkillDocument(skillId, normalizedDescription, instructions)
+            requireDocumentWithinLimit(skillText)
+            val skillPath = SKILLS_ROOT + listOf(skillId, SKILL_FILE)
+            storage.createFileExclusive(skillPath, MARKDOWN_MIME_TYPE)
+            storage.writeText(skillPath, skillText, MARKDOWN_MIME_TYPE)
+            if (parseSummary(skillId) == null) {
+                throw IllegalStateException("Created skill is invalid: $skillId")
+            }
+            "Created skill: $skillId"
+        }
+    }
+
+    override suspend fun renameSkill(fromSkillId: String, toSkillId: String): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            requireValidSkillId(fromSkillId)
+            requireValidSkillId(toSkillId)
+            require(fromSkillId != toSkillId) { "Source and destination skill ids must differ" }
+            val summary = parseSummary(fromSkillId)
+                ?: throw IllegalArgumentException("Skill is missing or invalid: $fromSkillId")
+            if (skillDirectoryExists(toSkillId)) {
+                throw IllegalArgumentException("Skill already exists: $toSkillId")
+            }
+            val skillText = readBounded(SKILLS_ROOT + listOf(fromSkillId, SKILL_FILE))
+            val updatedSkillText = rewriteSkillName(skillText, toSkillId, summary.description)
+            requireDocumentWithinLimit(updatedSkillText)
+            storage.renameDirectory(SKILLS_ROOT + fromSkillId, toSkillId)
+            storage.replaceTextVerified(SKILLS_ROOT + listOf(toSkillId, SKILL_FILE), updatedSkillText, MARKDOWN_MIME_TYPE)
+            if (parseSummary(toSkillId) == null) {
+                throw IllegalStateException("Renamed skill is invalid: $toSkillId")
+            }
+            "Renamed skill from $fromSkillId to $toSkillId"
+        }
+    }
+
+    override suspend fun writeReference(
+        skillId: String,
+        path: String,
+        content: String
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            requireValidSkillId(skillId)
+            if (parseSummary(skillId) == null) {
+                throw IllegalArgumentException("Skill is missing or invalid: $skillId")
+            }
+            requireDocumentWithinLimit(content)
+            val segments = validateReferencePath(path)
+            require(segments != listOf(SKILL_FILE)) { "Use the skill lifecycle tools to manage SKILL.md" }
+            storage.writeText(SKILLS_ROOT + skillId + segments, content, referenceMimeType(segments.last()))
+            "Wrote skill reference: $skillId/${segments.joinToString("/")}"
+        }
+    }
+
     private fun parseSummary(skillId: String): SkillSummary? {
         val text = when (val result = storage.readText(SKILLS_ROOT + listOf(skillId, SKILL_FILE))) {
             is StorageReadResult.Found -> result.text
@@ -62,6 +127,46 @@ class StorageSkillClient(
             description.length > MAX_DESCRIPTION_CHARS
         ) return null
         return SkillSummary(id = skillId, name = name, description = description)
+    }
+
+    private fun skillDirectoryExists(skillId: String): Boolean {
+        return storage.listChildren(SKILLS_ROOT).any { it.isDirectory && it.name == skillId }
+    }
+
+    private fun buildSkillDocument(skillId: String, description: String, instructions: String): String {
+        return buildString {
+            appendLine("---")
+            appendLine("name: $skillId")
+            appendLine("description: |-")
+            description.replace("\r\n", "\n").replace('\r', '\n').lines().forEach { line ->
+                appendLine("  $line")
+            }
+            appendLine("---")
+            append(instructions.replace("\r\n", "\n").replace('\r', '\n'))
+        }
+    }
+
+    private fun rewriteSkillName(text: String, newSkillId: String, description: String): String {
+        val normalized = text.replace("\r\n", "\n").replace('\r', '\n')
+        require(normalized.startsWith("---\n")) { "Skill is missing frontmatter" }
+        val end = normalized.indexOf("\n---\n", startIndex = 4)
+        require(end >= 0) { "Skill is missing closing frontmatter" }
+        val frontmatter = normalized.substring(4, end)
+        val body = normalized.substring(end + "\n---\n".length)
+        var replaced = false
+        val updatedFrontmatter = frontmatter.lines().joinToString("\n") { line ->
+            if (!replaced && line.trimStart().startsWith("name:")) {
+                replaced = true
+                "name: $newSkillId"
+            } else {
+                line
+            }
+        }
+        return if (replaced) {
+            "---\n$updatedFrontmatter\n---\n$body"
+        } else {
+            buildSkillDocument(newSkillId, description, body)
+        }
     }
 
     private fun extractFrontmatter(text: String): String? {
@@ -91,19 +196,35 @@ class StorageSkillClient(
             is StorageReadResult.Found -> result.text
             StorageReadResult.Missing -> throw IllegalArgumentException("File not found: ${path.joinToString("/")}")
         }
+        requireDocumentWithinLimit(text)
+        return text
+    }
+
+    private fun requireDocumentWithinLimit(text: String) {
         require(text.toByteArray(Charsets.UTF_8).size <= MAX_DOCUMENT_BYTES) {
             "Skill document exceeds the 128 KiB limit"
         }
-        return text
+    }
+
+    private fun requireValidDescription(description: String): String {
+        val trimmed = description.trim()
+        require(trimmed.isNotEmpty()) { "Skill description is required" }
+        require(trimmed.length <= MAX_DESCRIPTION_CHARS) { "Skill description exceeds the 1024 character limit" }
+        return trimmed
     }
 
     private fun requireValidSkillId(skillId: String) {
         require(skillId.length <= MAX_SKILL_ID_CHARS && SKILL_ID.matches(skillId)) { "Invalid skill id" }
     }
 
+    private fun referenceMimeType(fileName: String): String {
+        return if (fileName.endsWith(".md", ignoreCase = true)) MARKDOWN_MIME_TYPE else "text/plain"
+    }
+
     companion object {
         private val SKILLS_ROOT = listOf("skills")
         private const val SKILL_FILE = "SKILL.md"
+        private const val MARKDOWN_MIME_TYPE = "text/markdown"
         private const val MAX_DOCUMENT_BYTES = 128 * 1024
         private const val MAX_DESCRIPTION_CHARS = 1024
         private const val MAX_SKILL_ID_CHARS = 64

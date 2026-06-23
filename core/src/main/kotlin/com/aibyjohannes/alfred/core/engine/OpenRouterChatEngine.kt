@@ -515,6 +515,73 @@ class OpenRouterChatEngine(
             )
         }
 
+        if (skillClient != null) {
+            alfredTools.add(
+                ToolDescriptor(
+                    name = CREATE_SKILL_TOOL,
+                    description = "Create a new Agent Skill under Alfred storage with a generated SKILL.md. Fails if the skill already exists.",
+                    requiredParameters = listOf(
+                        ToolParameterDescriptor(
+                            name = "skill_id",
+                            description = "Lowercase hyphenated skill id, matching the new skill folder name",
+                            type = ToolParameterType.String
+                        ),
+                        ToolParameterDescriptor(
+                            name = "description",
+                            description = "Skill description explaining what the skill does and when to use it",
+                            type = ToolParameterType.String
+                        ),
+                        ToolParameterDescriptor(
+                            name = "instructions",
+                            description = "Markdown instructions for the SKILL.md body",
+                            type = ToolParameterType.String
+                        )
+                    )
+                )
+            )
+            alfredTools.add(
+                ToolDescriptor(
+                    name = RENAME_SKILL_TOOL,
+                    description = "Rename an existing Agent Skill folder and update the SKILL.md name frontmatter. Preserves bundled files.",
+                    requiredParameters = listOf(
+                        ToolParameterDescriptor(
+                            name = "from_skill_id",
+                            description = "Current skill id",
+                            type = ToolParameterType.String
+                        ),
+                        ToolParameterDescriptor(
+                            name = "to_skill_id",
+                            description = "New lowercase hyphenated skill id",
+                            type = ToolParameterType.String
+                        )
+                    )
+                )
+            )
+            alfredTools.add(
+                ToolDescriptor(
+                    name = WRITE_SKILL_REFERENCE_TOOL,
+                    description = "Create or update a Markdown or text reference file inside an existing skill directory.",
+                    requiredParameters = listOf(
+                        ToolParameterDescriptor(
+                            name = "skill_id",
+                            description = "The skill id from the available skills catalog",
+                            type = ToolParameterType.String
+                        ),
+                        ToolParameterDescriptor(
+                            name = "path",
+                            description = "Forward-slash relative .md or .txt path inside the skill directory",
+                            type = ToolParameterType.String
+                        ),
+                        ToolParameterDescriptor(
+                            name = "content",
+                            description = "Reference file content",
+                            type = ToolParameterType.String
+                        )
+                    )
+                )
+            )
+        }
+
         if (skillsAvailable && skillClient != null) {
             alfredTools.add(
                 ToolDescriptor(
@@ -942,6 +1009,42 @@ class OpenRouterChatEngine(
                 }
             }
 
+            CREATE_SKILL_TOOL -> {
+                val request = extractSkillCreateRequest(arguments)
+                if (request == null) {
+                    "Skill create failed: missing required 'skill_id', 'description', or 'instructions' argument."
+                } else {
+                    skillClient?.createSkill(request.skillId, request.description, request.instructions)?.fold(
+                        onSuccess = { it },
+                        onFailure = { "Skill create failed: ${it.message}" }
+                    ) ?: "Skill create failed: skill support is not configured."
+                }
+            }
+
+            RENAME_SKILL_TOOL -> {
+                val request = extractSkillRenameRequest(arguments)
+                if (request == null) {
+                    "Skill rename failed: missing required 'from_skill_id' or 'to_skill_id' argument."
+                } else {
+                    skillClient?.renameSkill(request.fromSkillId, request.toSkillId)?.fold(
+                        onSuccess = { it },
+                        onFailure = { "Skill rename failed: ${it.message}" }
+                    ) ?: "Skill rename failed: skill support is not configured."
+                }
+            }
+
+            WRITE_SKILL_REFERENCE_TOOL -> {
+                val request = extractSkillReferenceWriteRequest(arguments)
+                if (request == null) {
+                    "Skill reference write failed: missing required 'skill_id', 'path', or 'content' argument."
+                } else {
+                    skillClient?.writeReference(request.skillId, request.path, request.content)?.fold(
+                        onSuccess = { it },
+                        onFailure = { "Skill reference write failed: ${it.message}" }
+                    ) ?: "Skill reference write failed: skill support is not configured."
+                }
+            }
+
             else -> {
                 val client = tickTickClient
                 if (client == null) {
@@ -964,7 +1067,8 @@ class OpenRouterChatEngine(
         }
         appendLine()
         append("When a request clearly matches a skill, call $READ_SKILL_TOOL before answering. ")
-        append("Read only references named by those instructions with $READ_SKILL_REFERENCE_TOOL.")
+        append("Read only references named by those instructions with $READ_SKILL_REFERENCE_TOOL. ")
+        append("Use $CREATE_SKILL_TOOL, $RENAME_SKILL_TOOL, or $WRITE_SKILL_REFERENCE_TOOL only when the user asks to manage skill files.")
     }.trim()
 
     internal fun extractSkillId(argumentsJson: String): String? {
@@ -980,6 +1084,9 @@ class OpenRouterChatEngine(
     }
 
     data class SkillReferenceRequest(val skillId: String, val path: String)
+    data class SkillCreateRequest(val skillId: String, val description: String, val instructions: String)
+    data class SkillRenameRequest(val fromSkillId: String, val toSkillId: String)
+    data class SkillReferenceWriteRequest(val skillId: String, val path: String, val content: String)
 
     internal fun extractSkillReferenceRequest(argumentsJson: String): SkillReferenceRequest? {
         return try {
@@ -989,6 +1096,47 @@ class OpenRouterChatEngine(
             val path = node.path("path").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
                 ?: return null
             SkillReferenceRequest(skillId, path)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    internal fun extractSkillCreateRequest(argumentsJson: String): SkillCreateRequest? {
+        return try {
+            val node = objectMapper.readTree(argumentsJson)
+            val skillId = node.path("skill_id").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+                ?: return null
+            val description = node.path("description").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+                ?: return null
+            val instructions = node.path("instructions").asText(null) ?: return null
+            SkillCreateRequest(skillId, description, instructions)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    internal fun extractSkillRenameRequest(argumentsJson: String): SkillRenameRequest? {
+        return try {
+            val node = objectMapper.readTree(argumentsJson)
+            val fromSkillId = node.path("from_skill_id").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+                ?: return null
+            val toSkillId = node.path("to_skill_id").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+                ?: return null
+            SkillRenameRequest(fromSkillId, toSkillId)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    internal fun extractSkillReferenceWriteRequest(argumentsJson: String): SkillReferenceWriteRequest? {
+        return try {
+            val node = objectMapper.readTree(argumentsJson)
+            val skillId = node.path("skill_id").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+                ?: return null
+            val path = node.path("path").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+                ?: return null
+            val content = node.path("content").asText(null) ?: return null
+            SkillReferenceWriteRequest(skillId, path, content)
         } catch (_: Exception) {
             null
         }
@@ -1216,6 +1364,9 @@ class OpenRouterChatEngine(
         const val OBSIDIAN_WRITE_TOOL = "WriteObsidianNoteTool"
         const val READ_SKILL_TOOL = "ReadSkillTool"
         const val READ_SKILL_REFERENCE_TOOL = "ReadSkillReferenceTool"
+        const val CREATE_SKILL_TOOL = "CreateSkillTool"
+        const val RENAME_SKILL_TOOL = "RenameSkillTool"
+        const val WRITE_SKILL_REFERENCE_TOOL = "WriteSkillReferenceTool"
     }
 }
 
