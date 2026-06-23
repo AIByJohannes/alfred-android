@@ -29,8 +29,10 @@ kover = "0.9.8"
 snakeyamlEngine = "3.0.1"
 room = "2.8.4"
 ksp = "2.2.21-2.0.5"
+robolectric = "4.12.2"
 
 [libraries]
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }

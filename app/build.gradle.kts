@@ -105,6 +105,7 @@ dependencies {
     testImplementation(libs.ktor.client.mock)
     testImplementation(libs.androidx.junit)
     testImplementation(libs.androidx.room.testing)
+    testImplementation(libs.robolectric)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
 }

@@ -162,6 +162,17 @@ class FileConversationStore internal constructor(
         refreshIndex()
     }
 
+    override suspend fun restoreConversation(conversationId: String): Unit = withStoreLock {
+        // Find the conversation where it is currently deleted
+        val conversation = loadSnapshot().conversations.firstOrNull { it.id == conversationId && it.deleted }
+            ?: return@withStoreLock
+        appendEvent(conversation.filePath, baseEvent(CONVERSATION_RESTORED).apply {
+            put("conversationId", conversationId)
+            put("timestampEpochMs", System.currentTimeMillis())
+        })
+        refreshIndex()
+    }
+
     suspend fun searchSessionMessages(query: String, limit: Int): List<SessionSearchHit> = withStoreLock {
         val terms = normalizeTerms(query)
         if (terms.isEmpty()) return@withStoreLock emptyList()
@@ -325,8 +336,13 @@ class FileConversationStore internal constructor(
                     title = event.path("title").asText()
                     updatedAt = maxOf(updatedAt, event.path("timestampEpochMs").asLong())
                 }
+                // membership = latest delete/restore event by append order
                 CONVERSATION_DELETED -> {
                     deleted = true
+                    updatedAt = maxOf(updatedAt, event.path("timestampEpochMs").asLong())
+                }
+                CONVERSATION_RESTORED -> {
+                    deleted = false
                     updatedAt = maxOf(updatedAt, event.path("timestampEpochMs").asLong())
                 }
             }
@@ -617,6 +633,7 @@ class FileConversationStore internal constructor(
         private const val MESSAGE_APPENDED = "messageAppended"
         private const val TITLE_CHANGED = "titleChanged"
         private const val CONVERSATION_DELETED = "conversationDeleted"
+        private const val CONVERSATION_RESTORED = "conversationRestored"
         private val METADATA_PATH = listOf("metadata.json")
         private val METADATA_BACKUP_PATH = listOf("metadata.backup.json")
         private val CONVERSATION_FILE_REGEX = Regex("^conversation-.+\\.jsonl$")

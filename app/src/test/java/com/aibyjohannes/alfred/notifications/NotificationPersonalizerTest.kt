@@ -95,5 +95,6 @@ class NotificationPersonalizerTest {
         override suspend fun appendMessage(conversationId: String, role: String, content: String) = Unit
         override suspend fun appendMessages(conversationId: String, messages: List<ConversationMessageDraft>) = Unit
         override suspend fun deleteConversation(conversationId: String) = Unit
+        override suspend fun restoreConversation(conversationId: String) = Unit
     }
 }

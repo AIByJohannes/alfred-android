@@ -476,9 +476,8 @@ class HomeViewModel : ViewModel() {
 
     fun clearChat() {
         val store = conversationStore ?: return
-        val activeId = currentConversationId ?: return
         viewModelScope.launch {
-            store.deleteConversation(activeId)
+            // Invariant: New Chat is create-only; it must never tombstone another conversation.
             val newConversation = store.createConversation()
             loadConversation(newConversation)
         }

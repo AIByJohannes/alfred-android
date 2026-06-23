@@ -66,4 +66,5 @@ interface ConversationStore {
     suspend fun appendMessage(conversationId: String, role: String, content: String)
     suspend fun appendMessages(conversationId: String, messages: List<ConversationMessageDraft>)
     suspend fun deleteConversation(conversationId: String)
+    suspend fun restoreConversation(conversationId: String)
 }

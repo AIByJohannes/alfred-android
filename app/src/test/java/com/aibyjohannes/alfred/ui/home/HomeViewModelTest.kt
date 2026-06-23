@@ -961,7 +961,7 @@ class HomeViewModelTest {
     }
 
     @Test
-    fun `clearChat deletes active conversation and creates new empty conversation`() = runTest {
+    fun `clearChat creates new empty conversation without deleting active one`() = runTest {
         val activeConversation = ConversationSummary("1", "Chat", System.currentTimeMillis())
         val newConversation = ConversationSummary("2", null, System.currentTimeMillis())
         coEvery { conversationStore.getOrCreateActiveConversation() } returns activeConversation
@@ -974,16 +974,15 @@ class HomeViewModelTest {
         testScheduler.advanceUntilIdle()
         assertEquals(2, viewModel.messages.value.orEmpty().size)
 
-        coEvery { conversationStore.deleteConversation("1") } just Runs
         coEvery { conversationStore.createConversation() } returns newConversation
         coEvery { conversationStore.loadMessages("2") } returns emptyList()
-        coEvery { conversationStore.listConversations() } returns listOf(newConversation)
+        coEvery { conversationStore.listConversations() } returns listOf(activeConversation, newConversation)
 
         viewModel.clearChat()
         testScheduler.advanceUntilIdle()
 
-        coVerify { conversationStore.deleteConversation("1") }
-        coVerify { conversationStore.createConversation() }
+        coVerify(exactly = 0) { conversationStore.deleteConversation(any()) }
+        coVerify(exactly = 1) { conversationStore.createConversation() }
         assertTrue(viewModel.messages.value.orEmpty().isEmpty())
     }
 }

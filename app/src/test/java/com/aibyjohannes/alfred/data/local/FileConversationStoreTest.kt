@@ -187,6 +187,60 @@ class FileConversationStoreTest {
         assertEquals("Durable", FileConversationStore(root).loadMessages(conversation.id).single().content)
     }
 
+    @Test
+    fun `create delete then restore reconciles to deleted 0 and appears in list Flow`() = runTest {
+        // membership = latest delete/restore event by append order
+        val root = temporaryFolder.newFolder()
+        val store = FileConversationStore(root)
+        val conversation = store.getOrCreateActiveConversation()
+        
+        store.deleteConversation(conversation.id)
+        assertTrue(store.listConversations().isEmpty())
+        
+        store.restoreConversation(conversation.id)
+        assertEquals(conversation.id, store.listConversations().single().id)
+    }
+
+    @Test
+    fun `create restore then delete reconciles to deleted 1`() = runTest {
+        // membership = latest delete/restore event by append order
+        val root = temporaryFolder.newFolder()
+        val store = FileConversationStore(root)
+        val conversation = store.getOrCreateActiveConversation()
+        
+        store.restoreConversation(conversation.id)
+        store.deleteConversation(conversation.id)
+        
+        assertTrue(store.listConversations().isEmpty())
+    }
+
+    @Test
+    fun `restore on an already-active conversation is a no-op`() = runTest {
+        // membership = latest delete/restore event by append order
+        val root = temporaryFolder.newFolder()
+        val store = FileConversationStore(root)
+        val conversation = store.getOrCreateActiveConversation()
+        val file = conversationFiles(root).single()
+        val originalText = file.readText()
+        
+        store.restoreConversation(conversation.id)
+        assertEquals(originalText, file.readText())
+    }
+
+    @Test
+    fun `in-session delete-then-restore leaves the row present in the list Flow`() = runTest {
+        // membership = latest delete/restore event by append order
+        val root = temporaryFolder.newFolder()
+        val store = FileConversationStore(root)
+        val conversation = store.getOrCreateActiveConversation()
+        
+        store.deleteConversation(conversation.id)
+        assertTrue(store.listConversations().isEmpty())
+        
+        store.restoreConversation(conversation.id)
+        assertEquals(conversation.id, store.listConversations().single().id)
+    }
+
     private fun conversationFiles(root: File): List<File> = root.walkTopDown()
         .filter { it.isFile && it.name.startsWith("conversation-") && it.extension == "jsonl" }
         .toList()
