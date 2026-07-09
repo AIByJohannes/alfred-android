@@ -5,7 +5,7 @@
     android:id="@+id/chat_content"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#000000"
+    android:background="@color/window_background"
     tools:context=".ui.home.HomeFragment">
 
     <ImageView
@@ -132,7 +132,7 @@
         android:id="@+id/input_layout"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="#000000"
+        android:background="@color/window_background"
         android:paddingHorizontal="12dp"
         android:paddingVertical="10dp"
         android:elevation="4dp"
