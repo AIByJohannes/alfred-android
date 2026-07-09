@@ -181,7 +181,11 @@ class HomeFragment : Fragment() {
     }
 
     private fun setupRecyclerView() {
-        chatAdapter = ChatAdapter()
+        chatAdapter = ChatAdapter(
+            onRetryClick = { failedMessageId ->
+                homeViewModel.retryMessage(failedMessageId)
+            }
+        )
         binding.messagesRecyclerView.apply {
             layoutManager = LinearLayoutManager(context).apply {
                 stackFromEnd = true

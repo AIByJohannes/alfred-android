@@ -19,7 +19,9 @@ import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.linkify.LinkifyPlugin
 
-class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(MessageDiffCallback()) {
+class ChatAdapter(
+    private val onRetryClick: ((Long) -> Unit)? = null
+) : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(MessageDiffCallback()) {
     init {
         setHasStableIds(true)
     }
@@ -36,7 +38,7 @@ class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(Me
         // For simplicity and performance, creating one here (or better, in the Adapter constructor or DI)
         // Since we don't have DI setup visible here easily, let's create it in the ViewHolder or pass context.
         // Actually, Markwon needs context.
-        return MessageViewHolder(binding)
+        return MessageViewHolder(binding, onRetryClick)
     }
 
     override fun onBindViewHolder(holder: MessageViewHolder, position: Int) {
@@ -44,7 +46,8 @@ class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(Me
     }
 
     class MessageViewHolder(
-        private val binding: ItemChatMessageBinding
+        private val binding: ItemChatMessageBinding,
+        private val onRetryClick: ((Long) -> Unit)?
     ) : RecyclerView.ViewHolder(binding.root) {
         private val markwon: Markwon = Markwon.builder(binding.root.context)
             .usePlugin(LinkifyPlugin.create())
@@ -79,6 +82,8 @@ class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(Me
                 )
                 // Hide share button for user messages
                 binding.shareButton.visibility = View.GONE
+                // Hide retry button for user messages
+                binding.retryButton.visibility = View.GONE
             } else if (message.isError) {
                 // Error message: align left, red background
                 params.horizontalBias = 0f
@@ -90,6 +95,11 @@ class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(Me
                 )
                 // Hide share button for error messages
                 binding.shareButton.visibility = View.GONE
+                // Show retry button for error messages
+                binding.retryButton.visibility = View.VISIBLE
+                binding.retryButton.setOnClickListener {
+                    onRetryClick?.invoke(message.id)
+                }
             } else {
                 // Assistant message: align left, gray background
                 params.horizontalBias = 0f
@@ -99,6 +109,8 @@ class ChatAdapter : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(Me
                 binding.messageText.setTextColor(
                     ContextCompat.getColor(context, R.color.assistant_message_text)
                 )
+                // Hide retry button for assistant messages
+                binding.retryButton.visibility = View.GONE
                 // Hide sharing while streaming partial text.
                 if (message.isStreaming) {
                     binding.shareButton.visibility = View.GONE

@@ -185,6 +185,37 @@ class HomeViewModel : ViewModel() {
         _sharedText.value = null
     }
 
+    fun retryMessage(failedMessageId: Long) {
+        val currentList = _messages.value.orEmpty().toMutableList()
+        val index = currentList.indexOfFirst { it.id == failedMessageId }
+        if (index < 0) return
+        val failedMsg = currentList[index]
+        if (!failedMsg.isError) return
+
+        // Find the user message associated with this failed run (normally the one before it)
+        var userMsgContent = ""
+        var userMsgIndex = -1
+        for (i in index - 1 downTo 0) {
+            if (currentList[i].isUser) {
+                userMsgContent = currentList[i].content
+                userMsgIndex = i
+                break
+            }
+        }
+
+        if (userMsgContent.isBlank()) return
+
+        // Remove the failed assistant message and the user message from the UI list to avoid duplication
+        if (userMsgIndex >= 0) {
+            currentList.removeAt(index) // Remove failed assistant message
+            currentList.removeAt(userMsgIndex) // Remove user message
+            _messages.value = currentList
+        }
+
+        // Resend the message
+        sendMessage(userMsgContent)
+    }
+
     fun sendMessage(userInput: String) {
         if (userInput.isBlank()) return
 
