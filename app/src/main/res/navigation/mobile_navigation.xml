@@ -28,4 +28,10 @@
         android:name="com.aibyjohannes.alfred.ui.settings.ToolSettingsFragment"
         android:label="@string/settings_tools_title"
         tools:layout="@layout/fragment_settings_tools" />
+
+    <fragment
+        android:id="@+id/nav_onboarding"
+        android:name="com.aibyjohannes.alfred.ui.onboarding.OnboardingFragment"
+        android:label="Onboarding"
+        tools:layout="@layout/fragment_onboarding" />
 </navigation>

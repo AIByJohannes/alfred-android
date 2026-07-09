@@ -79,6 +79,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val startupLocationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+        // SysInfoProvider automatically checks and handles permission dynamically.
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -90,12 +94,10 @@ class MainActivity : AppCompatActivity() {
         drawerSwipeMinDistance = 48 * resources.displayMetrics.density
 
         homeViewModel = ViewModelProvider(this)[HomeViewModel::class.java]
-        initializeHomeViewModel()
-
-        // Request ACCESS_COARSE_LOCATION at startup to enable datetime/location injection
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
-            // SysInfoProvider automatically checks and handles permission dynamically.
-        }.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+        if (profilePreferencesStore.isOnboardingCompleted) {
+            initializeHomeViewModel()
+            startupLocationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+        }
 
         NotificationScheduler.rescheduleAll(this)
 
@@ -103,6 +105,15 @@ class MainActivity : AppCompatActivity() {
 
         val drawerLayout: DrawerLayout = binding.drawerLayout
         val navController = findNavController(R.id.nav_host_fragment_content_main)
+
+        val navGraph = navController.navInflater.inflate(R.navigation.mobile_navigation)
+        if (!profilePreferencesStore.isOnboardingCompleted) {
+            navGraph.setStartDestination(R.id.nav_onboarding)
+        } else {
+            navGraph.setStartDestination(R.id.nav_home)
+        }
+        navController.graph = navGraph
+
         // Passing each menu ID as a set of Ids because each
         // menu should be considered as top level destinations.
         appBarConfiguration = AppBarConfiguration(
@@ -116,6 +127,9 @@ class MainActivity : AppCompatActivity() {
         binding.appBarMain.toolbar.navigationIcon = ContextCompat.getDrawable(this, R.drawable.ic_hamburger_two_lines)
         setupModelSelector()
         navController.addOnDestinationChangedListener { _, destination, _ ->
+            val isOnboarding = destination.id == R.id.nav_onboarding
+            binding.appBarMain.appbarLayout.isVisible = !isOnboarding
+
             val isTopLevel = destination.id == R.id.nav_home || destination.id == R.id.nav_settings
             if (isTopLevel) {
                 drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_UNLOCKED)
@@ -526,6 +540,15 @@ class MainActivity : AppCompatActivity() {
                     navigateToHome()
                 }
             }
+        }
+    }
+
+    fun onOnboardingComplete() {
+        initializeHomeViewModel()
+        startupLocationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+        val navController = findNavController(R.id.nav_host_fragment_content_main)
+        navController.navigate(R.id.nav_home) {
+            popUpTo(R.id.nav_onboarding) { inclusive = true }
         }
     }
 

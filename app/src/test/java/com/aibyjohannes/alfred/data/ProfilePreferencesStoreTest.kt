@@ -14,7 +14,7 @@ class ProfilePreferencesStoreTest {
     private val editor = mockk<SharedPreferences.Editor>(relaxed = true)
 
     private lateinit var store: ProfilePreferencesStore
-    private val prefsMap = mutableMapOf<String, String>()
+    private val prefsMap = mutableMapOf<String, Any>()
 
     @Before
     fun setUp() {
@@ -25,13 +25,19 @@ class ProfilePreferencesStoreTest {
 
         every { sharedPrefs.getString(any(), any()) } answers {
             val key = firstArg<String>()
-            val default = secondArg<String>()
-            prefsMap[key] ?: default
+            val default = secondArg<String?>()
+            (prefsMap[key] as? String) ?: default
+        }
+
+        every { sharedPrefs.getBoolean(any(), any()) } answers {
+            val key = firstArg<String>()
+            val default = secondArg<Boolean>()
+            (prefsMap[key] as? Boolean) ?: default
         }
 
         every { editor.putString(any(), any()) } answers {
             val key = firstArg<String>()
-            val value = secondArg<String>()
+            val value = secondArg<String?>()
             if (value != null) {
                 prefsMap[key] = value
             } else {
@@ -39,6 +45,14 @@ class ProfilePreferencesStoreTest {
             }
             editor
         }
+
+        every { editor.putBoolean(any(), any()) } answers {
+            val key = firstArg<String>()
+            val value = secondArg<Boolean>()
+            prefsMap[key] = value
+            editor
+        }
+
         every { editor.apply() } just Runs
 
         store = ProfilePreferencesStore(context)
@@ -48,6 +62,7 @@ class ProfilePreferencesStoreTest {
     fun `test default profile settings`() {
         assertEquals(ProfilePreferencesStore.DEFAULT_DISPLAY_NAME, store.displayName)
         assertEquals(ProfilePreferencesStore.DEFAULT_STATUS_LABEL, store.statusLabel)
+        assertFalse(store.isOnboardingCompleted)
     }
 
     @Test
@@ -57,5 +72,14 @@ class ProfilePreferencesStoreTest {
 
         store.displayName = "Charlie"
         assertEquals("Charlie", store.displayName)
+    }
+
+    @Test
+    fun `test set and get isOnboardingCompleted`() {
+        assertFalse(store.isOnboardingCompleted)
+        store.isOnboardingCompleted = true
+        assertTrue(store.isOnboardingCompleted)
+        store.isOnboardingCompleted = false
+        assertFalse(store.isOnboardingCompleted)
     }
 }

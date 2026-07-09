@@ -132,4 +132,30 @@
     <string name="obsidian_status_not_connected">Not Connected</string>
     <string name="obsidian_cleared">Obsidian vault disconnected</string>
     <string name="obsidian_connected_success">Obsidian vault connected successfully</string>
+
+    <!-- Onboarding Process -->
+    <string name="status_configured">Configured</string>
+    <string name="onboarding_title">Welcome to Alfred</string>
+    <string name="onboarding_subtitle">To get started, we need to set up local storage and a few optional permissions.</string>
+    <string name="onboarding_storage_title">1. Chat Storage (Required)</string>
+    <string name="onboarding_storage_desc">Alfred runs entirely on your device. Choose a folder where chats will be saved in Markdown format.</string>
+    <string name="onboarding_storage_button">Choose Chat Folder</string>
+    <string name="onboarding_storage_status_fmt">Saved to: %1$s</string>
+    <string name="onboarding_storage_status_not_set">Not configured yet</string>
+    <string name="onboarding_mic_title">2. Voice Input (Optional)</string>
+    <string name="onboarding_mic_desc">Enables hands-free voice mode and dictation.</string>
+    <string name="onboarding_mic_button">Grant Microphone Access</string>
+    <string name="onboarding_mic_status_granted">Access Granted</string>
+    <string name="onboarding_mic_status_denied">Access Optional</string>
+    <string name="onboarding_location_title">3. Location Context (Optional)</string>
+    <string name="onboarding_location_desc">Injects local date, time, and address context into prompts to get more accurate answers.</string>
+    <string name="onboarding_location_button">Grant Location Access</string>
+    <string name="onboarding_location_status_granted">Access Granted</string>
+    <string name="onboarding_location_status_denied">Access Optional</string>
+    <string name="onboarding_notifications_title">4. Reminders &amp; Tasks (Optional)</string>
+    <string name="onboarding_notifications_desc">Enables daily schedule notifications and status alerts for background processes.</string>
+    <string name="onboarding_notifications_button">Grant Notifications Access</string>
+    <string name="onboarding_notifications_status_granted">Access Granted</string>
+    <string name="onboarding_notifications_status_denied">Access Optional</string>
+    <string name="onboarding_get_started">Get Started</string>
 </resources>
