@@ -246,6 +246,39 @@ class HomeViewModelTest {
     }
 
     @Test
+    fun `selectConversation exposes loading state until file-backed switch completes`() = runTest {
+        val initialConversation = ConversationSummary("1", "Current", System.currentTimeMillis())
+        val selectedConversation = ConversationSummary("2", "Selected", System.currentTimeMillis())
+        val switchStarted = CompletableDeferred<Unit>()
+        val finishSwitch = CompletableDeferred<Unit>()
+
+        every { apiKeyStore.hasApiKey() } returns true
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns initialConversation
+        coEvery { conversationStore.loadMessages(any()) } returns emptyList()
+        coEvery { conversationStore.listConversations() } returns listOf(initialConversation, selectedConversation)
+        coEvery { conversationStore.switchActiveConversation("2") } coAnswers {
+            switchStarted.complete(Unit)
+            finishSwitch.await()
+            selectedConversation
+        }
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.selectConversation("2")
+        testScheduler.runCurrent()
+
+        assertTrue(switchStarted.isCompleted)
+        assertEquals(true, viewModel.isConversationLoading.value)
+
+        finishSwitch.complete(Unit)
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(false, viewModel.isConversationLoading.value)
+        assertEquals("2", viewModel.activeConversationId.value)
+    }
+
+    @Test
     fun `switchWorkspace updates active workspace and loads its active conversation`() = runTest {
         // Arrange
         val workspace1 = WorkspaceSummary("1", "Personal")

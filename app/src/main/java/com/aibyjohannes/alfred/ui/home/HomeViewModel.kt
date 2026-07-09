@@ -99,6 +99,10 @@ class HomeViewModel : ViewModel() {
     private val _isLoading = MutableLiveData(false)
     val isLoading: LiveData<Boolean> = _isLoading
 
+    private val _isConversationLoading = MutableLiveData(false)
+    /** True while a file-backed conversation or workspace change is in progress. */
+    val isConversationLoading: LiveData<Boolean> = _isConversationLoading
+
     private val _needsApiKey = MutableLiveData(false)
     val needsApiKey: LiveData<Boolean> = _needsApiKey
 
@@ -122,6 +126,7 @@ class HomeViewModel : ViewModel() {
     private var currentConversationId: String? = null
     private var nextMessageId = 1L
     private var conversationsJob: kotlinx.coroutines.Job? = null
+    private var pendingConversationOperations = 0
 
     fun initialize(
         apiKeyStore: ApiKeyStore,
@@ -218,6 +223,7 @@ class HomeViewModel : ViewModel() {
 
     fun sendMessage(userInput: String) {
         if (userInput.isBlank()) return
+        if (_isConversationLoading.value == true) return
 
         val repo = repository ?: return
         val store = conversationStore ?: return
@@ -546,7 +552,7 @@ class HomeViewModel : ViewModel() {
 
     fun createConversationAndSwitch() {
         val store = conversationStore ?: return
-        if (_isLoading.value == true) return
+        if (_isLoading.value == true || _isConversationLoading.value == true) return
         viewModelScope.launch {
             newChatMutex.withLock {
                 if (_isLoading.value == true) return@withLock
@@ -564,12 +570,14 @@ class HomeViewModel : ViewModel() {
     fun selectConversation(conversationId: String) {
         val store = conversationStore ?: return
         viewModelScope.launch {
-            try {
-                val selectedConversation = store.switchActiveConversation(conversationId)
-                loadConversation(selectedConversation)
-            } catch (_: IllegalArgumentException) {
-                val activeConversation = store.getOrCreateActiveConversation()
-                loadConversation(activeConversation)
+            withConversationLoading {
+                try {
+                    val selectedConversation = store.switchActiveConversation(conversationId)
+                    loadConversation(selectedConversation)
+                } catch (_: IllegalArgumentException) {
+                    val activeConversation = store.getOrCreateActiveConversation()
+                    loadConversation(activeConversation)
+                }
             }
         }
     }
@@ -589,12 +597,14 @@ class HomeViewModel : ViewModel() {
     fun switchWorkspace(workspaceId: String) {
         val store = conversationStore ?: return
         viewModelScope.launch {
-            val switchedWs = store.switchActiveWorkspace(workspaceId)
-            val activeConversation = store.getOrCreateActiveConversation()
-            loadConversation(activeConversation)
-            _activeWorkspaceId.value = switchedWs.id
-            refreshWorkspacesList()
-            observeConversationsForActiveWorkspace(switchedWs.id)
+            withConversationLoading {
+                val switchedWs = store.switchActiveWorkspace(workspaceId)
+                val activeConversation = store.getOrCreateActiveConversation()
+                loadConversation(activeConversation)
+                _activeWorkspaceId.value = switchedWs.id
+                refreshWorkspacesList()
+                observeConversationsForActiveWorkspace(switchedWs.id)
+            }
         }
     }
 
@@ -635,19 +645,21 @@ class HomeViewModel : ViewModel() {
     private fun loadWorkspacesAndActiveConversation() {
         val store = conversationStore ?: return
         viewModelScope.launch {
-            try {
-                val activeWs = store.getOrCreateActiveWorkspace()
-                _activeWorkspaceId.value = activeWs.id
+            withConversationLoading {
+                try {
+                    val activeWs = store.getOrCreateActiveWorkspace()
+                    _activeWorkspaceId.value = activeWs.id
 
-                val wsList = store.listWorkspaces().map { UiWorkspace(it.id, it.name) }
-                _workspaces.value = wsList
+                    val wsList = store.listWorkspaces().map { UiWorkspace(it.id, it.name) }
+                    _workspaces.value = wsList
 
-                val activeConversation = store.getOrCreateActiveConversation()
-                loadConversation(activeConversation)
-                observeConversationsForActiveWorkspace(activeWs.id)
-                _storageError.value = null
-            } catch (error: Exception) {
-                _storageError.value = error.message ?: "Chat history is temporarily unavailable"
+                    val activeConversation = store.getOrCreateActiveConversation()
+                    loadConversation(activeConversation)
+                    observeConversationsForActiveWorkspace(activeWs.id)
+                    _storageError.value = null
+                } catch (error: Exception) {
+                    _storageError.value = error.message ?: "Chat history is temporarily unavailable"
+                }
             }
         }
     }
@@ -655,10 +667,23 @@ class HomeViewModel : ViewModel() {
     private fun loadOrCreateActiveConversation() {
         val store = conversationStore ?: return
         viewModelScope.launch {
-            val activeWs = store.getOrCreateActiveWorkspace()
-            val activeConversation = store.getOrCreateActiveConversation()
-            loadConversation(activeConversation)
-            observeConversationsForActiveWorkspace(activeWs.id)
+            withConversationLoading {
+                val activeWs = store.getOrCreateActiveWorkspace()
+                val activeConversation = store.getOrCreateActiveConversation()
+                loadConversation(activeConversation)
+                observeConversationsForActiveWorkspace(activeWs.id)
+            }
+        }
+    }
+
+    private suspend fun <T> withConversationLoading(block: suspend () -> T): T {
+        pendingConversationOperations += 1
+        _isConversationLoading.value = true
+        return try {
+            block()
+        } finally {
+            pendingConversationOperations -= 1
+            _isConversationLoading.value = pendingConversationOperations > 0
         }
     }
 

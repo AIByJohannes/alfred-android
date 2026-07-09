@@ -1,6 +1,7 @@
 package com.aibyjohannes.alfred.ui.home
 
 import android.Manifest
+import android.animation.Animator
 import android.animation.ObjectAnimator
 import android.animation.PropertyValuesHolder
 import android.content.pm.PackageManager
@@ -52,6 +53,9 @@ class HomeFragment : Fragment() {
     /** The final AI text to synthesize — stored when streaming completes during voice mode. */
     private var pendingVoiceText: String? = null
     private var isInVoiceMode = false
+    private var isStreamingResponse = false
+    private var isConversationLoading = false
+    private val conversationLoadingAnimators = mutableListOf<Animator>()
 
     private val recordAudioPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -468,14 +472,13 @@ class HomeFragment : Fragment() {
         }
 
         homeViewModel.isLoading.observe(viewLifecycleOwner) { isLoading ->
-            if (!isInVoiceMode) {
-                binding.loadingIndicator.isVisible = isLoading
-                binding.sendButton.isEnabled = !isLoading
-            } else {
-                // In voice mode the loading indicator is not shown; TTS observer handles transition
-                binding.loadingIndicator.isVisible = false
-                binding.sendButton.isEnabled = true
-            }
+            isStreamingResponse = isLoading
+            updateLoadingUi()
+        }
+
+        homeViewModel.isConversationLoading.observe(viewLifecycleOwner) { loading ->
+            isConversationLoading = loading
+            updateLoadingUi()
         }
 
         homeViewModel.needsApiKey.observe(viewLifecycleOwner) { needsKey ->
@@ -506,6 +509,89 @@ class HomeFragment : Fragment() {
                 binding.messageInput.setSelection(text.length)
                 homeViewModel.consumeSharedText()
             }
+        }
+    }
+
+    private fun updateLoadingUi() {
+        val isBusy = isStreamingResponse || isConversationLoading
+        if (isConversationLoading) {
+            binding.conversationLoadingOverlay.isVisible = true
+            startConversationLoadingAnimation()
+        } else {
+            stopConversationLoadingAnimation()
+            binding.conversationLoadingOverlay.isVisible = false
+        }
+        binding.inputLayout.alpha = if (isBusy) 0.5f else 1f
+        binding.messageInput.isEnabled = !isBusy
+        binding.btnAdd.isEnabled = !isBusy
+        binding.btnMic.isEnabled = !isBusy
+
+        if (!isInVoiceMode) {
+            binding.loadingIndicator.isVisible = isStreamingResponse
+            binding.sendButton.isEnabled = !isBusy
+        } else {
+            // In voice mode the streaming indicator is not shown; TTS handles the transition.
+            binding.loadingIndicator.isVisible = false
+            binding.sendButton.isEnabled = !isConversationLoading
+        }
+    }
+
+    private fun startConversationLoadingAnimation() {
+        if (conversationLoadingAnimators.isNotEmpty()) return
+
+        val orbPulse = ObjectAnimator.ofPropertyValuesHolder(
+            binding.conversationLoadingOrb,
+            PropertyValuesHolder.ofFloat(View.SCALE_X, 0.94f, 1.08f),
+            PropertyValuesHolder.ofFloat(View.SCALE_Y, 0.94f, 1.08f),
+            PropertyValuesHolder.ofFloat(View.ALPHA, 0.72f, 1f)
+        ).apply {
+            duration = 1_800L
+            repeatCount = ObjectAnimator.INFINITE
+            repeatMode = ObjectAnimator.REVERSE
+            interpolator = AccelerateDecelerateInterpolator()
+        }
+
+        val ringAnimations = listOf(
+            binding.conversationLoadingRingInner,
+            binding.conversationLoadingRingMiddle,
+            binding.conversationLoadingRingOuter
+        ).mapIndexed { index, ring ->
+            ObjectAnimator.ofPropertyValuesHolder(
+                ring,
+                PropertyValuesHolder.ofFloat(View.SCALE_X, 0.55f, 1.16f),
+                PropertyValuesHolder.ofFloat(View.SCALE_Y, 0.55f, 1.16f),
+                PropertyValuesHolder.ofFloat(View.ALPHA, 0f, 0.65f, 0f)
+            ).apply {
+                duration = 1_800L
+                startDelay = index * 450L
+                repeatCount = ObjectAnimator.INFINITE
+                repeatMode = ObjectAnimator.RESTART
+                interpolator = AccelerateDecelerateInterpolator()
+            }
+        }
+
+        conversationLoadingAnimators += orbPulse
+        conversationLoadingAnimators += ringAnimations
+        conversationLoadingAnimators.forEach(Animator::start)
+    }
+
+    private fun stopConversationLoadingAnimation() {
+        conversationLoadingAnimators.forEach(Animator::cancel)
+        conversationLoadingAnimators.clear()
+
+        binding.conversationLoadingOrb.apply {
+            scaleX = 1f
+            scaleY = 1f
+            alpha = 1f
+        }
+        listOf(
+            binding.conversationLoadingRingInner,
+            binding.conversationLoadingRingMiddle,
+            binding.conversationLoadingRingOuter
+        ).forEach { ring ->
+            ring.scaleX = 0.55f
+            ring.scaleY = 0.55f
+            ring.alpha = 0f
         }
     }
 
@@ -569,9 +655,10 @@ class HomeFragment : Fragment() {
     }
 
     override fun onDestroyView() {
-        super.onDestroyView()
+        stopConversationLoadingAnimation()
         stopMediaPlayer()
         voiceOrAnimator?.cancel()
+        super.onDestroyView()
         _binding = null
     }
 

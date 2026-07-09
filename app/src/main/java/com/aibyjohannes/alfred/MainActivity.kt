@@ -325,10 +325,15 @@ class MainActivity : AppCompatActivity() {
         homeViewModel.activeConversationId.observe(this) { activeConversationId ->
             conversationAdapter.setActiveConversationId(activeConversationId)
         }
-        homeViewModel.isLoading.observe(this) { isLoading ->
-            binding.btnNewChatLayout.isEnabled = !isLoading
-            binding.btnNewChatLayout.alpha = if (isLoading) 0.5f else 1f
-        }
+        homeViewModel.isLoading.observe(this) { updateNewChatEnabledState() }
+        homeViewModel.isConversationLoading.observe(this) { updateNewChatEnabledState() }
+    }
+
+    private fun updateNewChatEnabledState() {
+        val isBusy = homeViewModel.isLoading.value == true ||
+            homeViewModel.isConversationLoading.value == true
+        binding.btnNewChatLayout.isEnabled = !isBusy
+        binding.btnNewChatLayout.alpha = if (isBusy) 0.5f else 1f
     }
 
     override fun onResume() {
