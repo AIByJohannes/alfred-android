@@ -69,4 +69,12 @@
         <item>af_heart</item>
         <item>af_sky</item>
     </string-array>
+    <string-array name="search_tool_labels">
+        <item>Perplexity Sonar</item>
+        <item>Grok 4.3 Native Search</item>
+    </string-array>
+    <string-array name="search_tool_values">
+        <item>perplexity</item>
+        <item>grok</item>
+    </string-array>
 </resources>

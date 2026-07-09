@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ArrayAdapter
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -75,12 +76,32 @@ class ToolSettingsFragment : Fragment() {
         apiKeyStore = ApiKeyStore(requireContext())
         obsidianVaultStore = ObsidianVaultStore(requireContext())
 
+        setupSearchToolDropdown()
         setupTickTickControls()
         updateTickTickStatus()
         setupObsidianControls()
         updateObsidianStatus()
 
         return root
+    }
+
+    private fun setupSearchToolDropdown() {
+        val searchTools = resources.getStringArray(R.array.search_tool_values)
+        val labels = resources.getStringArray(R.array.search_tool_labels)
+        val adapter = ArrayAdapter(requireContext(), android.R.layout.simple_dropdown_item_1line, labels)
+        binding.searchToolDropdown.setAdapter(adapter)
+
+        val currentSearchTool = apiKeyStore.loadSearchTool()
+        val index = searchTools.indexOf(currentSearchTool)
+        if (index >= 0) {
+            binding.searchToolDropdown.setText(labels[index], false)
+        }
+
+        binding.searchToolDropdown.setOnItemClickListener { _, _, position, _ ->
+            val selectedSearchTool = searchTools[position]
+            apiKeyStore.saveSearchTool(selectedSearchTool)
+            Snackbar.make(binding.root, "Search tool updated to ${labels[position]}", Snackbar.LENGTH_SHORT).show()
+        }
     }
 
     private fun setupTickTickControls() {

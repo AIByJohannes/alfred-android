@@ -70,6 +70,12 @@ class ToolModelsTest {
     }
 
     @Test
+    fun `search tool constants are non-empty`() {
+        assertTrue(ChatRepository.SEARCH_TOOL_PERPLEXITY.isNotBlank())
+        assertTrue(ChatRepository.SEARCH_TOOL_GROK.isNotBlank())
+    }
+
+    @Test
     fun `DEFAULT_MODEL contains valid model name`() {
         // Sanity check: model name should look like a provider/model format
         assertTrue(ChatRepository.DEFAULT_MODEL.contains("/"))

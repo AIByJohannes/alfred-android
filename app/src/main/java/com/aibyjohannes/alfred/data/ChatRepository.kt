@@ -4,11 +4,13 @@ import com.aibyjohannes.alfred.core.SystemPrompts
 import com.aibyjohannes.alfred.core.engine.ChatEngine
 import com.aibyjohannes.alfred.core.engine.OpenRouterChatEngine
 import com.aibyjohannes.alfred.core.model.ChatStreamEvent
+import com.aibyjohannes.alfred.core.search.GrokSearchClient
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchClient
 import com.aibyjohannes.alfred.core.search.ObsidianClient
 import com.aibyjohannes.alfred.core.model.CoreChatMessage
 import com.aibyjohannes.alfred.core.model.CoreChatMessageKind
 import com.aibyjohannes.alfred.core.search.PerplexitySearchClient
+import com.aibyjohannes.alfred.core.search.WebSearchClient
 import com.aibyjohannes.alfred.core.skills.SkillClient
 import com.aibyjohannes.alfred.core.ticktick.TickTickClient
 import com.aibyjohannes.alfred.core.ticktick.TickTickCredentials
@@ -180,10 +182,7 @@ class ChatRepository private constructor(
             apiKey = apiKey,
             model = model,
             prompt = SystemPrompts.buildSystemPrompt(sysInfo),
-            webSearchClient = PerplexitySearchClient(
-                apiKey = apiKey,
-                model = PERPLEXITY_MODEL
-            ),
+            webSearchClient = createWebSearchClient(apiKey),
             localKnowledgeSearchClient = localKnowledgeSearchClient,
             tickTickClient = tickTickClient,
             obsidianClient = resolveObsidianClient(),
@@ -201,6 +200,13 @@ class ChatRepository private constructor(
         obsidianClientProvider?.invoke() ?: obsidianClient
 
     fun resolveSkillClient(): SkillClient? = skillClient
+
+    private fun createWebSearchClient(apiKey: String): WebSearchClient {
+        return when (apiKeyStore.loadSearchTool()) {
+            SEARCH_TOOL_GROK -> GrokSearchClient(apiKey = apiKey, model = GROK_SEARCH_MODEL)
+            else -> PerplexitySearchClient(apiKey = apiKey, model = PERPLEXITY_MODEL)
+        }
+    }
 
     // Retained for test compatibility and tool schema intent.
     @JsonClassDescription("Search the web for current information.")
@@ -234,6 +240,9 @@ class ChatRepository private constructor(
         const val DEFAULT_MODEL = OpenRouterChatEngine.DEFAULT_MODEL
         const val PERPLEXITY_MODEL = PerplexitySearchClient.DEFAULT_MODEL
         const val DEFAULT_TTS_MODEL = OpenRouterTtsClient.DEFAULT_MODEL
+        const val GROK_SEARCH_MODEL = GrokSearchClient.DEFAULT_MODEL
+        const val SEARCH_TOOL_PERPLEXITY = "perplexity"
+        const val SEARCH_TOOL_GROK = "grok"
     }
 
     @Deprecated("Use core engine package directly for new integrations.")

@@ -18,9 +18,9 @@ import com.aibyjohannes.alfred.data.ProfilePreferencesStore
 import com.aibyjohannes.alfred.databinding.FragmentSettingsBinding
 import com.aibyjohannes.alfred.notifications.NotificationPreferencesStore
 import com.aibyjohannes.alfred.notifications.NotificationScheduler
+import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.timepicker.MaterialTimePicker
 import com.google.android.material.timepicker.TimeFormat
-import com.google.android.material.snackbar.Snackbar
 
 class SettingsFragment : Fragment() {
 

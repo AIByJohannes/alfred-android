@@ -38,6 +38,8 @@
     <string name="choose_model">Choose model</string>
     <string name="choose_model_description">Changes apply to new chat requests.</string>
     <string name="language_model_description">Choose the AI model Alfred uses to answer your questions.</string>
+    <string name="search_tool_title">Search Tool</string>
+    <string name="search_tool_description">Choose the web search provider Alfred uses when it needs current information.</string>
     <string name="api_key_label">OpenRouter API Key</string>
 
     <string name="api_key_hint">Paste your OpenRouter API key here</string>

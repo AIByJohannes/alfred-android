@@ -211,6 +211,23 @@ class ApiKeyStore internal constructor(
         }
     }
 
+    fun saveSearchTool(searchTool: String) {
+        try {
+            prefs.edit().putString(KEY_SEARCH_TOOL, searchTool.trim()).apply()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving search tool", e)
+        }
+    }
+
+    fun loadSearchTool(): String {
+        return try {
+            prefs.getString(KEY_SEARCH_TOOL, null) ?: DEFAULT_SEARCH_TOOL_VAL
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading search tool", e)
+            DEFAULT_SEARCH_TOOL_VAL
+        }
+    }
+
     companion object {
         private const val TAG = "ApiKeyStore"
         private const val PREFS_FILE_NAME = "alfred_secret_prefs"
@@ -220,7 +237,9 @@ class ApiKeyStore internal constructor(
         private const val KEY_TICKTICK_ACCESS_TOKEN = "ticktick_access_token"
         private const val KEY_TICKTICK_REFRESH_TOKEN = "ticktick_refresh_token"
         private const val KEY_MODEL = "selected_model"
+        private const val KEY_SEARCH_TOOL = "selected_search_tool"
         private const val DEFAULT_MODEL_VAL = "deepseek/deepseek-v4-flash"
+        private const val DEFAULT_SEARCH_TOOL_VAL = "perplexity"
         private val LEGACY_FREE_CHAT_MODEL_MIGRATIONS = mapOf(
             "google/gemma-4-31b-it:free" to "google/gemma-4-31b-it",
             "google/gemma-4-26b-a4b-it:free" to "google/gemma-4-26b-a4b-it",
