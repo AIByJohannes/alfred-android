@@ -228,6 +228,18 @@ class ApiKeyStore internal constructor(
         }
     }
 
+    fun saveEfficiencyMode(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_EFFICIENCY_MODE, enabled).apply()
+    }
+
+    fun isEfficiencyModeEnabled(): Boolean = prefs.getBoolean(KEY_EFFICIENCY_MODE, false)
+
+    fun savePrivacyMode(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_PRIVACY_MODE, enabled).apply()
+    }
+
+    fun isPrivacyModeEnabled(): Boolean = prefs.getBoolean(KEY_PRIVACY_MODE, false)
+
     companion object {
         private const val TAG = "ApiKeyStore"
         private const val PREFS_FILE_NAME = "alfred_secret_prefs"
@@ -238,7 +250,13 @@ class ApiKeyStore internal constructor(
         private const val KEY_TICKTICK_REFRESH_TOKEN = "ticktick_refresh_token"
         private const val KEY_MODEL = "selected_model"
         private const val KEY_SEARCH_TOOL = "selected_search_tool"
-        private const val DEFAULT_MODEL_VAL = "deepseek/deepseek-v4-flash"
+        private const val KEY_EFFICIENCY_MODE = "efficiency_mode"
+        private const val KEY_PRIVACY_MODE = "privacy_mode"
+        /**
+         * Maintained OpenRouter alias with throughput-first provider routing.
+         * Existing saved selections are intentionally left untouched.
+         */
+        private const val DEFAULT_MODEL_VAL = "~google/gemini-flash-latest:nitro"
         private const val DEFAULT_SEARCH_TOOL_VAL = "perplexity"
         private val LEGACY_FREE_CHAT_MODEL_MIGRATIONS = mapOf(
             "google/gemma-4-31b-it:free" to "google/gemma-4-31b-it",

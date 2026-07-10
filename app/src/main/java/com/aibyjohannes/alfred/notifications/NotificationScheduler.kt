@@ -9,6 +9,28 @@ import java.util.Calendar
 object NotificationScheduler {
     const val ACTION_DAILY_REMINDER = "com.aibyjohannes.alfred.notifications.DAILY_REMINDER"
     const val ACTION_INACTIVITY_REMINDER = "com.aibyjohannes.alfred.notifications.INACTIVITY_REMINDER"
+    const val ACTION_ONE_TIME_REMINDER = "com.aibyjohannes.alfred.notifications.ONE_TIME_REMINDER"
+    const val EXTRA_REMINDER_MESSAGE = "reminder_message"
+    const val EXTRA_REMINDER_NOTIFICATION_ID = "reminder_notification_id"
+
+    fun scheduleOneTimeReminder(context: Context, message: String, triggerAtEpochMs: Long) {
+        require(message.isNotBlank()) { "Reminder message must not be blank" }
+        require(triggerAtEpochMs > System.currentTimeMillis()) { "Reminder time must be in the future" }
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+            ?: throw IllegalStateException("Alarm manager is unavailable")
+        val notificationId = ("$triggerAtEpochMs:${message.trim()}".hashCode() and Int.MAX_VALUE).coerceAtLeast(1)
+        val intent = Intent(context, AlfredNotificationReceiver::class.java)
+            .setAction(ACTION_ONE_TIME_REMINDER)
+            .putExtra(EXTRA_REMINDER_MESSAGE, message.trim())
+            .putExtra(EXTRA_REMINDER_NOTIFICATION_ID, notificationId)
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            notificationId,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        setAlarm(alarmManager, triggerAtEpochMs, pendingIntent)
+    }
 
     fun scheduleDailyReminder(context: Context) {
         scheduleDailyReminder(context, System.currentTimeMillis())

@@ -22,6 +22,7 @@ class ApiKeyStoreTest {
     private val sharedPrefs = mockk<SharedPreferences>()
     private val editor = mockk<SharedPreferences.Editor>()
     private val values = mutableMapOf<String, String?>()
+    private val booleanValues = mutableMapOf<String, Boolean>()
 
     private lateinit var apiKeyStore: ApiKeyStore
 
@@ -32,6 +33,7 @@ class ApiKeyStoreTest {
         every { Log.e(any(), any(), any()) } returns 0
 
         values.clear()
+        booleanValues.clear()
         every { sharedPrefs.getString(any(), any()) } answers {
             values[firstArg()] ?: secondArg()
         }
@@ -45,6 +47,13 @@ class ApiKeyStoreTest {
             editor
         }
         every { editor.apply() } just Runs
+        every { sharedPrefs.getBoolean(any(), any()) } answers {
+            booleanValues[firstArg()] ?: secondArg()
+        }
+        every { editor.putBoolean(any(), any()) } answers {
+            booleanValues[firstArg()] = secondArg()
+            editor
+        }
 
         apiKeyStore = ApiKeyStore(sharedPrefs, fallbackApiKey = "")
     }
@@ -76,11 +85,23 @@ class ApiKeyStoreTest {
 
     @Test
     fun `chat model defaults and custom selection round trip`() {
-        assertEquals("deepseek/deepseek-v4-flash", apiKeyStore.loadModel())
+        assertEquals("~google/gemini-flash-latest:nitro", apiKeyStore.loadModel())
 
         apiKeyStore.saveModel("  custom-model  ")
 
         assertEquals("custom-model", apiKeyStore.loadModel())
+    }
+
+    @Test
+    fun `efficiency and privacy modes default off and round trip`() {
+        assertFalse(apiKeyStore.isEfficiencyModeEnabled())
+        assertFalse(apiKeyStore.isPrivacyModeEnabled())
+
+        apiKeyStore.saveEfficiencyMode(true)
+        apiKeyStore.savePrivacyMode(true)
+
+        assertTrue(apiKeyStore.isEfficiencyModeEnabled())
+        assertTrue(apiKeyStore.isPrivacyModeEnabled())
     }
 
     @Test
@@ -157,7 +178,7 @@ class ApiKeyStoreTest {
         val store = ApiKeyStore(throwingPrefs, fallbackApiKey = "fallback-key")
 
         assertNull(store.loadOpenRouterKey())
-        assertEquals("deepseek/deepseek-v4-flash", store.loadModel())
+        assertEquals("~google/gemini-flash-latest:nitro", store.loadModel())
         assertEquals("openai/whisper-1", store.loadSttModel())
         assertEquals("hexgrad/kokoro-82m", store.loadTtsModel())
         assertEquals("af_alloy", store.loadTtsVoice())

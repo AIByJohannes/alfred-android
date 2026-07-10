@@ -19,6 +19,13 @@ class FileConversationStore internal constructor(
     private val objectMapper: ObjectMapper,
     private val index: ConversationIndex
 ) : ConversationStore {
+    /**
+     * The JSONL files remain authoritative, but re-folding every conversation on each UI request
+     * makes opening a chat scale with the entire vault. All writes run under [withStoreLock] and
+     * refresh this snapshot, so a warm read needs no disk work.
+     */
+    private var snapshotCache: ConversationIndexSnapshot? = null
+
     constructor(rootDir: File) : this(FileChatHistoryStorage(rootDir), ObjectMapper(), MemoryConversationIndex())
     constructor(storage: ChatHistoryStorage) : this(storage, ObjectMapper(), MemoryConversationIndex())
     constructor(storage: ChatHistoryStorage, context: Context) : this(
@@ -232,6 +239,7 @@ class FileConversationStore internal constructor(
     }
 
     private suspend fun loadSnapshot(): ConversationIndexSnapshot {
+        snapshotCache?.let { return it }
         migrateLegacyFolders()
         val legacySelections = migrateLegacyStorage()
         val snapshot = refreshIndex()
@@ -279,8 +287,11 @@ class FileConversationStore internal constructor(
     }
 
     private suspend fun refreshIndex(): ConversationIndexSnapshot {
+        // Never serve an older snapshot when a file append succeeded but rebuilding the read model failed.
+        snapshotCache = null
         val snapshot = scanEventFiles()
         index.replaceFrom(snapshot)
+        snapshotCache = snapshot
         return snapshot
     }
 

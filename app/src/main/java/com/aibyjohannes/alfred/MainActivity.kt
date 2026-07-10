@@ -2,6 +2,7 @@ package com.aibyjohannes.alfred
 
 import android.content.Intent
 import android.os.Bundle
+import android.widget.Toast
 import androidx.core.view.GravityCompat
 import androidx.navigation.findNavController
 import androidx.navigation.ui.AppBarConfiguration
@@ -28,6 +29,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import com.aibyjohannes.alfred.ui.home.ConversationAdapter
+import com.aibyjohannes.alfred.ui.home.AndroidChatRunPowerKeeper
 import com.aibyjohannes.alfred.ui.home.HomeViewModel
 import com.aibyjohannes.alfred.ui.home.UiConversation
 import com.aibyjohannes.alfred.ui.home.DrawerProjectsAdapter
@@ -43,6 +45,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.aibyjohannes.alfred.data.SysInfoProvider
 import com.aibyjohannes.alfred.notifications.NotificationScheduler
+import com.aibyjohannes.alfred.notifications.AndroidReminderClient
 import android.Manifest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -223,7 +226,8 @@ class MainActivity : AppCompatActivity() {
                     ?.takeIf { obsidianVaultStore.hasUsableFolder() }
                     ?.let { DocumentObsidianClient(this, it) }
             },
-            skillClient = StorageSkillClient(storage)
+            skillClient = StorageSkillClient(storage),
+            reminderClient = AndroidReminderClient(this)
         )
         val sysInfoProvider = SysInfoProvider(this)
         homeViewModel.initialize(
@@ -231,6 +235,8 @@ class MainActivity : AppCompatActivity() {
             repository = repository,
             conversationStore = conversationStore,
             sysInfoProvider = sysInfoProvider,
+            chatRunPowerKeeper = AndroidChatRunPowerKeeper(this),
+            startWithNewConversation = true,
             onChatActivity = {
                 NotificationScheduler.recordChatActivity(this)
             }
@@ -290,6 +296,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.btnNewChatLayout.setOnClickListener {
+            Toast.makeText(this, "Creating new chat…", Toast.LENGTH_SHORT).show()
             homeViewModel.createConversationAndSwitch()
             navigateToHome()
             binding.drawerLayout.closeDrawer(GravityCompat.START)

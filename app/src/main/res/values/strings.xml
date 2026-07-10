@@ -1,4 +1,9 @@
 <resources>
+    <string name="efficiency_privacy_title">Efficiency &amp; privacy</string>
+    <string name="efficiency_mode_title">Cache-efficient routing</string>
+    <string name="efficiency_mode_description">Keeps each chat on a stable OpenRouter route to maximize KV-cache savings on supported models.</string>
+    <string name="privacy_mode_title">Zero data retention routing</string>
+    <string name="privacy_mode_description">Routes OpenRouter inference only to providers with a zero-data-retention policy. Connected tools have their own privacy policies.</string>
     <string name="app_name">Alfred</string>
     <string name="navigation_drawer_open">Open navigation drawer</string>
     <string name="navigation_drawer_close">Close navigation drawer</string>

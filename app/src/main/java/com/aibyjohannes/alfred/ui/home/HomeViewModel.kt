@@ -78,6 +78,7 @@ class HomeViewModel : ViewModel() {
     private var conversationStore: ConversationStore? = null
     private var sysInfoProvider: SysInfoProvider? = null
     private var onChatActivity: (() -> Unit)? = null
+    private var chatRunPowerKeeper: ChatRunPowerKeeper = NoOpChatRunPowerKeeper
     private var nextTurnMaxPasses: Int? = null
     private val newChatMutex = Mutex()
 
@@ -133,11 +134,14 @@ class HomeViewModel : ViewModel() {
         repository: ChatRepository,
         conversationStore: ConversationStore,
         sysInfoProvider: SysInfoProvider? = null,
-        onChatActivity: (() -> Unit)? = null
+        onChatActivity: (() -> Unit)? = null,
+        chatRunPowerKeeper: ChatRunPowerKeeper = NoOpChatRunPowerKeeper,
+        startWithNewConversation: Boolean = false
     ) {
         if (this.apiKeyStore != null && this.repository != null && this.conversationStore != null) {
             this.sysInfoProvider = sysInfoProvider
             this.onChatActivity = onChatActivity
+            this.chatRunPowerKeeper = chatRunPowerKeeper
             checkApiKey()
             return
         }
@@ -146,8 +150,9 @@ class HomeViewModel : ViewModel() {
         this.conversationStore = conversationStore
         this.sysInfoProvider = sysInfoProvider
         this.onChatActivity = onChatActivity
+        this.chatRunPowerKeeper = chatRunPowerKeeper
         checkApiKey()
-        loadWorkspacesAndActiveConversation()
+        loadWorkspacesAndActiveConversation(startWithNewConversation)
     }
 
     fun checkApiKey() {
@@ -224,6 +229,7 @@ class HomeViewModel : ViewModel() {
     fun sendMessage(userInput: String) {
         if (userInput.isBlank()) return
         if (_isConversationLoading.value == true) return
+        if (_isLoading.value == true) return
 
         val repo = repository ?: return
         val store = conversationStore ?: return
@@ -255,6 +261,7 @@ class HomeViewModel : ViewModel() {
         )
 
         _isLoading.value = true
+        chatRunPowerKeeper.acquire()
 
         val sysInfo = sysInfoProvider?.buildSysInfo()
 
@@ -266,7 +273,13 @@ class HomeViewModel : ViewModel() {
             var lastFlushAtMs = 0L
 
             try {
-                repo.streamMessage(userInput, conversationHistory.toList(), sysInfo, maxPasses).collect { event ->
+                repo.streamMessage(
+                    userInput,
+                    conversationHistory.toList(),
+                    sysInfo,
+                    maxPasses,
+                    sessionId = conversationId
+                ).collect { event ->
                     when (event) {
                         is ChatStreamEvent.PassStarted -> {
                             passAssistantContent.clear()
@@ -496,8 +509,17 @@ class HomeViewModel : ViewModel() {
                 }
             }
 
-            _isLoading.value = false
+            finally {
+                _isLoading.value = false
+                chatRunPowerKeeper.release()
+            }
         }
+    }
+
+    suspend fun generateImage(prompt: String, cacheDir: java.io.File): Result<java.io.File> {
+        val repo = repository ?: return Result.failure(Exception("Repository not initialized"))
+        val outputFile = java.io.File(cacheDir, "generated_image_${System.currentTimeMillis()}.png")
+        return repo.generateImage(prompt, outputFile)
     }
 
     fun allowMoreLoops(count: Int) {
@@ -642,7 +664,7 @@ class HomeViewModel : ViewModel() {
         _workspaces.postValue(list)
     }
 
-    private fun loadWorkspacesAndActiveConversation() {
+    private fun loadWorkspacesAndActiveConversation(startWithNewConversation: Boolean = false) {
         val store = conversationStore ?: return
         viewModelScope.launch {
             withConversationLoading {
@@ -653,7 +675,11 @@ class HomeViewModel : ViewModel() {
                     val wsList = store.listWorkspaces().map { UiWorkspace(it.id, it.name) }
                     _workspaces.value = wsList
 
-                    val activeConversation = store.getOrCreateActiveConversation()
+                    val activeConversation = if (startWithNewConversation) {
+                        store.createConversation()
+                    } else {
+                        store.getOrCreateActiveConversation()
+                    }
                     loadConversation(activeConversation)
                     observeConversationsForActiveWorkspace(activeWs.id)
                     _storageError.value = null

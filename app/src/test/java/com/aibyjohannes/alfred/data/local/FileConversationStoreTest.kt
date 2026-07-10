@@ -167,7 +167,7 @@ class FileConversationStoreTest {
         val index = FailingConversationIndex()
         val store = FileConversationStore(FileChatHistoryStorage(root), ObjectMapper(), index)
         val conversation = store.getOrCreateActiveConversation()
-        index.failAfter(2)
+        index.failAfter(1)
 
         val failure = runCatching {
             store.appendMessage(conversation.id, ChatMessage.ROLE_USER, "File wins")

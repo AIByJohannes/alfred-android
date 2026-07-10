@@ -31,6 +31,8 @@ class ChatRepositoryTest {
         every { apiKeyStore.loadSttModel() } returns "test-stt-model"
         every { apiKeyStore.loadTtsModel() } returns "test-tts-model"
         every { apiKeyStore.loadTtsVoice() } returns "test-voice"
+        every { apiKeyStore.isEfficiencyModeEnabled() } returns false
+        every { apiKeyStore.isPrivacyModeEnabled() } returns false
     }
 
     @Test

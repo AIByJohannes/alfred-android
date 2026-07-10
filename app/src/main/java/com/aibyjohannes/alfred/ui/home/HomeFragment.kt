@@ -4,6 +4,7 @@ import android.Manifest
 import android.animation.Animator
 import android.animation.ObjectAnimator
 import android.animation.PropertyValuesHolder
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
 import android.os.Bundle
@@ -17,9 +18,11 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.view.inputmethod.EditorInfo
+import android.widget.EditText
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.ViewModelProvider
@@ -30,6 +33,7 @@ import com.aibyjohannes.alfred.databinding.FragmentHomeBinding
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlin.math.max
 
 class HomeFragment : Fragment() {
@@ -55,6 +59,8 @@ class HomeFragment : Fragment() {
     private var isInVoiceMode = false
     private var isStreamingResponse = false
     private var isConversationLoading = false
+    private var wasStreamingResponse = false
+    private var wasConversationLoading = false
     private val conversationLoadingAnimators = mutableListOf<Animator>()
 
     private val recordAudioPermissionLauncher = registerForActivityResult(
@@ -238,7 +244,7 @@ class HomeFragment : Fragment() {
         })
 
         binding.btnMic.setOnClickListener { toggleRecording() }
-        binding.btnAdd.setOnClickListener { }
+        binding.btnAdd.setOnClickListener { showImageGenerationDialog() }
         binding.btnAllowMoreLoops.setOnClickListener {
             homeViewModel.allowMoreLoops(5)
         }
@@ -472,11 +478,19 @@ class HomeFragment : Fragment() {
         }
 
         homeViewModel.isLoading.observe(viewLifecycleOwner) { isLoading ->
+            if (isLoading && !wasStreamingResponse) {
+                Toast.makeText(context, "Sending message…", Toast.LENGTH_SHORT).show()
+            }
+            wasStreamingResponse = isLoading
             isStreamingResponse = isLoading
             updateLoadingUi()
         }
 
         homeViewModel.isConversationLoading.observe(viewLifecycleOwner) { loading ->
+            if (loading && !wasConversationLoading) {
+                Toast.makeText(context, "Loading chat…", Toast.LENGTH_SHORT).show()
+            }
+            wasConversationLoading = loading
             isConversationLoading = loading
             updateLoadingUi()
         }
@@ -510,6 +524,38 @@ class HomeFragment : Fragment() {
                 homeViewModel.consumeSharedText()
             }
         }
+    }
+
+    private fun showImageGenerationDialog() {
+        val context = context ?: return
+        val input = EditText(context).apply {
+            hint = "Describe the image you want to create"
+            minLines = 3
+        }
+        MaterialAlertDialogBuilder(context)
+            .setTitle("Generate image")
+            .setView(input)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton("Generate") { _, _ ->
+                val prompt = input.text?.toString().orEmpty()
+                if (prompt.isBlank()) return@setPositiveButton
+                viewLifecycleOwner.lifecycleScope.launch {
+                    Toast.makeText(context, "Generating image…", Toast.LENGTH_SHORT).show()
+                    homeViewModel.generateImage(prompt, context.cacheDir).fold(
+                        onSuccess = { file ->
+                            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                            startActivity(Intent(Intent.ACTION_VIEW).apply {
+                                setDataAndType(uri, "image/*")
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            })
+                        },
+                        onFailure = { error ->
+                            Toast.makeText(context, "Image generation failed: ${error.message ?: "Unknown error"}", Toast.LENGTH_LONG).show()
+                        }
+                    )
+                }
+            }
+            .show()
     }
 
     private fun updateLoadingUi() {

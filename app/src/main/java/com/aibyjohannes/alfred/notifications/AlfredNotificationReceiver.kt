@@ -36,13 +36,14 @@ class AlfredNotificationReceiver : BroadcastReceiver() {
             return
         }
 
+        val isOneTimeReminder = intent.action == NotificationScheduler.ACTION_ONE_TIME_REMINDER
         val kind = when (intent.action) {
             NotificationScheduler.ACTION_INACTIVITY_REMINDER -> NotificationKind.INACTIVITY
             else -> NotificationKind.DAILY
         }
 
         val now = System.currentTimeMillis()
-        if (now - preferences.lastNotificationEpochMs < NotificationScheduler.NOTIFICATION_COOLDOWN_MS) {
+        if (!isOneTimeReminder && now - preferences.lastNotificationEpochMs < NotificationScheduler.NOTIFICATION_COOLDOWN_MS) {
             NotificationScheduler.rescheduleAll(context)
             return
         }
@@ -72,7 +73,9 @@ class AlfredNotificationReceiver : BroadcastReceiver() {
         val storage = runCatching {
             ChatHistoryLocationStore(context).createStorage()
         }.getOrNull()
-        val prompt = if (storage != null) {
+        val prompt = intent.getStringExtra(NotificationScheduler.EXTRA_REMINDER_MESSAGE)
+            ?.takeIf { isOneTimeReminder && it.isNotBlank() }
+            ?: if (storage != null) {
             NotificationPersonalizer(FileConversationStore(storage, context)).buildPrompt(kind)
         } else {
             NotificationPersonalizer.genericPrompt(kind)
@@ -87,7 +90,11 @@ class AlfredNotificationReceiver : BroadcastReceiver() {
             .setAutoCancel(true)
             .build()
 
-        notificationManager.notify(NOTIFICATION_ID, notification)
+        val notificationId = intent.getIntExtra(
+            NotificationScheduler.EXTRA_REMINDER_NOTIFICATION_ID,
+            NOTIFICATION_ID
+        )
+        notificationManager.notify(notificationId, notification)
         preferences.lastNotificationEpochMs = now
         if (kind == NotificationKind.INACTIVITY) {
             preferences.lastInactivityNotificationActivityEpochMs = preferences.lastChatActivityEpochMs

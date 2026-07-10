@@ -19,11 +19,14 @@ import com.aibyjohannes.alfred.core.model.ChatTurnResult
 import com.aibyjohannes.alfred.core.model.CoreChatMessage
 import com.aibyjohannes.alfred.core.model.CoreChatMessageKind
 import com.aibyjohannes.alfred.core.model.ToolCallTrace
+import com.aibyjohannes.alfred.core.reminders.ReminderClient
+import com.aibyjohannes.alfred.core.reminders.ReminderRequest
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchClient
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchRequest
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchResult
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSource
 import com.aibyjohannes.alfred.core.search.ObsidianClient
+import com.aibyjohannes.alfred.core.search.ObsidianCliEmulator
 import com.aibyjohannes.alfred.core.search.WebSearchClient
 import com.aibyjohannes.alfred.core.skills.SkillClient
 import com.aibyjohannes.alfred.core.skills.SkillSummary
@@ -35,7 +38,10 @@ import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
+import java.time.OffsetDateTime
+import java.security.MessageDigest
 
 class OpenRouterChatEngine(
     private val apiKey: String,
@@ -46,9 +52,14 @@ class OpenRouterChatEngine(
     private val tickTickClient: TickTickClient? = null,
     private val obsidianClient: ObsidianClient? = null,
     private val skillClient: SkillClient? = null,
-    private val maxAgentPasses: Int = 10
+    private val reminderClient: ReminderClient? = null,
+    private val maxAgentPasses: Int = 10,
+    private val efficiencyModeEnabled: Boolean = false,
+    private val privacyModeEnabled: Boolean = false,
+    sessionId: String? = null
 ) : ChatEngine {
     private val objectMapper = ObjectMapper()
+    private val openRouterSessionId = sessionId?.takeIf { it.isNotBlank() }?.let(::hashedSessionId)
     private val effectiveLocalKnowledgeSearchClient: LocalKnowledgeSearchClient =
         localKnowledgeSearchClient ?: EmptyLocalKnowledgeSearchClient
 
@@ -206,6 +217,8 @@ class OpenRouterChatEngine(
                             result.startsWith("Unknown tool", ignoreCase = true) ||
                             result.startsWith("TickTick failed", ignoreCase = true) ||
                             result.startsWith("TickTick integration is not configured", ignoreCase = true) ||
+                            result.startsWith("Reminder failed", ignoreCase = true) ||
+                            result.startsWith("Reminder scheduling is not configured", ignoreCase = true) ||
                             result.startsWith("Error:", ignoreCase = true) ||
                             result.startsWith("Unknown TickTick action", ignoreCase = true) ||
                             result.startsWith("Smart model delegation failed", ignoreCase = true) ||
@@ -353,10 +366,33 @@ class OpenRouterChatEngine(
                         type = ToolParameterType.String
                     )
                 )
+            ),
+            ToolDescriptor(
+                name = SCHEDULE_REMINDER_TOOL,
+                description = "Schedule a one-time local Alfred notification. Use only when the user explicitly asks for a reminder. The scheduled_at value must be a future ISO-8601 timestamp with an explicit UTC offset, based on the system context.",
+                requiredParameters = listOf(
+                    ToolParameterDescriptor(
+                        name = "message",
+                        description = "Short reminder text shown in the notification",
+                        type = ToolParameterType.String
+                    ),
+                    ToolParameterDescriptor(
+                        name = "scheduled_at",
+                        description = "Future ISO-8601 date-time with offset, for example 2026-07-10T09:00:00+02:00",
+                        type = ToolParameterType.String
+                    )
+                )
             )
         )
 
         if (obsidianClient != null) {
+            alfredTools.add(
+                ToolDescriptor(
+                    name = OBSIDIAN_CLI_TOOL,
+                    description = "Run one safe Obsidian CLI-style command against the user-selected vault. Commands must start with 'obsidian' and support only read, search, files, folders, create, write, append, rename, move, and delete. This is not a system shell.",
+                    requiredParameters = listOf(ToolParameterDescriptor("command", "One Obsidian-style command, e.g. obsidian read path=\"Projects/Alfred.md\"", ToolParameterType.String))
+                )
+            )
             alfredTools.add(
                 ToolDescriptor(
                     name = OBSIDIAN_SEARCH_TOOL,
@@ -624,15 +660,7 @@ class OpenRouterChatEngine(
         reasoningEnabled: Boolean,
         skills: List<SkillSummary>
     ): Prompt {
-        val params = if (reasoningEnabled) {
-            LLMParams(
-                additionalProperties = mapOf(
-                    "reasoning" to JsonObject(mapOf("effort" to JsonPrimitive("low")))
-                )
-            )
-        } else {
-            LLMParams()
-        }
+        val params = LLMParams(additionalProperties = requestAdditionalProperties(reasoningEnabled))
 
         return prompt("alfred-openrouter-chat", params) {
             system(prompt)
@@ -848,7 +876,8 @@ class OpenRouterChatEngine(
         )
     }
 
-    internal suspend fun executeToolCall(functionName: String, arguments: String): String {
+    internal suspend fun executeToolCall(functionName: String, rawArguments: String): String {
+        val arguments = normalizeToolArguments(rawArguments)
         return when (functionName) {
             WEB_SEARCH_FUNCTION_NAME -> {
                 val query = extractWebSearchQuery(arguments)
@@ -886,6 +915,26 @@ class OpenRouterChatEngine(
                         "Smart model delegation failed: ${e.message}"
                     }
                 }
+            }
+
+            SCHEDULE_REMINDER_TOOL -> {
+                val request = extractReminderRequest(arguments)
+                if (request == null) {
+                    "Reminder failed: provide a non-empty 'message' and a future ISO-8601 'scheduled_at' value with an explicit offset."
+                } else {
+                    reminderClient?.scheduleReminder(request)?.fold(
+                        onSuccess = { it },
+                        onFailure = { "Reminder failed: ${it.message}" }
+                    ) ?: "Reminder scheduling is not configured."
+                }
+            }
+
+            OBSIDIAN_CLI_TOOL -> {
+                val command = runCatching { objectMapper.readTree(arguments).path("command").asText() }.getOrNull()
+                if (command.isNullOrBlank()) "Obsidian CLI failed: missing required 'command' argument."
+                else obsidianClient?.let { ObsidianCliEmulator(it).execute(command) }?.fold(
+                    onSuccess = { it }, onFailure = { "Obsidian CLI failed: ${it.message}" }
+                ) ?: "Obsidian integration is not configured."
             }
 
             OBSIDIAN_SEARCH_TOOL -> {
@@ -1151,6 +1200,51 @@ class OpenRouterChatEngine(
         }
     }
 
+    /** Accept a common model mistake: wrapping a tool's input in a result envelope. */
+    fun normalizeToolArguments(rawArguments: String): String = try {
+        val node = objectMapper.readTree(rawArguments)
+        if (!node.isObject || node.size() != 1 || !node.has("result")) rawArguments else {
+            val result = node.path("result")
+            when {
+                result.isObject -> objectMapper.writeValueAsString(result)
+                result.isTextual && result.asText().trim().startsWith("{") -> result.asText()
+                else -> rawArguments
+            }
+        }
+    } catch (_: Exception) { rawArguments }
+
+    fun requestAdditionalProperties(reasoningEnabled: Boolean): Map<String, JsonElement> = buildMap {
+        if (reasoningEnabled) {
+            put("reasoning", JsonObject(mapOf("effort" to JsonPrimitive("low"))))
+        }
+        if (privacyModeEnabled) {
+            put("provider", JsonObject(mapOf("zdr" to JsonPrimitive(true))))
+        }
+        if (efficiencyModeEnabled && openRouterSessionId != null) {
+            put("session_id", JsonPrimitive(openRouterSessionId))
+        }
+    }
+
+    private fun hashedSessionId(conversationId: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(conversationId.toByteArray(Charsets.UTF_8))
+            .joinToString(separator = "") { byte -> "%02x".format(byte) }
+        return "alfred-$digest"
+    }
+
+    internal fun extractReminderRequest(argumentsJson: String): ReminderRequest? {
+        return try {
+            val node = objectMapper.readTree(argumentsJson)
+            val message = node.path("message").asText(null)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            val scheduledAt = node.path("scheduled_at").asText(null)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            val triggerAtEpochMs = OffsetDateTime.parse(scheduledAt).toInstant().toEpochMilli()
+            if (triggerAtEpochMs <= System.currentTimeMillis()) return null
+            ReminderRequest(message, triggerAtEpochMs)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     internal fun extractLocalKnowledgeSearchRequest(argumentsJson: String): LocalKnowledgeSearchRequest? {
         return try {
             val node = objectMapper.readTree(argumentsJson)
@@ -1354,6 +1448,8 @@ class OpenRouterChatEngine(
         const val LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME = "SearchLocalKnowledgeTool"
         const val TICKTICK_FUNCTION_NAME = "TickTickTool"
         const val ASK_SMART_MODEL_FUNCTION_NAME = "AskSmartModelTool"
+        const val SCHEDULE_REMINDER_TOOL = "ScheduleReminderTool"
+        const val OBSIDIAN_CLI_TOOL = "RunObsidianCliTool"
         const val OBSIDIAN_SEARCH_TOOL = "SearchObsidianVaultTool"
         const val OBSIDIAN_LIST_FOLDER_TOOL = "ListObsidianFolderTool"
         const val OBSIDIAN_READ_TOOL = "ReadObsidianNoteTool"

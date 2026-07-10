@@ -65,6 +65,7 @@ class SettingsFragment : Fragment() {
 
         setupButtons()
         setupProfileControls()
+        setupEfficiencyPrivacyControls()
         setupNotificationControls()
         updateStatus()
         updateNotificationControls()
@@ -149,6 +150,28 @@ class SettingsFragment : Fragment() {
             }
 
             picker.show(parentFragmentManager, "notification_time_picker")
+        }
+    }
+
+    private fun setupEfficiencyPrivacyControls() {
+        binding.efficiencyModeSwitch.isChecked = apiKeyStore.isEfficiencyModeEnabled()
+        binding.privacyModeSwitch.isChecked = apiKeyStore.isPrivacyModeEnabled()
+
+        binding.efficiencyModeSwitch.setOnCheckedChangeListener { _, enabled ->
+            apiKeyStore.saveEfficiencyMode(enabled)
+            Snackbar.make(
+                binding.root,
+                if (enabled) "Cache-efficient routing enabled" else "Cache-efficient routing disabled",
+                Snackbar.LENGTH_SHORT
+            ).show()
+        }
+        binding.privacyModeSwitch.setOnCheckedChangeListener { _, enabled ->
+            apiKeyStore.savePrivacyMode(enabled)
+            Snackbar.make(
+                binding.root,
+                if (enabled) "Zero data retention routing enabled" else "Zero data retention routing disabled",
+                Snackbar.LENGTH_SHORT
+            ).show()
         }
     }
 

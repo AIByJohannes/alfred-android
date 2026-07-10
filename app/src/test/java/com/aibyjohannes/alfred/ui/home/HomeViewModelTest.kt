@@ -111,6 +111,31 @@ class HomeViewModelTest {
     }
 
     @Test
+    fun `cold start creates a fresh conversation instead of restoring the previous one`() = runTest {
+        val workspace = WorkspaceSummary("1", "Personal")
+        val newConversation = ConversationSummary("new", null, System.currentTimeMillis())
+
+        every { apiKeyStore.hasApiKey() } returns true
+        coEvery { conversationStore.getOrCreateActiveWorkspace() } returns workspace
+        coEvery { conversationStore.listWorkspaces() } returns listOf(workspace)
+        coEvery { conversationStore.createConversation() } returns newConversation
+        coEvery { conversationStore.loadMessages("new") } returns emptyList()
+        coEvery { conversationStore.listConversations() } returns listOf(newConversation)
+
+        viewModel.initialize(
+            apiKeyStore = apiKeyStore,
+            repository = repository,
+            conversationStore = conversationStore,
+            startWithNewConversation = true
+        )
+        testScheduler.advanceUntilIdle()
+
+        coVerify(exactly = 1) { conversationStore.createConversation() }
+        coVerify(exactly = 0) { conversationStore.getOrCreateActiveConversation() }
+        assertEquals("new", viewModel.activeConversationId.value)
+    }
+
+    @Test
     fun `createConversationAndSwitch is idempotent if current is empty`() = runTest {
         // Arrange
         val initialConversation = ConversationSummary("1", null, System.currentTimeMillis())
@@ -181,7 +206,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
         coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
-        every { repository.streamMessage(any(), any(), any()) } returns flow
+        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flow
 
         viewModel.initialize(apiKeyStore, repository, conversationStore)
         testScheduler.advanceUntilIdle()
@@ -390,7 +415,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
         coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
-        every { repository.streamMessage(any(), any(), any()) } returns flowOf(
+        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flowOf(
             ChatStreamEvent.PassStarted(0),
             ChatStreamEvent.TextDelta(0, "Hello"),
             ChatStreamEvent.Completed(
@@ -423,7 +448,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
         coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
-        every { repository.streamMessage(any(), any(), any()) } returns flowOf(
+        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flowOf(
             ChatStreamEvent.PassStarted(0),
             ChatStreamEvent.ReasoningDelta(
                 passIndex = 0,
@@ -520,7 +545,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
         coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
-        every { repository.streamMessage(any(), any(), any()) } returns flowOf(
+        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flowOf(
             ChatStreamEvent.PassStarted(0),
             ChatStreamEvent.TextDelta(0, "I should check first."),
             ChatStreamEvent.ToolCallRequested(
@@ -576,7 +601,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
         coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
-        every { repository.streamMessage(any(), any(), any()) } returns flowOf(
+        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flowOf(
             ChatStreamEvent.PassStarted(0),
             ChatStreamEvent.ReasoningDelta(
                 passIndex = 0,
@@ -627,7 +652,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
         coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
-        every { repository.streamMessage(any(), any(), any()) } returns flowOf(
+        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flowOf(
             ChatStreamEvent.PassStarted(0),
             ChatStreamEvent.ReasoningDelta(
                 passIndex = 0,
@@ -686,7 +711,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
         coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
-        every { repository.streamMessage(any(), any(), any()) } returns flowOf(
+        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flowOf(
             ChatStreamEvent.PassStarted(0),
             ChatStreamEvent.ToolCallDelta(
                 passIndex = 0,
@@ -743,7 +768,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
         coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
-        every { repository.streamMessage(any(), any(), any()) } returns flow
+        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flow
 
         viewModel.initialize(apiKeyStore, repository, conversationStore)
         testScheduler.advanceUntilIdle()
@@ -846,6 +871,100 @@ class HomeViewModelTest {
     }
 
     @Test
+    fun `sendMessage keeps the CPU awake until the stream completes`() = runTest {
+        val conversation = ConversationSummary("1", null, System.currentTimeMillis())
+        val chatRunPowerKeeper = object : ChatRunPowerKeeper {
+            var isHeld = false
+            var acquireCalls = 0
+            var releaseCalls = 0
+
+            override fun acquire() {
+                isHeld = true
+                acquireCalls++
+            }
+
+            override fun release() {
+                isHeld = false
+                releaseCalls++
+            }
+        }
+
+        every { apiKeyStore.hasApiKey() } returns true
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
+        coEvery { conversationStore.loadMessages("1") } returns emptyList()
+        coEvery { conversationStore.listConversations() } returns listOf(conversation)
+        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns kotlinx.coroutines.flow.flow {
+            assertTrue(chatRunPowerKeeper.isHeld)
+            emit(
+                ChatStreamEvent.Completed(
+                    ChatTurnResult(
+                        content = "Done.",
+                        toolCalls = emptyList(),
+                        intermediateMessages = emptyList()
+                    )
+                )
+            )
+        }
+
+        viewModel.initialize(
+            apiKeyStore = apiKeyStore,
+            repository = repository,
+            conversationStore = conversationStore,
+            chatRunPowerKeeper = chatRunPowerKeeper
+        )
+        testScheduler.advanceUntilIdle()
+
+        viewModel.sendMessage("Keep working while the screen is off")
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(1, chatRunPowerKeeper.acquireCalls)
+        assertEquals(1, chatRunPowerKeeper.releaseCalls)
+        assertTrue(!chatRunPowerKeeper.isHeld)
+    }
+
+    @Test
+    fun `sendMessage releases the CPU wake lock when streaming fails`() = runTest {
+        val conversation = ConversationSummary("1", null, System.currentTimeMillis())
+        val chatRunPowerKeeper = object : ChatRunPowerKeeper {
+            var isHeld = false
+            var releaseCalls = 0
+
+            override fun acquire() {
+                isHeld = true
+            }
+
+            override fun release() {
+                isHeld = false
+                releaseCalls++
+            }
+        }
+
+        every { apiKeyStore.hasApiKey() } returns true
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
+        coEvery { conversationStore.loadMessages("1") } returns emptyList()
+        coEvery { conversationStore.listConversations() } returns listOf(conversation)
+        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns kotlinx.coroutines.flow.flow {
+            assertTrue(chatRunPowerKeeper.isHeld)
+            throw IllegalStateException("Network interrupted")
+        }
+
+        viewModel.initialize(
+            apiKeyStore = apiKeyStore,
+            repository = repository,
+            conversationStore = conversationStore,
+            chatRunPowerKeeper = chatRunPowerKeeper
+        )
+        testScheduler.advanceUntilIdle()
+
+        viewModel.sendMessage("Do not leak a wake lock")
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(1, chatRunPowerKeeper.releaseCalls)
+        assertTrue(!chatRunPowerKeeper.isHeld)
+        assertEquals(false, viewModel.isLoading.value)
+    }
+
+    @Test
     fun `sendMessage preserves user message content during reasoning and tool call streaming`() = runTest {
         val conversation = ConversationSummary("1", null, System.currentTimeMillis())
         val flow = kotlinx.coroutines.flow.MutableSharedFlow<ChatStreamEvent>()
@@ -854,7 +973,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
         coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
-        every { repository.streamMessage(any(), any(), any()) } returns flow
+        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flow
 
         viewModel.initialize(apiKeyStore, repository, conversationStore)
         testScheduler.advanceUntilIdle()

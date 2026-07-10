@@ -1,14 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string-array name="model_labels">
+        <item>Gemini Flash Latest - Fastest (Default)</item>
         <item>Gemini 3.5 Flash</item>
-        <item>DeepSeek V4 Flash (Default)</item>
+        <item>DeepSeek V4 Flash</item>
         <item>Gemma 4 31B</item>
         <item>Gemma 4 26B MoE</item>
         <item>Qwen 3 Next 80B</item>
         <item>OpenRouter Auto Router</item>
     </string-array>
     <string-array name="model_short_labels">
+        <item>Gemini Flash Fast</item>
         <item>Gemini 3.5</item>
         <item>DeepSeek V4 Flash</item>
         <item>Gemma 4 31B</item>
@@ -17,6 +19,7 @@
         <item>OR Auto Router</item>
     </string-array>
     <string-array name="model_toolbar_labels">
+        <item>Flash Fast</item>
         <item>3.5 Flash</item>
         <item>DS V4 Flash</item>
         <item>G4 31B</item>
@@ -25,6 +28,7 @@
         <item>OR Auto</item>
     </string-array>
     <string-array name="model_values">
+        <item>~google/gemini-flash-latest:nitro</item>
         <item>google/gemini-3.5-flash</item>
         <item>deepseek/deepseek-v4-flash</item>
         <item>google/gemma-4-31b-it</item>

@@ -41,6 +41,12 @@ class NotificationSchedulerTest {
         every { anyConstructed<Intent>().action } answers {
             intentActions[invocation.self as Intent]
         }
+        every { anyConstructed<Intent>().putExtra(any<String>(), any<String>()) } answers {
+            invocation.self as Intent
+        }
+        every { anyConstructed<Intent>().putExtra(any<String>(), any<Int>()) } answers {
+            invocation.self as Intent
+        }
         every { PendingIntent.getBroadcast(any(), any(), any(), any()) } answers {
             val request = PendingIntentRequest(
                 requestCode = secondArg(),
@@ -51,7 +57,7 @@ class NotificationSchedulerTest {
             when (request.requestCode) {
                 1001 -> dailyPendingIntent
                 1002 -> inactivityPendingIntent
-                else -> error("Unexpected reminder request code ${request.requestCode}")
+                else -> mockk(relaxed = true)
             }
         }
     }
@@ -197,6 +203,18 @@ class NotificationSchedulerTest {
                 inactivityPendingIntent
             )
         }
+    }
+
+    @Test
+    fun `one time reminder schedules its exact trigger and unique action`() {
+        val triggerAt = System.currentTimeMillis() + 5 * 60 * 1000L
+
+        NotificationScheduler.scheduleOneTimeReminder(context, "Take a break", triggerAt)
+
+        verify(exactly = 1) { alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, any()) }
+        assertTrue(
+            pendingIntentRequests.any { it.action == NotificationScheduler.ACTION_ONE_TIME_REMINDER }
+        )
     }
 
     private fun assertPendingIntent(requestCode: Int, action: String) {

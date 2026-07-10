@@ -11,6 +11,7 @@ import com.aibyjohannes.alfred.core.model.CoreChatMessage
 import com.aibyjohannes.alfred.core.model.CoreChatMessageKind
 import com.aibyjohannes.alfred.core.search.PerplexitySearchClient
 import com.aibyjohannes.alfred.core.search.WebSearchClient
+import com.aibyjohannes.alfred.core.reminders.ReminderClient
 import com.aibyjohannes.alfred.core.skills.SkillClient
 import com.aibyjohannes.alfred.core.ticktick.TickTickClient
 import com.aibyjohannes.alfred.core.ticktick.TickTickCredentials
@@ -18,6 +19,7 @@ import com.aibyjohannes.alfred.core.ticktick.TickTickCredentialsProvider
 import com.aibyjohannes.alfred.data.api.ChatMessage
 import com.aibyjohannes.alfred.core.audio.OpenRouterAudioClient
 import com.aibyjohannes.alfred.core.audio.OpenRouterTtsClient
+import com.aibyjohannes.alfred.core.image.OpenRouterImageClient
 import com.fasterxml.jackson.annotation.JsonClassDescription
 import com.fasterxml.jackson.annotation.JsonPropertyDescription
 import kotlinx.coroutines.flow.Flow
@@ -46,6 +48,7 @@ class ChatRepository private constructor(
     private val obsidianClient: ObsidianClient? = null,
     private val obsidianClientProvider: (() -> ObsidianClient?)? = null,
     private val skillClient: SkillClient? = null,
+    private val reminderClient: ReminderClient? = null,
     private val dependencies: ChatRepositoryDependencies
 ) {
     constructor(
@@ -53,20 +56,22 @@ class ChatRepository private constructor(
         localKnowledgeSearchClient: LocalKnowledgeSearchClient? = null,
         obsidianClient: ObsidianClient? = null,
         obsidianClientProvider: (() -> ObsidianClient?)? = null,
-        skillClient: SkillClient? = null
+        skillClient: SkillClient? = null,
+        reminderClient: ReminderClient? = null
     ) : this(
         apiKeyStore,
         localKnowledgeSearchClient,
         obsidianClient,
         obsidianClientProvider,
         skillClient,
+        reminderClient,
         ChatRepositoryDependencies()
     )
 
     internal constructor(
         apiKeyStore: ApiKeyStore,
         dependencies: ChatRepositoryDependencies
-    ) : this(apiKeyStore, null, null, null, null, dependencies)
+    ) : this(apiKeyStore, null, null, null, null, null, dependencies)
 
     suspend fun transcribeAudio(audioFile: java.io.File): Result<String> {
         val apiKey = loadApiKey()
@@ -117,11 +122,12 @@ class ChatRepository private constructor(
         userMessage: String,
         conversationHistory: List<ChatMessage>,
         sysInfo: String? = null,
-        maxPasses: Int? = null
+        maxPasses: Int? = null,
+        sessionId: String? = null
     ): Flow<ChatStreamEvent> {
         val apiKey = loadApiKey()
             ?: throw IllegalStateException("API key not configured. Please add your OpenRouter API key in Settings.")
-        return createEngine(apiKey, sysInfo, maxPasses).streamMessage(
+        return createEngine(apiKey, sysInfo, maxPasses, sessionId).streamMessage(
             userMessage = userMessage,
             conversationHistory = conversationHistory.toCoreMessages()
         )
@@ -150,7 +156,12 @@ class ChatRepository private constructor(
         )
     }
 
-    private fun createEngine(apiKey: String, sysInfo: String? = null, maxPasses: Int? = null): ChatEngine {
+    private fun createEngine(
+        apiKey: String,
+        sysInfo: String? = null,
+        maxPasses: Int? = null,
+        sessionId: String? = null
+    ): ChatEngine {
         val model = apiKeyStore.loadModel()
         val resolvedMaxPasses = maxPasses ?: 10
         dependencies.chatEngineFactory?.let { factory ->
@@ -187,7 +198,11 @@ class ChatRepository private constructor(
             tickTickClient = tickTickClient,
             obsidianClient = resolveObsidianClient(),
             skillClient = resolveSkillClient(),
-            maxAgentPasses = resolvedMaxPasses
+            reminderClient = reminderClient,
+            maxAgentPasses = resolvedMaxPasses,
+            efficiencyModeEnabled = apiKeyStore.isEfficiencyModeEnabled(),
+            privacyModeEnabled = apiKeyStore.isPrivacyModeEnabled(),
+            sessionId = sessionId
         )
     }
 
@@ -205,6 +220,22 @@ class ChatRepository private constructor(
         return when (apiKeyStore.loadSearchTool()) {
             SEARCH_TOOL_GROK -> GrokSearchClient(apiKey = apiKey, model = GROK_SEARCH_MODEL)
             else -> PerplexitySearchClient(apiKey = apiKey, model = PERPLEXITY_MODEL)
+        }
+    }
+
+    suspend fun generateImage(prompt: String, outputFile: File): Result<File> {
+        val apiKey = loadApiKey()
+            ?: return Result.failure(Exception("API key not configured. Please add your OpenRouter API key in Settings."))
+        return try {
+            OpenRouterImageClient(apiKey).use { client ->
+                client.generate(prompt).map { image ->
+                    outputFile.parentFile?.mkdirs()
+                    outputFile.writeBytes(image.bytes)
+                    outputFile
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 

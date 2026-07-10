@@ -5,6 +5,8 @@ import ai.koog.prompt.Prompt
 import ai.koog.prompt.streaming.StreamFrame
 import com.aibyjohannes.alfred.core.model.ChatStreamEvent
 import com.aibyjohannes.alfred.core.model.CoreChatMessageKind
+import com.aibyjohannes.alfred.core.reminders.ReminderClient
+import com.aibyjohannes.alfred.core.reminders.ReminderRequest
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchClient
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchRequest
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchResult
@@ -16,12 +18,40 @@ import io.mockk.*
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.OffsetDateTime
 
 class OpenRouterChatEngineToolParsingTest {
+    @Test
+    fun `result envelopes are normalized before tool argument parsing`() {
+        val engine = OpenRouterChatEngine(apiKey = "test", webSearchClient = mockk())
+
+        assertEquals("{\"query\":\"weather\"}", engine.normalizeToolArguments("{\"result\":{\"query\":\"weather\"}}"))
+        assertEquals("{\"path\":\"Daily.md\"}", engine.normalizeToolArguments("{\"result\":\"{\\\"path\\\":\\\"Daily.md\\\"}\"}"))
+    }
+    @Test
+    fun `efficiency and privacy settings add OpenRouter routing preferences`() {
+        val engine = OpenRouterChatEngine(
+            apiKey = "test",
+            webSearchClient = mockk(),
+            efficiencyModeEnabled = true,
+            privacyModeEnabled = true,
+            sessionId = "local-conversation-id"
+        )
+
+        val properties = engine.requestAdditionalProperties(reasoningEnabled = true)
+
+        assertEquals(JsonPrimitive(true), (properties["provider"] as JsonObject)["zdr"])
+        assertTrue((properties["session_id"] as JsonPrimitive).content.startsWith("alfred-"))
+        assertTrue("local-conversation-id" !in (properties["session_id"] as JsonPrimitive).content)
+        assertTrue(properties.containsKey("reasoning"))
+    }
+
     @Test
     fun `local knowledge tool name is exposed`() {
         assertEquals("SearchLocalKnowledgeTool", OpenRouterChatEngine.LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME)
@@ -70,10 +100,36 @@ class OpenRouterChatEngineToolParsingTest {
                 OpenRouterChatEngine.WEB_SEARCH_FUNCTION_NAME,
                 OpenRouterChatEngine.LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME,
                 OpenRouterChatEngine.ASK_SMART_MODEL_FUNCTION_NAME,
+                OpenRouterChatEngine.SCHEDULE_REMINDER_TOOL,
                 "mcp_tool_name"
             ),
             tools.map { it?.javaClass?.getMethod("getName")?.invoke(it) }
         )
+    }
+
+    @Test
+    fun `reminder tool schedules a future dated notification`() = runTest {
+        val reminderClient = mockk<ReminderClient>()
+        val scheduledAt = OffsetDateTime.now().plusMinutes(5).withNano(0)
+        coEvery { reminderClient.scheduleReminder(any()) } returns Result.success("Reminder scheduled")
+        val engine = OpenRouterChatEngine(
+            apiKey = "test",
+            webSearchClient = mockk(),
+            reminderClient = reminderClient
+        )
+
+        val result = executeToolCall(
+            engine,
+            OpenRouterChatEngine.SCHEDULE_REMINDER_TOOL,
+            """{"message":"Stretch","scheduled_at":"$scheduledAt"}"""
+        )
+
+        assertEquals("Reminder scheduled", result)
+        coVerify {
+            reminderClient.scheduleReminder(
+                ReminderRequest("Stretch", scheduledAt.toInstant().toEpochMilli())
+            )
+        }
     }
 
     @Test
