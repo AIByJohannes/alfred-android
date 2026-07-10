@@ -164,4 +164,5 @@
     <string name="onboarding_notifications_status_granted">Access Granted</string>
     <string name="onboarding_notifications_status_denied">Access Optional</string>
     <string name="onboarding_get_started">Get Started</string>
+    <string name="retry">Retry</string>
 </resources>

@@ -18,8 +18,11 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.view.inputmethod.EditorInfo
+import android.net.Uri
+import android.provider.Settings
 import android.widget.EditText
 import android.widget.Toast
+import com.google.android.material.snackbar.Snackbar
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -59,9 +62,20 @@ class HomeFragment : Fragment() {
     private var isInVoiceMode = false
     private var isStreamingResponse = false
     private var isConversationLoading = false
-    private var wasStreamingResponse = false
-    private var wasConversationLoading = false
     private val conversationLoadingAnimators = mutableListOf<Animator>()
+
+    private fun showPermissionSnackbar() {
+        Snackbar.make(
+            binding.root,
+            R.string.transcription_permission_required,
+            Snackbar.LENGTH_LONG
+        ).setAction(R.string.menu_settings) {
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.fromParts("package", requireContext().packageName, null)
+            }
+            startActivity(intent)
+        }.show()
+    }
 
     private val recordAudioPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -69,11 +83,7 @@ class HomeFragment : Fragment() {
         if (isGranted) {
             toggleRecording()
         } else {
-            Toast.makeText(
-                context,
-                getString(R.string.transcription_permission_required),
-                Toast.LENGTH_SHORT
-            ).show()
+            showPermissionSnackbar()
         }
     }
 
@@ -83,11 +93,7 @@ class HomeFragment : Fragment() {
         if (isGranted) {
             startListening()
         } else {
-            Toast.makeText(
-                context,
-                getString(R.string.transcription_permission_required),
-                Toast.LENGTH_SHORT
-            ).show()
+            showPermissionSnackbar()
         }
     }
 
@@ -319,13 +325,26 @@ class HomeFragment : Fragment() {
                         // sendMessage will stream to the chat; we wait for ttsAudioFile observer
                         homeViewModel.sendMessage(text)
                     } else {
-                        Toast.makeText(ctx, getString(R.string.transcription_failed, "No speech detected"), Toast.LENGTH_SHORT).show()
                         endVoiceMode()
+                        Snackbar.make(
+                            binding.root,
+                            getString(R.string.transcription_failed, "No speech detected"),
+                            Snackbar.LENGTH_LONG
+                        ).setAction(R.string.retry) {
+                            onWaveButtonTapped()
+                        }.show()
                     }
                 },
                 onFailure = { error ->
-                    Toast.makeText(ctx, getString(R.string.transcription_failed, error.message ?: "Unknown error"), Toast.LENGTH_LONG).show()
+                    val errorMsg = error.message ?: "Unknown error"
                     endVoiceMode()
+                    Snackbar.make(
+                        binding.root,
+                        getString(R.string.transcription_failed, errorMsg),
+                        Snackbar.LENGTH_LONG
+                    ).setAction(R.string.retry) {
+                        onWaveButtonTapped()
+                    }.show()
                 }
             )
         }
@@ -354,7 +373,7 @@ class HomeFragment : Fragment() {
                 }
                 start()
             } catch (e: Exception) {
-                Toast.makeText(ctx, getString(R.string.tts_error, e.message ?: "Playback error"), Toast.LENGTH_SHORT).show()
+                Snackbar.make(binding.root, getString(R.string.tts_error, e.message ?: "Playback error"), Snackbar.LENGTH_LONG).show()
                 file.delete()
                 endVoiceMode()
             }
@@ -478,19 +497,11 @@ class HomeFragment : Fragment() {
         }
 
         homeViewModel.isLoading.observe(viewLifecycleOwner) { isLoading ->
-            if (isLoading && !wasStreamingResponse) {
-                Toast.makeText(context, "Sending message…", Toast.LENGTH_SHORT).show()
-            }
-            wasStreamingResponse = isLoading
             isStreamingResponse = isLoading
             updateLoadingUi()
         }
 
         homeViewModel.isConversationLoading.observe(viewLifecycleOwner) { loading ->
-            if (loading && !wasConversationLoading) {
-                Toast.makeText(context, "Loading chat…", Toast.LENGTH_SHORT).show()
-            }
-            wasConversationLoading = loading
             isConversationLoading = loading
             updateLoadingUi()
         }
@@ -501,11 +512,13 @@ class HomeFragment : Fragment() {
 
         homeViewModel.storageError.observe(viewLifecycleOwner) { detail ->
             if (!detail.isNullOrBlank()) {
-                Toast.makeText(
-                    context,
+                Snackbar.make(
+                    binding.root,
                     getString(R.string.chat_history_temporarily_unavailable, detail),
-                    Toast.LENGTH_LONG
-                ).show()
+                    Snackbar.LENGTH_LONG
+                ).setAction(R.string.retry) {
+                    homeViewModel.retryChatHistoryLoad()
+                }.show()
                 homeViewModel.consumeStorageError()
             }
         }
@@ -539,23 +552,34 @@ class HomeFragment : Fragment() {
             .setPositiveButton("Generate") { _, _ ->
                 val prompt = input.text?.toString().orEmpty()
                 if (prompt.isBlank()) return@setPositiveButton
-                viewLifecycleOwner.lifecycleScope.launch {
-                    Toast.makeText(context, "Generating image…", Toast.LENGTH_SHORT).show()
-                    homeViewModel.generateImage(prompt, context.cacheDir).fold(
-                        onSuccess = { file ->
-                            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-                            startActivity(Intent(Intent.ACTION_VIEW).apply {
-                                setDataAndType(uri, "image/*")
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            })
-                        },
-                        onFailure = { error ->
-                            Toast.makeText(context, "Image generation failed: ${error.message ?: "Unknown error"}", Toast.LENGTH_LONG).show()
-                        }
-                    )
-                }
+                generateImage(prompt)
             }
             .show()
+    }
+
+    private fun generateImage(prompt: String) {
+        val context = context ?: return
+        viewLifecycleOwner.lifecycleScope.launch {
+            Toast.makeText(context, "Generating image…", Toast.LENGTH_SHORT).show()
+            homeViewModel.generateImage(prompt, context.cacheDir).fold(
+                onSuccess = { file ->
+                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                    startActivity(Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(uri, "image/*")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    })
+                },
+                onFailure = { error ->
+                    Snackbar.make(
+                        binding.root,
+                        "Image generation failed: ${error.message ?: "Unknown error"}",
+                        Snackbar.LENGTH_LONG
+                    ).setAction(R.string.retry) {
+                        generateImage(prompt)
+                    }.show()
+                }
+            )
+        }
     }
 
     private fun updateLoadingUi() {
@@ -651,8 +675,14 @@ class HomeFragment : Fragment() {
                     homeViewModel.emitTtsFile(file)
                 },
                 onFailure = { error ->
-                    Toast.makeText(ctx, getString(R.string.tts_error, error.message ?: "Unknown error"), Toast.LENGTH_LONG).show()
                     endVoiceMode()
+                    Snackbar.make(
+                        binding.root,
+                        getString(R.string.tts_error, error.message ?: "Unknown error"),
+                        Snackbar.LENGTH_LONG
+                    ).setAction(R.string.retry) {
+                        synthesizeAndEmitTts(text)
+                    }.show()
                 }
             )
         }
@@ -758,7 +788,13 @@ class HomeFragment : Fragment() {
                 },
                 onFailure = { error ->
                     val errorMsg = error.message ?: "Unknown error"
-                    Toast.makeText(context, getString(R.string.transcription_failed, errorMsg), Toast.LENGTH_LONG).show()
+                    Snackbar.make(
+                        binding.root,
+                        getString(R.string.transcription_failed, errorMsg),
+                        Snackbar.LENGTH_LONG
+                    ).setAction(R.string.retry) {
+                        toggleRecording()
+                    }.show()
                 }
             )
             audioFile.delete()
