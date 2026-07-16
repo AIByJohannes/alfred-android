@@ -1,5 +1,6 @@
 package com.aibyjohannes.alfred.core.search
 
+import com.aibyjohannes.alfred.core.openrouter.OpenRouterAttribution
 import com.openai.client.OpenAIClient
 import com.openai.client.okhttp.OpenAIOkHttpClient
 import com.openai.core.JsonValue
@@ -19,6 +20,7 @@ class GrokSearchClient(
         return OpenAIOkHttpClient.builder()
             .apiKey(apiKey)
             .baseUrl("https://openrouter.ai/api/v1")
+            .apply { OpenRouterAttribution.headers.forEach { (name, value) -> putHeader(name, value) } }
             .build()
     }
 

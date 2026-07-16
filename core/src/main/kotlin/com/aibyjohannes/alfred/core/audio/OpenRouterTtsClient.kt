@@ -1,5 +1,6 @@
 package com.aibyjohannes.alfred.core.audio
 
+import com.aibyjohannes.alfred.core.openrouter.OpenRouterAttribution
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
@@ -47,6 +48,7 @@ class OpenRouterTtsClient(
 
             val response = client.post("https://openrouter.ai/api/v1/audio/speech") {
                 header("Authorization", "Bearer $apiKey")
+                OpenRouterAttribution.headers.forEach { (name, value) -> header(name, value) }
                 contentType(ContentType.Application.Json)
                 setBody(jsonRequestBody)
             }

@@ -99,7 +99,7 @@ class OpenRouterChatEngineToolParsingTest {
             listOf(
                 OpenRouterChatEngine.WEB_SEARCH_FUNCTION_NAME,
                 OpenRouterChatEngine.LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME,
-                OpenRouterChatEngine.ASK_SMART_MODEL_FUNCTION_NAME,
+                OpenRouterChatEngine.CREATE_PLAN_FUNCTION_NAME,
                 OpenRouterChatEngine.SCHEDULE_REMINDER_TOOL,
                 "mcp_tool_name"
             ),
@@ -476,7 +476,7 @@ class OpenRouterChatEngineToolParsingTest {
         )
         every { client.close() } just Runs
 
-        val result = executeToolCall(engine, OpenRouterChatEngine.ASK_SMART_MODEL_FUNCTION_NAME, """{"task_details":"reason about this"}""")
+        val result = executeToolCall(engine, OpenRouterChatEngine.CREATE_PLAN_FUNCTION_NAME, """{"task_details":"reason about this"}""")
         assertEquals("Smart plan content", result)
     }
 
@@ -490,14 +490,14 @@ class OpenRouterChatEngineToolParsingTest {
         coEvery { client.executeStreaming(any(), any(), any()) } throws RuntimeException("streaming error")
         every { client.close() } just Runs
 
-        val result = executeToolCall(engine, OpenRouterChatEngine.ASK_SMART_MODEL_FUNCTION_NAME, """{"task_details":"reason about this"}""")
+        val result = executeToolCall(engine, OpenRouterChatEngine.CREATE_PLAN_FUNCTION_NAME, """{"task_details":"reason about this"}""")
         assertEquals("Smart model delegation failed: streaming error", result)
     }
 
     @Test
     fun `executeToolCall ask_smart_model missing task_details`() = runTest {
         val engine = OpenRouterChatEngine(apiKey = "test", webSearchClient = mockk())
-        val result = executeToolCall(engine, OpenRouterChatEngine.ASK_SMART_MODEL_FUNCTION_NAME, """{"context":"context info"}""")
+        val result = executeToolCall(engine, OpenRouterChatEngine.CREATE_PLAN_FUNCTION_NAME, """{"context":"context info"}""")
         assertEquals("Smart model delegation failed: missing required 'task_details' argument.", result)
     }
 

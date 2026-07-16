@@ -4,6 +4,7 @@ import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolParameterDescriptor
 import ai.koog.agents.core.tools.ToolParameterType
 import ai.koog.http.client.ktor.KtorKoogHttpClient
+import ai.koog.http.client.KoogHttpClient
 import ai.koog.prompt.Prompt
 import ai.koog.prompt.dsl.prompt
 import ai.koog.prompt.executor.clients.openrouter.OpenRouterClientSettings
@@ -19,6 +20,9 @@ import com.aibyjohannes.alfred.core.model.ChatTurnResult
 import com.aibyjohannes.alfred.core.model.CoreChatMessage
 import com.aibyjohannes.alfred.core.model.CoreChatMessageKind
 import com.aibyjohannes.alfred.core.model.ToolCallTrace
+import com.aibyjohannes.alfred.core.github.GitHubMcpClient
+import com.aibyjohannes.alfred.core.notion.NotionMcpClient
+import com.aibyjohannes.alfred.core.openrouter.OpenRouterAttribution
 import com.aibyjohannes.alfred.core.reminders.ReminderClient
 import com.aibyjohannes.alfred.core.reminders.ReminderRequest
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchClient
@@ -39,7 +43,9 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.Json
 import java.time.OffsetDateTime
 import java.security.MessageDigest
 
@@ -50,12 +56,16 @@ class OpenRouterChatEngine(
     private val webSearchClient: WebSearchClient,
     private val localKnowledgeSearchClient: LocalKnowledgeSearchClient? = null,
     private val tickTickClient: TickTickClient? = null,
+    private val notionMcpClient: NotionMcpClient? = null,
+    private val githubMcpClient: GitHubMcpClient? = null,
+    private val imageGenerator: (suspend (String) -> Result<String>)? = null,
     private val obsidianClient: ObsidianClient? = null,
     private val skillClient: SkillClient? = null,
     private val reminderClient: ReminderClient? = null,
     private val maxAgentPasses: Int = 10,
     private val efficiencyModeEnabled: Boolean = false,
     private val privacyModeEnabled: Boolean = false,
+    private val toolsEnabled: Boolean = true,
     sessionId: String? = null
 ) : ChatEngine {
     private val objectMapper = ObjectMapper()
@@ -113,9 +123,13 @@ class OpenRouterChatEngine(
         val finalResult = withContext(Dispatchers.IO) {
             createOpenRouterClient().use { client ->
                 val koogModel = buildKoogModel(model)
-                val mcpTools = tickTickClient?.getMcpTools() ?: emptyList()
-                val skills = skillClient?.listSkills()?.getOrDefault(emptyList()).orEmpty()
-                val tools = buildAlfredToolDescriptors(mcpTools, skills.isNotEmpty())
+                val mcpTools = if (toolsEnabled) {
+                    (tickTickClient?.getMcpTools() ?: emptyList()) +
+                        (notionMcpClient?.getMcpTools() ?: emptyList()) +
+                        (githubMcpClient?.getMcpTools() ?: emptyList())
+                } else emptyList()
+                val skills = if (toolsEnabled) skillClient?.listSkills()?.getOrDefault(emptyList()).orEmpty() else emptyList()
+                val tools = if (toolsEnabled) buildAlfredToolDescriptors(mcpTools, skills.isNotEmpty()) else emptyList()
                 val traces = mutableListOf<ToolCallTrace>()
                 val turnId = System.currentTimeMillis().toString()
                 val promptMessages = conversationHistory
@@ -129,6 +143,7 @@ class OpenRouterChatEngine(
                     )
                 )
                 val persistedIntermediateMessages = mutableListOf<CoreChatMessage>()
+                val generatedImageWidgets = mutableListOf<String>()
                 var reasoningEnabled = true
                 var finalContent: String? = null
                 var passIndex = 0
@@ -216,6 +231,9 @@ class OpenRouterChatEngine(
                             result.startsWith("Local knowledge search failed", ignoreCase = true) ||
                             result.startsWith("Unknown tool", ignoreCase = true) ||
                             result.startsWith("TickTick failed", ignoreCase = true) ||
+                            result.startsWith("Notion failed", ignoreCase = true) ||
+                            result.startsWith("GitHub failed", ignoreCase = true) ||
+                            result.startsWith("Image generation failed", ignoreCase = true) ||
                             result.startsWith("TickTick integration is not configured", ignoreCase = true) ||
                             result.startsWith("Reminder failed", ignoreCase = true) ||
                             result.startsWith("Reminder scheduling is not configured", ignoreCase = true) ||
@@ -233,6 +251,9 @@ class OpenRouterChatEngine(
                             result.startsWith("Obsidian integration is not configured", ignoreCase = true) ||
                             result.startsWith("Skill read failed", ignoreCase = true) ||
                             result.startsWith("Skill reference read failed", ignoreCase = true)
+                        if (toolCall.name == GENERATE_IMAGE_TOOL && !isError) {
+                            generatedImageWidgets += result
+                        }
                         traces.add(
                             ToolCallTrace(
                                 id = toolCall.id,
@@ -269,7 +290,14 @@ class OpenRouterChatEngine(
                     passIndex++
                 }
 
-                val content = finalContent ?: "Agent loop limit reached. I executed $maxAgentPasses passes without producing a final response."
+                val baseContent = finalContent ?: "Agent loop limit reached. I executed $maxAgentPasses passes without producing a final response."
+                val content = buildString {
+                    append(baseContent)
+                    generatedImageWidgets.filterNot(baseContent::contains).forEach { widget ->
+                        append("\n\n")
+                        append(widget)
+                    }
+                }
                 val finalMessage = CoreChatMessage(
                     role = "assistant",
                     content = content,
@@ -290,7 +318,31 @@ class OpenRouterChatEngine(
     }
 
     fun createOpenRouterClient(): OpenRouterLLMClient {
-        return OpenRouterLLMClient(apiKey, OpenRouterClientSettings(), KtorKoogHttpClient.Factory())
+        return OpenRouterLLMClient(apiKey, OpenRouterClientSettings(), OpenRouterAttributionHttpClientFactory())
+    }
+
+    private class OpenRouterAttributionHttpClientFactory(
+        private val delegate: KoogHttpClient.Factory = KtorKoogHttpClient.Factory()
+    ) : KoogHttpClient.Factory {
+        override fun create(
+            clientName: String,
+            baseUrl: String,
+            headers: Map<String, String>,
+            queryParameters: Map<String, String>,
+            requestTimeoutMillis: Long,
+            connectTimeoutMillis: Long,
+            socketTimeoutMillis: Long,
+            json: Json
+        ): KoogHttpClient = delegate.create(
+            clientName = clientName,
+            baseUrl = baseUrl,
+            headers = headers + OpenRouterAttribution.headers,
+            queryParameters = queryParameters,
+            requestTimeoutMillis = requestTimeoutMillis,
+            connectTimeoutMillis = connectTimeoutMillis,
+            socketTimeoutMillis = socketTimeoutMillis,
+            json = json
+        )
     }
 
     internal fun buildKoogModel(modelId: String): LLModel {
@@ -350,8 +402,8 @@ class OpenRouterChatEngine(
                 )
             ),
             ToolDescriptor(
-                name = ASK_SMART_MODEL_FUNCTION_NAME,
-                description = "Delegate complex planning, logical reasoning, or step-by-step structuring tasks to a stronger reasoning model (DeepSeek Version 4 Pro). Use this to get strategic directions, break down problems, or create detailed plans.",
+                name = CREATE_PLAN_FUNCTION_NAME,
+                description = "Create a detailed execution plan for a complex task with a stronger reasoning model. Use this for strategic planning, multi-step directions, or troubleshooting guidance.",
                 requiredParameters = listOf(
                     ToolParameterDescriptor(
                         name = "task_details",
@@ -384,6 +436,22 @@ class OpenRouterChatEngine(
                 )
             )
         )
+
+        if (imageGenerator != null) {
+            alfredTools.add(
+                ToolDescriptor(
+                    name = GENERATE_IMAGE_TOOL,
+                    description = "Generate an image from a text prompt and attach it to this chat. Call this whenever the user asks to create or generate an image.",
+                    requiredParameters = listOf(
+                        ToolParameterDescriptor(
+                            name = "prompt",
+                            description = "A complete, detailed description of the image to generate",
+                            type = ToolParameterType.String
+                        )
+                    )
+                )
+            )
+        }
 
         if (obsidianClient != null) {
             alfredTools.add(
@@ -613,6 +681,27 @@ class OpenRouterChatEngine(
                             description = "Reference file content",
                             type = ToolParameterType.String
                         )
+                    )
+                )
+            )
+            alfredTools.add(
+                ToolDescriptor(
+                    name = DELETE_SKILL_REFERENCE_TOOL,
+                    description = "Delete an existing Markdown or text reference file after the user explicitly asks for deletion.",
+                    requiredParameters = listOf(
+                        ToolParameterDescriptor("skill_id", "The skill id", ToolParameterType.String),
+                        ToolParameterDescriptor("path", "Forward-slash relative reference path", ToolParameterType.String)
+                    )
+                )
+            )
+            alfredTools.add(
+                ToolDescriptor(
+                    name = MOVE_SKILL_REFERENCE_TOOL,
+                    description = "Move an existing Markdown or text reference file within a skill after the user explicitly asks.",
+                    requiredParameters = listOf(
+                        ToolParameterDescriptor("skill_id", "The skill id", ToolParameterType.String),
+                        ToolParameterDescriptor("from_path", "Current relative reference path", ToolParameterType.String),
+                        ToolParameterDescriptor("to_path", "Destination relative reference path", ToolParameterType.String)
                     )
                 )
             )
@@ -902,7 +991,8 @@ class OpenRouterChatEngine(
                 }
             }
 
-            ASK_SMART_MODEL_FUNCTION_NAME -> {
+            CREATE_PLAN_FUNCTION_NAME,
+            LEGACY_ASK_SMART_MODEL_FUNCTION_NAME -> {
                 val details = extractSmartModelDelegationDetails(arguments)
                 if (details == null) {
                     "Smart model delegation failed: missing required 'task_details' argument."
@@ -926,6 +1016,20 @@ class OpenRouterChatEngine(
                         onSuccess = { it },
                         onFailure = { "Reminder failed: ${it.message}" }
                     ) ?: "Reminder scheduling is not configured."
+                }
+            }
+
+            GENERATE_IMAGE_TOOL -> {
+                val imagePrompt = runCatching {
+                    objectMapper.readTree(arguments).path("prompt").asText(null)?.trim()?.takeIf(String::isNotEmpty)
+                }.getOrNull()
+                if (imagePrompt == null) {
+                    "Image generation failed: missing required 'prompt' argument."
+                } else {
+                    imageGenerator?.invoke(imagePrompt)?.fold(
+                        onSuccess = { it },
+                        onFailure = { "Image generation failed: ${it.message ?: "Unknown error"}" }
+                    ) ?: "Image generation failed: image generation is not configured."
                 }
             }
 
@@ -1094,15 +1198,45 @@ class OpenRouterChatEngine(
                 }
             }
 
+            DELETE_SKILL_REFERENCE_TOOL -> {
+                val request = extractSkillReferenceRequest(arguments)
+                if (request == null) "Skill reference delete failed: missing required 'skill_id' or 'path' argument."
+                else skillClient?.deleteReference(request.skillId, request.path)?.fold(
+                    onSuccess = { it }, onFailure = { "Skill reference delete failed: ${it.message}" }
+                ) ?: "Skill reference delete failed: skill support is not configured."
+            }
+
+            MOVE_SKILL_REFERENCE_TOOL -> {
+                val request = extractSkillReferenceMoveRequest(arguments)
+                if (request == null) "Skill reference move failed: missing required 'skill_id', 'from_path', or 'to_path' argument."
+                else skillClient?.moveReference(request.skillId, request.fromPath, request.toPath)?.fold(
+                    onSuccess = { it }, onFailure = { "Skill reference move failed: ${it.message}" }
+                ) ?: "Skill reference move failed: skill support is not configured."
+            }
+
             else -> {
-                val client = tickTickClient
-                if (client == null) {
-                    "TickTick integration is not configured. Please configure your TickTick credentials in settings first."
-                } else {
+                if (githubMcpClient?.ownsTool(functionName) == true) {
                     try {
-                        client.executeMcpToolCall(functionName, arguments)
+                        githubMcpClient.executeMcpToolCall(functionName, arguments)
                     } catch (e: Exception) {
-                        "TickTick failed: ${e.message}"
+                        "GitHub failed: ${e.message}"
+                    }
+                } else if (notionMcpClient?.ownsTool(functionName) == true) {
+                    try {
+                        notionMcpClient.executeMcpToolCall(functionName, arguments)
+                    } catch (e: Exception) {
+                        "Notion failed: ${e.message}"
+                    }
+                } else {
+                    val client = tickTickClient
+                    if (client == null) {
+                        "TickTick integration is not configured. Please configure your TickTick credentials in settings first."
+                    } else {
+                        try {
+                            client.executeMcpToolCall(functionName, arguments)
+                        } catch (e: Exception) {
+                            "TickTick failed: ${e.message}"
+                        }
                     }
                 }
             }
@@ -1117,7 +1251,7 @@ class OpenRouterChatEngine(
         appendLine()
         append("When a request clearly matches a skill, call $READ_SKILL_TOOL before answering. ")
         append("Read only references named by those instructions with $READ_SKILL_REFERENCE_TOOL. ")
-        append("Use $CREATE_SKILL_TOOL, $RENAME_SKILL_TOOL, or $WRITE_SKILL_REFERENCE_TOOL only when the user asks to manage skill files.")
+        append("Use $CREATE_SKILL_TOOL, $RENAME_SKILL_TOOL, $WRITE_SKILL_REFERENCE_TOOL, $DELETE_SKILL_REFERENCE_TOOL, or $MOVE_SKILL_REFERENCE_TOOL only when the user asks to manage skill files.")
     }.trim()
 
     internal fun extractSkillId(argumentsJson: String): String? {
@@ -1136,6 +1270,7 @@ class OpenRouterChatEngine(
     data class SkillCreateRequest(val skillId: String, val description: String, val instructions: String)
     data class SkillRenameRequest(val fromSkillId: String, val toSkillId: String)
     data class SkillReferenceWriteRequest(val skillId: String, val path: String, val content: String)
+    data class SkillReferenceMoveRequest(val skillId: String, val fromPath: String, val toPath: String)
 
     internal fun extractSkillReferenceRequest(argumentsJson: String): SkillReferenceRequest? {
         return try {
@@ -1200,6 +1335,16 @@ class OpenRouterChatEngine(
         }
     }
 
+    internal fun extractSkillReferenceMoveRequest(argumentsJson: String): SkillReferenceMoveRequest? {
+        return try {
+            val node = objectMapper.readTree(argumentsJson)
+            val skillId = node.path("skill_id").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+            val from = node.path("from_path").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+            val to = node.path("to_path").asText(null)?.trim()?.takeIf { it.isNotEmpty() }
+            if (skillId == null || from == null || to == null) null else SkillReferenceMoveRequest(skillId, from, to)
+        } catch (_: Exception) { null }
+    }
+
     /** Accept a common model mistake: wrapping a tool's input in a result envelope. */
     fun normalizeToolArguments(rawArguments: String): String = try {
         val node = objectMapper.readTree(rawArguments)
@@ -1216,6 +1361,9 @@ class OpenRouterChatEngine(
     fun requestAdditionalProperties(reasoningEnabled: Boolean): Map<String, JsonElement> = buildMap {
         if (reasoningEnabled) {
             put("reasoning", JsonObject(mapOf("effort" to JsonPrimitive("low"))))
+        }
+        if (model == DEFAULT_MODEL) {
+            put("models", JsonArray(listOf(JsonPrimitive(FALLBACK_MODEL))))
         }
         if (privacyModeEnabled) {
             put("provider", JsonObject(mapOf("zdr" to JsonPrimitive(true))))
@@ -1443,12 +1591,15 @@ class OpenRouterChatEngine(
     }
 
     companion object {
-        const val DEFAULT_MODEL = "deepseek/deepseek-v4-flash"
+        const val DEFAULT_MODEL = "openai/gpt-5.6-luna"
+        const val FALLBACK_MODEL = "google/gemma-4-26b-a4b-it"
         const val WEB_SEARCH_FUNCTION_NAME = "WebSearchTool"
         const val LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME = "SearchLocalKnowledgeTool"
         const val TICKTICK_FUNCTION_NAME = "TickTickTool"
-        const val ASK_SMART_MODEL_FUNCTION_NAME = "AskSmartModelTool"
+        const val CREATE_PLAN_FUNCTION_NAME = "CreatePlanTool"
+        const val LEGACY_ASK_SMART_MODEL_FUNCTION_NAME = "AskSmartModelTool"
         const val SCHEDULE_REMINDER_TOOL = "ScheduleReminderTool"
+        const val GENERATE_IMAGE_TOOL = "GenerateImageTool"
         const val OBSIDIAN_CLI_TOOL = "RunObsidianCliTool"
         const val OBSIDIAN_SEARCH_TOOL = "SearchObsidianVaultTool"
         const val OBSIDIAN_LIST_FOLDER_TOOL = "ListObsidianFolderTool"
@@ -1463,6 +1614,8 @@ class OpenRouterChatEngine(
         const val CREATE_SKILL_TOOL = "CreateSkillTool"
         const val RENAME_SKILL_TOOL = "RenameSkillTool"
         const val WRITE_SKILL_REFERENCE_TOOL = "WriteSkillReferenceTool"
+        const val DELETE_SKILL_REFERENCE_TOOL = "DeleteSkillReferenceTool"
+        const val MOVE_SKILL_REFERENCE_TOOL = "MoveSkillReferenceTool"
     }
 }
 

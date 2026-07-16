@@ -1,5 +1,6 @@
 package com.aibyjohannes.alfred.core.image
 
+import com.aibyjohannes.alfred.core.openrouter.OpenRouterAttribution
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
@@ -32,6 +33,7 @@ class OpenRouterImageClient(
 
             val response = client.post("https://openrouter.ai/api/v1/images") {
                 header("Authorization", "Bearer $apiKey")
+                OpenRouterAttribution.headers.forEach { (name, value) -> header(name, value) }
                 contentType(ContentType.Application.Json)
                 setBody(objectMapper.writeValueAsString(mapOf("model" to model, "prompt" to trimmedPrompt)))
             }
