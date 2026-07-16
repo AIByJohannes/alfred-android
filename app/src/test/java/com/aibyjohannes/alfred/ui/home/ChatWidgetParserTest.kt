@@ -24,13 +24,22 @@ class ChatWidgetParserTest {
         val parsed = ChatWidgetParser.parse(
             """Forecast follows.
                 |```alfred-widget
-                |{"type":"weather","location":"Berlin","temperature":"21°C","condition":"Sunny"}
+                |{"type":"weather","location":"Berlin","temperature":"21°C","condition":"Sunny","details":"Feels like {22°C}"}
                 |```""".trimMargin()
         )
         assertEquals("Forecast follows.", parsed.displayContent)
         val weather = parsed.widgets.single() as ChatWidget.Weather
         assertEquals("Berlin", weather.location)
         assertEquals("21°C", weather.temperature)
+        assertEquals("Feels like {22°C}", weather.details)
+    }
+
+    @Test
+    fun `plain first message parses without widgets`() {
+        val parsed = ChatWidgetParser.parse("Hello from Luna")
+
+        assertEquals("Hello from Luna", parsed.displayContent)
+        assertTrue(parsed.widgets.isEmpty())
     }
 
     @Test

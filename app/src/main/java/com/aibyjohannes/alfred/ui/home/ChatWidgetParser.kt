@@ -18,7 +18,13 @@ data class ParsedChatWidgets(val displayContent: String, val widgets: List<ChatW
 
 object ChatWidgetParser {
     private val mapper = ObjectMapper()
-    private val widgetBlock = Regex("```alfred-widget\\s*(\\{.*?})\\s*```", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+    // Match the fenced payload instead of JSON braces. Android's ICU regex engine rejects an
+    // unescaped closing brace that the desktop JVM accepts, which used to crash on the first
+    // rendered chat message when this object was initialized.
+    private val widgetBlock = Regex(
+        "```alfred-widget\\s*(.*?)\\s*```",
+        setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)
+    )
     private val youtubeUrl = Regex("https?://(?:www\\.)?(?:youtube\\.com/watch\\?[^\\s)]*v=|youtu\\.be/)[A-Za-z0-9_-]+[^\\s)]*", RegexOption.IGNORE_CASE)
 
     fun parse(content: String): ParsedChatWidgets {
