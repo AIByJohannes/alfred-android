@@ -111,8 +111,9 @@ class ApiKeyStoreTest {
     }
 
     @Test
-    fun `legacy free chat model selections migrate to paid equivalents`() {
+    fun `retired and legacy chat model selections migrate to maintained models`() {
         mapOf(
+            "together/Prism-ML/Ternary-Bonsai-27B" to "openai/gpt-5.6-luna",
             "google/gemma-4-31b-it:free" to "google/gemma-4-31b-it",
             "google/gemma-4-26b-a4b-it:free" to "google/gemma-4-26b-a4b-it",
             "qwen/qwen3-next-80b-a3b-instruct:free" to "qwen/qwen3-next-80b-a3b-instruct",
@@ -186,17 +187,6 @@ class ApiKeyStoreTest {
         apiKeyStore.clearGitHubCredentials()
         assertNull(apiKeyStore.loadGitHubAccessToken())
         assertFalse(apiKeyStore.hasGitHubAuth())
-    }
-
-    @Test
-    fun `Together key round trips and clears`() {
-        assertFalse(apiKeyStore.hasTogetherApiKey())
-        apiKeyStore.saveTogetherApiKey("  together-key  ")
-        assertEquals("together-key", apiKeyStore.loadTogetherApiKey())
-        assertTrue(apiKeyStore.hasTogetherApiKey())
-        apiKeyStore.clearTogetherApiKey()
-        assertNull(apiKeyStore.loadTogetherApiKey())
-        assertFalse(apiKeyStore.hasTogetherApiKey())
     }
 
     @Test

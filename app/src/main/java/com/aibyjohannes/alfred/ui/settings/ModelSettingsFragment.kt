@@ -60,7 +60,6 @@ class ModelSettingsFragment : Fragment() {
         localGemmaModelStore = LocalGemmaModelStore(requireContext())
 
         setupModelDropdown()
-        setupTogetherApiKey()
         setupLocalGemma()
         setupSttModelDropdown()
         setupTtsModelDropdown()
@@ -80,35 +79,6 @@ class ModelSettingsFragment : Fragment() {
             Snackbar.make(binding.root, R.string.local_gemma_selected, Snackbar.LENGTH_SHORT).show()
         }
         updateLocalGemmaUi()
-    }
-
-    private fun setupTogetherApiKey() {
-        binding.saveTogetherApiKeyButton.setOnClickListener {
-            val key = binding.togetherApiKeyInput.text?.toString()?.trim()
-            if (key.isNullOrBlank()) {
-                Snackbar.make(binding.root, R.string.together_key_required, Snackbar.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            apiKeyStore.saveTogetherApiKey(key)
-            binding.togetherApiKeyInput.text?.clear()
-            updateTogetherStatus()
-            Snackbar.make(binding.root, R.string.together_key_saved, Snackbar.LENGTH_SHORT).show()
-        }
-        binding.clearTogetherApiKeyButton.setOnClickListener {
-            apiKeyStore.clearTogetherApiKey()
-            binding.togetherApiKeyInput.text?.clear()
-            updateTogetherStatus()
-            Snackbar.make(binding.root, R.string.together_key_cleared, Snackbar.LENGTH_SHORT).show()
-        }
-        updateTogetherStatus()
-    }
-
-    private fun updateTogetherStatus() {
-        val configured = apiKeyStore.hasTogetherApiKey()
-        binding.togetherStatus.setText(
-            if (configured) R.string.together_status_configured else R.string.together_status_not_configured
-        )
-        binding.clearTogetherApiKeyButton.isEnabled = configured
     }
 
     private fun updateLocalGemmaUi() {

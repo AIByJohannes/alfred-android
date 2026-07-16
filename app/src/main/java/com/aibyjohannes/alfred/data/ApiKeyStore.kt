@@ -68,20 +68,6 @@ class ApiKeyStore internal constructor(
         }
     }
 
-    fun saveTogetherApiKey(key: String) {
-        prefs.edit().putString(KEY_TOGETHER_API_KEY, key.trim()).apply()
-    }
-
-    fun loadTogetherApiKey(): String? = prefs.getString(KEY_TOGETHER_API_KEY, null)
-        ?.trim()
-        ?.takeIf(String::isNotEmpty)
-
-    fun hasTogetherApiKey(): Boolean = loadTogetherApiKey() != null
-
-    fun clearTogetherApiKey() {
-        prefs.edit().remove(KEY_TOGETHER_API_KEY).apply()
-    }
-
     fun saveSttModel(model: String) {
         try {
             prefs.edit().putString(KEY_STT_MODEL, model.trim()).apply()
@@ -373,7 +359,6 @@ class ApiKeyStore internal constructor(
         private const val TAG = "ApiKeyStore"
         private const val PREFS_FILE_NAME = "alfred_secret_prefs"
         private const val KEY_OPENROUTER_API_KEY = "openrouter_api_key"
-        private const val KEY_TOGETHER_API_KEY = "together_api_key"
         private const val KEY_TICKTICK_CLIENT_ID = "ticktick_client_id"
         private const val KEY_TICKTICK_CLIENT_SECRET = "ticktick_client_secret"
         private const val KEY_TICKTICK_ACCESS_TOKEN = "ticktick_access_token"
@@ -399,7 +384,8 @@ class ApiKeyStore internal constructor(
         private const val KEY_LOCAL_VOICE_FALLBACK = "local_voice_fallback"
         private const val DEFAULT_MODEL_VAL = "openai/gpt-5.6-luna"
         private const val DEFAULT_SEARCH_TOOL_VAL = "perplexity"
-        private val LEGACY_FREE_CHAT_MODEL_MIGRATIONS = mapOf(
+        private val CHAT_MODEL_MIGRATIONS = mapOf(
+            "together/Prism-ML/Ternary-Bonsai-27B" to DEFAULT_MODEL_VAL,
             "google/gemma-4-31b-it:free" to "google/gemma-4-31b-it",
             "google/gemma-4-26b-a4b-it:free" to "google/gemma-4-26b-a4b-it",
             "qwen/qwen3-next-80b-a3b-instruct:free" to "qwen/qwen3-next-80b-a3b-instruct",
@@ -426,7 +412,7 @@ class ApiKeyStore internal constructor(
 
         private fun normalizeChatModel(model: String): String {
             val trimmed = model.trim()
-            return LEGACY_FREE_CHAT_MODEL_MIGRATIONS[trimmed] ?: trimmed
+            return CHAT_MODEL_MIGRATIONS[trimmed] ?: trimmed
         }
 
         private fun createPreferences(context: Context): SharedPreferences {

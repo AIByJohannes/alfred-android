@@ -2,7 +2,6 @@
 <resources>
     <string-array name="model_labels">
         <item>GPT-5.6 Luna (Default)</item>
-        <item>PrismML Ternary Bonsai 27B (Free via Together)</item>
         <item>DeepSeek V4 Flash</item>
         <item>Gemma 4 31B</item>
         <item>Gemma 4 26B MoE</item>
@@ -10,7 +9,6 @@
     </string-array>
     <string-array name="model_short_labels">
         <item>GPT-5.6 Luna</item>
-        <item>PrismML Bonsai 27B</item>
         <item>DeepSeek V4 Flash</item>
         <item>Gemma 4 31B</item>
         <item>Gemma 4 26B</item>
@@ -18,7 +16,6 @@
     </string-array>
     <string-array name="model_toolbar_labels">
         <item>GPT-5.6 Luna</item>
-        <item>PrismML</item>
         <item>DS V4 Flash</item>
         <item>G4 31B</item>
         <item>G4 26B</item>
@@ -26,7 +23,6 @@
     </string-array>
     <string-array name="model_values">
         <item>openai/gpt-5.6-luna</item>
-        <item>together/Prism-ML/Ternary-Bonsai-27B</item>
         <item>deepseek/deepseek-v4-flash</item>
         <item>google/gemma-4-31b-it</item>
         <item>google/gemma-4-26b-a4b-it</item>

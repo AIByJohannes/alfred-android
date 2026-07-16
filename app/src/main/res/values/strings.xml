@@ -169,16 +169,6 @@
     <string name="github_token_required">Enter a GitHub personal access token</string>
     <string name="github_connected">GitHub MCP connected</string>
     <string name="github_cleared">GitHub disconnected</string>
-    <string name="together_title">Together AI for PrismML</string>
-    <string name="together_description">PrismML Ternary Bonsai 27B is available free through Together’s serverless API. Its GGUF files are not compatible with Alfred’s LiteRT local-model loader.</string>
-    <string name="together_api_key">Together API key</string>
-    <string name="save_together_api_key">Save key</string>
-    <string name="clear_together_api_key">Clear</string>
-    <string name="together_key_required">Enter a Together API key</string>
-    <string name="together_key_saved">Together API key saved</string>
-    <string name="together_key_cleared">Together API key cleared</string>
-    <string name="together_status_configured">Configured</string>
-    <string name="together_status_not_configured">Not configured</string>
     <string name="local_voice_title">On-device voice</string>
     <string name="local_voice_description">Use Android’s installed offline speech recognition and speech synthesis models. Audio stays on the device when an offline engine is available.</string>
     <string name="prefer_local_voice">Prefer on-device STT and TTS</string>

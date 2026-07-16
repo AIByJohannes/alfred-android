@@ -24,7 +24,6 @@ class ChatModelResourcesTest {
         assertEquals(
             listOf(
                 "openai/gpt-5.6-luna",
-                "together/Prism-ML/Ternary-Bonsai-27B",
                 "deepseek/deepseek-v4-flash",
                 "google/gemma-4-31b-it",
                 "google/gemma-4-26b-a4b-it",

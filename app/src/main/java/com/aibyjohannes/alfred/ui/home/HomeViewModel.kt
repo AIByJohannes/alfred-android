@@ -13,7 +13,6 @@ import com.aibyjohannes.alfred.data.local.ConversationMessageDraft
 import com.aibyjohannes.alfred.data.local.ConversationStore
 import com.aibyjohannes.alfred.data.local.ConversationSummary
 import com.aibyjohannes.alfred.data.local.LocalGemmaModelStore
-import com.aibyjohannes.alfred.core.engine.TogetherChatEngine
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -165,7 +164,6 @@ class HomeViewModel : ViewModel() {
         val model = store?.loadModel()
         _needsApiKey.value = when {
             model == null || model == LocalGemmaModelStore.LOCAL_MODEL_ID -> false
-            model.startsWith(TogetherChatEngine.MODEL_PREFIX) -> store.hasTogetherApiKey().not()
             else -> store.hasApiKey().not()
         }
     }

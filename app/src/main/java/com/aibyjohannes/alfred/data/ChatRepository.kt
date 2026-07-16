@@ -3,7 +3,6 @@ package com.aibyjohannes.alfred.data
 import com.aibyjohannes.alfred.core.SystemPrompts
 import com.aibyjohannes.alfred.core.engine.ChatEngine
 import com.aibyjohannes.alfred.core.engine.OpenRouterChatEngine
-import com.aibyjohannes.alfred.core.engine.TogetherChatEngine
 import com.aibyjohannes.alfred.core.model.ChatStreamEvent
 import com.aibyjohannes.alfred.core.search.GrokSearchClient
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchClient
@@ -193,14 +192,6 @@ class ChatRepository private constructor(
         dependencies.chatEngineFactory?.let { factory ->
             return factory(ChatEngineRequest(apiKey, model, sysInfo, resolvedMaxPasses))
         }
-        if (model.startsWith(TogetherChatEngine.MODEL_PREFIX)) {
-            return TogetherChatEngine(
-                apiKey = apiKey,
-                model = model.removePrefix(TogetherChatEngine.MODEL_PREFIX),
-                systemPrompt = SystemPrompts.buildSystemPrompt(sysInfo)
-            )
-        }
-
         val tickTickProvider = object : TickTickCredentialsProvider {
             override fun getCredentials(): TickTickCredentials? {
                 val clientId = apiKeyStore.loadTickTickClientId() ?: return null
@@ -269,17 +260,11 @@ class ChatRepository private constructor(
 
     private fun loadChatApiKey(): String? = when {
         apiKeyStore.loadModel() == LocalGemmaModelStore.LOCAL_MODEL_ID -> LOCAL_CHAT_SENTINEL_KEY
-        apiKeyStore.loadModel().startsWith(TogetherChatEngine.MODEL_PREFIX) -> apiKeyStore.loadTogetherApiKey()
-            ?.trim()?.takeIf(String::isNotEmpty)
         else -> loadApiKey()
     }
 
     private fun missingChatConfigurationError(): IllegalStateException = IllegalStateException(
-        if (apiKeyStore.loadModel().startsWith(TogetherChatEngine.MODEL_PREFIX)) {
-            "Together API key not configured. Add it in Settings > Models to use PrismML."
-        } else {
-            "API key not configured. Please add your OpenRouter API key in Settings."
-        }
+        "API key not configured. Please add your OpenRouter API key in Settings."
     )
 
     /** Returns the currently active ObsidianClient, preferring the dynamic provider over the fixed one. */
