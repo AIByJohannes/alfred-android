@@ -156,6 +156,8 @@ class SettingsFragment : Fragment() {
     private fun setupEfficiencyPrivacyControls() {
         binding.efficiencyModeSwitch.isChecked = apiKeyStore.isEfficiencyModeEnabled()
         binding.privacyModeSwitch.isChecked = apiKeyStore.isPrivacyModeEnabled()
+        binding.costConfirmationSwitch.isChecked = apiKeyStore.isCostConfirmationEnabled()
+        binding.toolsEnabledSwitch.isChecked = apiKeyStore.areToolsEnabled()
 
         binding.efficiencyModeSwitch.setOnCheckedChangeListener { _, enabled ->
             apiKeyStore.saveEfficiencyMode(enabled)
@@ -172,6 +174,12 @@ class SettingsFragment : Fragment() {
                 if (enabled) "Zero data retention routing enabled" else "Zero data retention routing disabled",
                 Snackbar.LENGTH_SHORT
             ).show()
+        }
+        binding.costConfirmationSwitch.setOnCheckedChangeListener { _, enabled ->
+            apiKeyStore.saveCostConfirmation(enabled)
+        }
+        binding.toolsEnabledSwitch.setOnCheckedChangeListener { _, enabled ->
+            apiKeyStore.saveToolsEnabled(enabled)
         }
     }
 

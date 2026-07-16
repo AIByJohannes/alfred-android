@@ -12,7 +12,11 @@ import com.aibyjohannes.alfred.data.api.ChatMessage
 import com.aibyjohannes.alfred.data.local.ConversationMessageDraft
 import com.aibyjohannes.alfred.data.local.ConversationStore
 import com.aibyjohannes.alfred.data.local.ConversationSummary
+import com.aibyjohannes.alfred.data.local.LocalGemmaModelStore
+import com.aibyjohannes.alfred.core.engine.TogetherChatEngine
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -127,6 +131,7 @@ class HomeViewModel : ViewModel() {
     private var currentConversationId: String? = null
     private var nextMessageId = 1L
     private var conversationsJob: kotlinx.coroutines.Job? = null
+    private var chatJob: Job? = null
     private var pendingConversationOperations = 0
 
     fun initialize(
@@ -156,7 +161,13 @@ class HomeViewModel : ViewModel() {
     }
 
     fun checkApiKey() {
-        _needsApiKey.value = apiKeyStore?.hasApiKey() != true
+        val store = apiKeyStore
+        val model = store?.loadModel()
+        _needsApiKey.value = when {
+            model == null || model == LocalGemmaModelStore.LOCAL_MODEL_ID -> false
+            model.startsWith(TogetherChatEngine.MODEL_PREFIX) -> store.hasTogetherApiKey().not()
+            else -> store.hasApiKey().not()
+        }
     }
 
     fun retryChatHistoryLoad() {
@@ -226,7 +237,7 @@ class HomeViewModel : ViewModel() {
         sendMessage(userMsgContent)
     }
 
-    fun sendMessage(userInput: String) {
+    fun sendMessage(userInput: String, requestInput: String = userInput) {
         if (userInput.isBlank()) return
         if (_isConversationLoading.value == true) return
         if (_isLoading.value == true) return
@@ -265,7 +276,7 @@ class HomeViewModel : ViewModel() {
 
         val sysInfo = sysInfoProvider?.buildSysInfo()
 
-        viewModelScope.launch {
+        chatJob = viewModelScope.launch {
             val userHistoryMessage = ChatMessage(role = ChatMessage.ROLE_USER, content = userInput)
             val passAssistantContent = StringBuilder()
             val pendingAssistantContent = StringBuilder()
@@ -274,7 +285,7 @@ class HomeViewModel : ViewModel() {
 
             try {
                 repo.streamMessage(
-                    userInput,
+                    requestInput,
                     conversationHistory.toList(),
                     sysInfo,
                     maxPasses,
@@ -485,6 +496,8 @@ class HomeViewModel : ViewModel() {
                         }
                     }
                 }
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Exception) {
                 val errorMessage = error.message ?: "An error occurred"
                 val replaced = updateUiMessage(
@@ -512,7 +525,32 @@ class HomeViewModel : ViewModel() {
             finally {
                 _isLoading.value = false
                 chatRunPowerKeeper.release()
+                chatJob = null
             }
+        }
+    }
+
+    fun sendImageGenerationRequest(prompt: String) {
+        val trimmedPrompt = prompt.trim()
+        if (trimmedPrompt.isEmpty()) return
+        sendMessage(
+            userInput = "Generate an image of $trimmedPrompt",
+            requestInput = "Generate an image of the following. You must call GenerateImageTool with a detailed prompt: $trimmedPrompt"
+        )
+    }
+
+    fun stopGeneration() {
+        if (_isLoading.value != true) return
+        chatJob?.cancel()
+        _messages.value = _messages.value.orEmpty().map { message ->
+            if (message.isStreaming) {
+                message.copy(
+                    content = message.content.ifBlank { "Generation stopped." },
+                    isStreaming = false,
+                    isError = false,
+                    showTypingDots = false
+                )
+            } else message
         }
     }
 
@@ -683,7 +721,9 @@ class HomeViewModel : ViewModel() {
                     loadConversation(activeConversation)
                     observeConversationsForActiveWorkspace(activeWs.id)
                     _storageError.value = null
-                } catch (error: Exception) {
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
                     _storageError.value = error.message ?: "Chat history is temporarily unavailable"
                 }
             }

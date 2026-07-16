@@ -8,6 +8,7 @@ import com.aibyjohannes.alfred.core.model.ChatTurnResult
 import com.aibyjohannes.alfred.core.model.CoreChatMessage
 import com.aibyjohannes.alfred.core.model.CoreChatMessageKind
 import com.aibyjohannes.alfred.data.api.ChatMessage
+import com.aibyjohannes.alfred.data.local.LocalGemmaModelStore
 import io.mockk.*
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
@@ -175,6 +176,36 @@ class ChatRepositoryTest {
 
         assertTrue(result.isFailure)
         assertSame(failure, result.exceptionOrNull())
+    }
+
+    @Test
+    fun `local Gemma chat runs without an OpenRouter key`() = runBlocking {
+        every { apiKeyStore.loadModel() } returns LocalGemmaModelStore.LOCAL_MODEL_ID
+        every { apiKeyStore.loadOpenRouterKey() } returns null
+        val engine = mockk<ChatEngine>()
+        var configuredPath: String? = null
+        var configuredPrompt: String? = null
+        coEvery { engine.sendMessage("offline question", emptyList()) } returns Result.success(
+            ChatTurnResult(content = "offline answer", toolCalls = emptyList())
+        )
+        val repository = ChatRepository(
+            apiKeyStore = apiKeyStore,
+            dependencies = ChatRepositoryDependencies(
+                localModelPathProvider = { "C:/models/gemma-3n-e2b.litertlm" },
+                localChatEngineFactory = { path, prompt ->
+                    configuredPath = path
+                    configuredPrompt = prompt
+                    engine
+                }
+            )
+        )
+
+        val result = repository.sendMessage("offline question", emptyList(), sysInfo = "device context")
+
+        assertEquals("offline answer", result.getOrThrow())
+        assertEquals("C:/models/gemma-3n-e2b.litertlm", configuredPath)
+        assertTrue(configuredPrompt.orEmpty().contains("device context"))
+        verify(exactly = 0) { apiKeyStore.loadOpenRouterKey() }
     }
 
     private fun repository(

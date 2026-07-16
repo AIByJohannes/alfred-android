@@ -30,6 +30,7 @@ snakeyamlEngine = "3.0.1"
 room = "2.8.4"
 ksp = "2.2.21-2.0.5"
 robolectric = "4.12.2"
+litertLm = "0.14.0"
 
 [libraries]
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
@@ -72,6 +73,7 @@ androidx-room-runtime = { group = "androidx.room", name = "room-runtime", versio
 androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
 androidx-room-testing = { group = "androidx.room", name = "room-testing", version.ref = "room" }
+litert-lm-android = { group = "com.google.ai.edge.litertlm", name = "litertlm-android", version.ref = "litertLm" }
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }

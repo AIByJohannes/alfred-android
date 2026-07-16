@@ -1,12 +1,15 @@
 package com.aibyjohannes.alfred.ui.home
 
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.graphics.Typeface
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import android.widget.ImageView
 import android.widget.TextView
+import android.net.Uri
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.DiffUtil
@@ -18,6 +21,7 @@ import io.noties.markwon.Markwon
 import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.linkify.LinkifyPlugin
+import java.io.File
 
 class ChatAdapter(
     private val onRetryClick: ((Long) -> Unit)? = null
@@ -56,20 +60,25 @@ class ChatAdapter(
             .build()
 
         fun bind(message: UiChatMessage) {
-            if (message.content.isBlank()) {
+            val parsed = ChatWidgetParser.parse(message.content)
+            if (parsed.displayContent.isBlank()) {
                 binding.messageText.visibility = View.GONE
             } else {
                 binding.messageText.visibility = View.VISIBLE
                 if (message.renderMode == RenderMode.PLAIN) {
-                    binding.messageText.text = message.content
+                    binding.messageText.text = parsed.displayContent
                 } else {
-                    markwon.setMarkdown(binding.messageText, message.content)
+                    markwon.setMarkdown(binding.messageText, parsed.displayContent)
                 }
             }
             bindTraceItems(message)
+            bindWidgets(message, parsed.widgets)
 
             val context = binding.root.context
             val params = binding.messageCard.layoutParams as ConstraintLayout.LayoutParams
+            params.matchConstraintMaxWidth = context.resources.getDimensionPixelSize(
+                if (message.isUser) R.dimen.user_message_max_width else R.dimen.assistant_message_max_width
+            )
 
             if (message.isUser) {
                 // User message: align right, blue background
@@ -117,11 +126,107 @@ class ChatAdapter(
                 } else {
                     binding.shareButton.visibility = View.VISIBLE
                     binding.shareButton.setOnClickListener {
-                        shareMessage(context, message.content)
+                        shareMessage(context, parsed.displayContent)
                     }
                 }
             }
             binding.messageCard.layoutParams = params
+        }
+
+        private fun bindWidgets(message: UiChatMessage, widgets: List<ChatWidget>) {
+            binding.widgetContainer.removeAllViews()
+            if (message.isUser || message.isError || widgets.isEmpty()) {
+                binding.widgetContainer.visibility = View.GONE
+                return
+            }
+            binding.widgetContainer.visibility = View.VISIBLE
+            widgets.forEach { widget ->
+                binding.widgetContainer.addView(
+                    when (widget) {
+                        is ChatWidget.Weather -> weatherWidget(widget)
+                        is ChatWidget.YouTube -> youtubeWidget(widget)
+                        is ChatWidget.Image -> imageWidget(widget)
+                    }
+                )
+            }
+        }
+
+        private fun weatherWidget(widget: ChatWidget.Weather): View {
+            val context = binding.root.context
+            val density = context.resources.displayMetrics.density
+            return LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding((12 * density).toInt(), (10 * density).toInt(), (12 * density).toInt(), (10 * density).toInt())
+                background = ContextCompat.getDrawable(context, R.drawable.bg_chat_widget)
+                addView(TextView(context).apply {
+                    text = "☀  ${widget.location}"
+                    textSize = 14f
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(ContextCompat.getColor(context, R.color.assistant_message_text))
+                })
+                addView(TextView(context).apply {
+                    text = "${widget.temperature}  ·  ${widget.condition}"
+                    textSize = 20f
+                    setTextColor(ContextCompat.getColor(context, R.color.assistant_message_text))
+                })
+                widget.details?.let { detail ->
+                    addView(TextView(context).apply {
+                        text = detail
+                        textSize = 12f
+                        alpha = 0.8f
+                        setTextColor(ContextCompat.getColor(context, R.color.assistant_message_text))
+                    })
+                }
+            }
+        }
+
+        private fun youtubeWidget(widget: ChatWidget.YouTube): View {
+            val context = binding.root.context
+            val density = context.resources.displayMetrics.density
+            return LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                isClickable = true
+                isFocusable = true
+                setPadding((12 * density).toInt(), (10 * density).toInt(), (12 * density).toInt(), (10 * density).toInt())
+                background = ContextCompat.getDrawable(context, R.drawable.bg_chat_widget)
+                addView(TextView(context).apply {
+                    text = "▶"
+                    textSize = 24f
+                    setTextColor(ContextCompat.getColor(context, R.color.palette_red))
+                })
+                addView(TextView(context).apply {
+                    text = widget.title ?: "Watch on YouTube"
+                    textSize = 14f
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(ContextCompat.getColor(context, R.color.assistant_message_text))
+                    setPadding((12 * density).toInt(), 0, 0, 0)
+                }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                setOnClickListener {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(widget.url)))
+                }
+            }
+        }
+
+        private fun imageWidget(widget: ChatWidget.Image): View {
+            val context = binding.root.context
+            val root = context.filesDir.resolve("generated_images").canonicalFile
+            val file = runCatching { File(widget.path).canonicalFile }.getOrNull()
+            val isSafe = file != null && file.isFile && file.path.startsWith(root.path + File.separator)
+            if (!isSafe) {
+                return TextView(context).apply {
+                    text = "Generated image is unavailable."
+                    val padding = (12 * resources.displayMetrics.density).toInt()
+                    setPadding(padding, padding, padding, padding)
+                }
+            }
+            return ImageView(context).apply {
+                contentDescription = widget.alt ?: "Generated image"
+                adjustViewBounds = true
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                setImageBitmap(BitmapFactory.decodeFile(file.path))
+                background = ContextCompat.getDrawable(context, R.drawable.bg_chat_widget)
+            }
         }
 
         private fun bindTraceItems(message: UiChatMessage) {

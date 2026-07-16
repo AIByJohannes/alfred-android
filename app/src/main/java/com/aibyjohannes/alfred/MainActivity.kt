@@ -21,6 +21,8 @@ import com.aibyjohannes.alfred.data.local.DocumentObsidianClient
 import com.aibyjohannes.alfred.data.local.FileConversationStore
 import com.aibyjohannes.alfred.data.local.FileLocalKnowledgeSearchClient
 import com.aibyjohannes.alfred.data.local.FileMemorySearchSource
+import com.aibyjohannes.alfred.data.local.LocalGemmaChatEngine
+import com.aibyjohannes.alfred.data.local.LocalGemmaModelStore
 import com.aibyjohannes.alfred.data.local.ObsidianVaultStore
 import com.aibyjohannes.alfred.data.local.StorageSkillClient
 import com.aibyjohannes.alfred.data.local.NoteSearchIndexDatabase
@@ -28,6 +30,7 @@ import com.aibyjohannes.alfred.data.local.VaultSearchIndexer
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.aibyjohannes.alfred.ui.home.ConversationAdapter
 import com.aibyjohannes.alfred.ui.home.AndroidChatRunPowerKeeper
 import com.aibyjohannes.alfred.ui.home.HomeViewModel
@@ -46,6 +49,7 @@ import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.aibyjohannes.alfred.data.SysInfoProvider
 import com.aibyjohannes.alfred.notifications.NotificationScheduler
 import com.aibyjohannes.alfred.notifications.AndroidReminderClient
+import com.aibyjohannes.alfred.core.notion.NotionOAuthClient
 import android.Manifest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -201,6 +205,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val apiKeyStore = ApiKeyStore(this)
+        val localGemmaModelStore = LocalGemmaModelStore(this)
         val conversationStore = FileConversationStore(storage, this)
         val localKnowledgeSearchClient = FileLocalKnowledgeSearchClient(
             conversationStore = conversationStore,
@@ -227,7 +232,16 @@ class MainActivity : AppCompatActivity() {
                     ?.let { DocumentObsidianClient(this, it) }
             },
             skillClient = StorageSkillClient(storage),
-            reminderClient = AndroidReminderClient(this)
+            reminderClient = AndroidReminderClient(this),
+            generatedImageDirectory = filesDir.resolve("generated_images"),
+            localModelPathProvider = localGemmaModelStore::installedModelPath,
+            localChatEngineFactory = { modelPath, systemPrompt ->
+                LocalGemmaChatEngine(
+                    modelPath = modelPath,
+                    cacheDirectory = cacheDir.resolve("litert-lm"),
+                    systemPrompt = systemPrompt
+                )
+            }
         )
         val sysInfoProvider = SysInfoProvider(this)
         homeViewModel.initialize(
@@ -266,6 +280,7 @@ class MainActivity : AppCompatActivity() {
     private fun setupDrawer() {
         workspaceAdapter = DrawerProjectsAdapter(
             onWorkspaceSelected = { workspace ->
+                Toast.makeText(this, getString(R.string.switching_workspace, workspace.name), Toast.LENGTH_SHORT).show()
                 homeViewModel.switchWorkspace(workspace.id)
                 binding.drawerLayout.closeDrawer(GravityCompat.START)
             },
@@ -281,6 +296,7 @@ class MainActivity : AppCompatActivity() {
 
         conversationAdapter = ConversationAdapter(
             onConversationSelected = { conversation ->
+                Toast.makeText(this, getString(R.string.opening_chat, conversation.title), Toast.LENGTH_SHORT).show()
                 homeViewModel.selectConversation(conversation.id)
                 navigateToHome()
                 binding.drawerLayout.closeDrawer(GravityCompat.START)
@@ -345,6 +361,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (::homeViewModel.isInitialized) {
+            homeViewModel.checkApiKey()
+        }
         if (::binding.isInitialized && ::profilePreferencesStore.isInitialized) {
             updateProfileRow()
             if (binding.appBarMain.toolbarModelSelectionPill.isVisible) {
@@ -544,6 +563,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleIntent(intent: Intent?) {
         if (intent == null) return
+        val callbackUri = intent.data
+        if (callbackUri?.scheme == "com.aibyjohannes.alfred" && callbackUri.path == "/oauth/notion") {
+            handleNotionOAuthCallback(callbackUri)
+            return
+        }
         if (Intent.ACTION_SEND == intent.action && intent.type != null) {
             if (intent.type?.startsWith("text/") == true) {
                 val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
@@ -551,6 +575,38 @@ class MainActivity : AppCompatActivity() {
                     homeViewModel.setSharedText(sharedText)
                     navigateToHome()
                 }
+            }
+        }
+    }
+
+    private fun handleNotionOAuthCallback(uri: android.net.Uri) {
+        val store = ApiKeyStore(this)
+        val pending = store.loadNotionPendingAuthorization()
+        val error = uri.getQueryParameter("error")
+        val state = uri.getQueryParameter("state")
+        val code = uri.getQueryParameter("code")
+        if (pending == null || !error.isNullOrBlank() || state != pending.state || code.isNullOrBlank()) {
+            val detail = error ?: if (pending == null) "authorization session expired" else "invalid authorization response"
+            store.clearNotionCredentials()
+            Toast.makeText(this, getString(R.string.notion_auth_failed, detail), Toast.LENGTH_LONG).show()
+            return
+        }
+        lifecycleScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    NotionOAuthClient().use { client -> client.exchangeCode(code, pending) }
+                }
+            }.onSuccess { credentials ->
+                store.saveNotionCredentials(credentials)
+                Toast.makeText(this@MainActivity, R.string.notion_auth_success, Toast.LENGTH_LONG).show()
+                initializeHomeViewModel()
+            }.onFailure { failure ->
+                store.clearNotionCredentials()
+                Toast.makeText(
+                    this@MainActivity,
+                    getString(R.string.notion_auth_failed, failure.message ?: "Unknown error"),
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
     }

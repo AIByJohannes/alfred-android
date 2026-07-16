@@ -85,7 +85,7 @@ class ApiKeyStoreTest {
 
     @Test
     fun `chat model defaults and custom selection round trip`() {
-        assertEquals("~google/gemini-flash-latest:nitro", apiKeyStore.loadModel())
+        assertEquals("openai/gpt-5.6-luna", apiKeyStore.loadModel())
 
         apiKeyStore.saveModel("  custom-model  ")
 
@@ -96,12 +96,18 @@ class ApiKeyStoreTest {
     fun `efficiency and privacy modes default off and round trip`() {
         assertFalse(apiKeyStore.isEfficiencyModeEnabled())
         assertFalse(apiKeyStore.isPrivacyModeEnabled())
+        assertFalse(apiKeyStore.isCostConfirmationEnabled())
+        assertTrue(apiKeyStore.areToolsEnabled())
 
         apiKeyStore.saveEfficiencyMode(true)
         apiKeyStore.savePrivacyMode(true)
+        apiKeyStore.saveCostConfirmation(true)
+        apiKeyStore.saveToolsEnabled(false)
 
         assertTrue(apiKeyStore.isEfficiencyModeEnabled())
         assertTrue(apiKeyStore.isPrivacyModeEnabled())
+        assertTrue(apiKeyStore.isCostConfirmationEnabled())
+        assertFalse(apiKeyStore.areToolsEnabled())
     }
 
     @Test
@@ -110,7 +116,7 @@ class ApiKeyStoreTest {
             "google/gemma-4-31b-it:free" to "google/gemma-4-31b-it",
             "google/gemma-4-26b-a4b-it:free" to "google/gemma-4-26b-a4b-it",
             "qwen/qwen3-next-80b-a3b-instruct:free" to "qwen/qwen3-next-80b-a3b-instruct",
-            "openrouter/free" to "openrouter/auto"
+            "openrouter/free" to "google/gemma-4-26b-a4b-it"
         ).forEach { (legacy, current) ->
             apiKeyStore.saveModel(legacy)
 
@@ -172,13 +178,35 @@ class ApiKeyStoreTest {
     }
 
     @Test
+    fun `GitHub token round trips and clears`() {
+        assertFalse(apiKeyStore.hasGitHubAuth())
+        apiKeyStore.saveGitHubAccessToken("  github-token  ")
+        assertEquals("github-token", apiKeyStore.loadGitHubAccessToken())
+        assertTrue(apiKeyStore.hasGitHubAuth())
+        apiKeyStore.clearGitHubCredentials()
+        assertNull(apiKeyStore.loadGitHubAccessToken())
+        assertFalse(apiKeyStore.hasGitHubAuth())
+    }
+
+    @Test
+    fun `Together key round trips and clears`() {
+        assertFalse(apiKeyStore.hasTogetherApiKey())
+        apiKeyStore.saveTogetherApiKey("  together-key  ")
+        assertEquals("together-key", apiKeyStore.loadTogetherApiKey())
+        assertTrue(apiKeyStore.hasTogetherApiKey())
+        apiKeyStore.clearTogetherApiKey()
+        assertNull(apiKeyStore.loadTogetherApiKey())
+        assertFalse(apiKeyStore.hasTogetherApiKey())
+    }
+
+    @Test
     fun `preference read failures return safe absent values and defaults`() {
         val throwingPrefs = mockk<SharedPreferences>()
         every { throwingPrefs.getString(any(), any()) } throws IllegalStateException("read failed")
         val store = ApiKeyStore(throwingPrefs, fallbackApiKey = "fallback-key")
 
         assertNull(store.loadOpenRouterKey())
-        assertEquals("~google/gemini-flash-latest:nitro", store.loadModel())
+        assertEquals("openai/gpt-5.6-luna", store.loadModel())
         assertEquals("openai/whisper-1", store.loadSttModel())
         assertEquals("hexgrad/kokoro-82m", store.loadTtsModel())
         assertEquals("af_alloy", store.loadTtsVoice())

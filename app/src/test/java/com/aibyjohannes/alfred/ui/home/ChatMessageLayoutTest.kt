@@ -1,6 +1,7 @@
 package com.aibyjohannes.alfred.ui.home
 
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
 import org.junit.Assert.fail
 import org.junit.Test
 import java.io.File
@@ -51,6 +52,22 @@ class ChatMessageLayoutTest {
         assertTrue(
             "trace_container must be defined before message_text in layout file. Found order: $ids",
             ids[0] == "@+id/trace_container" && ids[1] == "@+id/message_text"
+        )
+    }
+
+    @Test
+    fun assistantWidthUsesResponsiveDimension() {
+        val file = listOf(
+            File("app/src/main/res/layout/item_chat_message.xml"),
+            File("src/main/res/layout/item_chat_message.xml")
+        ).firstOrNull(File::exists) ?: error("Layout XML file not found")
+        val doc = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(file)
+        val cards = doc.getElementsByTagName("com.google.android.material.card.MaterialCardView")
+        val card = cards.item(0) as Element
+
+        assertEquals(
+            "@dimen/assistant_message_max_width",
+            card.getAttribute("app:layout_constraintWidth_max")
         )
     }
 }

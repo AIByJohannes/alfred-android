@@ -11,7 +11,7 @@
         android:layout_height="wrap_content"
         app:cardCornerRadius="12dp"
         app:cardElevation="2dp"
-        app:layout_constraintWidth_max="280dp"
+        app:layout_constraintWidth_max="@dimen/assistant_message_max_width"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
@@ -40,6 +40,16 @@
                 android:layout_height="wrap_content"
                 android:padding="12dp"
                 android:textSize="16sp" />
+
+            <LinearLayout
+                android:id="@+id/widget_container"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:paddingBottom="8dp"
+                android:visibility="gone" />
 
             <ImageButton
                 android:id="@+id/share_button"

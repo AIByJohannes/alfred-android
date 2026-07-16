@@ -306,7 +306,9 @@ class DocumentObsidianClient(
     private fun score(content: String, terms: List<String>): Int {
         val normalized = content.lowercase(Locale.US)
         return terms.sumOf { term ->
-            Regex("(?U)\\b${Regex.escape(term)}\\b", RegexOption.IGNORE_CASE)
+            // Kotlin/JVM already applies Unicode-aware case folding for text terms;
+            // the Java-only (?U) flag is rejected by Android's regex engine.
+            Regex("\\b${Regex.escape(term)}\\b", RegexOption.IGNORE_CASE)
                 .findAll(normalized)
                 .count()
         }

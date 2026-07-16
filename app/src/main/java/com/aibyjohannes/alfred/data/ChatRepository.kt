@@ -3,6 +3,7 @@ package com.aibyjohannes.alfred.data
 import com.aibyjohannes.alfred.core.SystemPrompts
 import com.aibyjohannes.alfred.core.engine.ChatEngine
 import com.aibyjohannes.alfred.core.engine.OpenRouterChatEngine
+import com.aibyjohannes.alfred.core.engine.TogetherChatEngine
 import com.aibyjohannes.alfred.core.model.ChatStreamEvent
 import com.aibyjohannes.alfred.core.search.GrokSearchClient
 import com.aibyjohannes.alfred.core.search.LocalKnowledgeSearchClient
@@ -20,10 +21,17 @@ import com.aibyjohannes.alfred.data.api.ChatMessage
 import com.aibyjohannes.alfred.core.audio.OpenRouterAudioClient
 import com.aibyjohannes.alfred.core.audio.OpenRouterTtsClient
 import com.aibyjohannes.alfred.core.image.OpenRouterImageClient
+import com.aibyjohannes.alfred.core.github.GitHubCredentialsProvider
+import com.aibyjohannes.alfred.core.github.GitHubMcpClient
+import com.aibyjohannes.alfred.core.notion.NotionCredentials
+import com.aibyjohannes.alfred.core.notion.NotionCredentialsProvider
+import com.aibyjohannes.alfred.core.notion.NotionMcpClient
+import com.aibyjohannes.alfred.data.local.LocalGemmaModelStore
 import com.fasterxml.jackson.annotation.JsonClassDescription
 import com.fasterxml.jackson.annotation.JsonPropertyDescription
 import kotlinx.coroutines.flow.Flow
 import java.io.File
+import java.util.UUID
 
 internal data class ChatEngineRequest(
     val apiKey: String,
@@ -39,7 +47,9 @@ internal class ChatRepositoryDependencies(
     val ttsClientFactory: (String, String, String) -> OpenRouterTtsClient = { apiKey, model, voice ->
         OpenRouterTtsClient(apiKey, model, voice)
     },
-    val chatEngineFactory: ((ChatEngineRequest) -> ChatEngine)? = null
+    val chatEngineFactory: ((ChatEngineRequest) -> ChatEngine)? = null,
+    val localChatEngineFactory: ((modelPath: String, systemPrompt: String) -> ChatEngine)? = null,
+    val localModelPathProvider: (() -> String?)? = null
 )
 
 class ChatRepository private constructor(
@@ -49,6 +59,7 @@ class ChatRepository private constructor(
     private val obsidianClientProvider: (() -> ObsidianClient?)? = null,
     private val skillClient: SkillClient? = null,
     private val reminderClient: ReminderClient? = null,
+    private val generatedImageDirectory: File? = null,
     private val dependencies: ChatRepositoryDependencies
 ) {
     constructor(
@@ -57,7 +68,10 @@ class ChatRepository private constructor(
         obsidianClient: ObsidianClient? = null,
         obsidianClientProvider: (() -> ObsidianClient?)? = null,
         skillClient: SkillClient? = null,
-        reminderClient: ReminderClient? = null
+        reminderClient: ReminderClient? = null,
+        generatedImageDirectory: File? = null,
+        localChatEngineFactory: ((modelPath: String, systemPrompt: String) -> ChatEngine)? = null,
+        localModelPathProvider: (() -> String?)? = null
     ) : this(
         apiKeyStore,
         localKnowledgeSearchClient,
@@ -65,13 +79,17 @@ class ChatRepository private constructor(
         obsidianClientProvider,
         skillClient,
         reminderClient,
-        ChatRepositoryDependencies()
+        generatedImageDirectory,
+        ChatRepositoryDependencies(
+            localChatEngineFactory = localChatEngineFactory,
+            localModelPathProvider = localModelPathProvider
+        )
     )
 
     internal constructor(
         apiKeyStore: ApiKeyStore,
         dependencies: ChatRepositoryDependencies
-    ) : this(apiKeyStore, null, null, null, null, null, dependencies)
+    ) : this(apiKeyStore, null, null, null, null, null, null, dependencies)
 
     suspend fun transcribeAudio(audioFile: java.io.File): Result<String> {
         val apiKey = loadApiKey()
@@ -107,8 +125,8 @@ class ChatRepository private constructor(
         conversationHistory: List<ChatMessage>,
         sysInfo: String? = null
     ): Result<String> {
-        val apiKey = loadApiKey()
-            ?: return Result.failure(Exception("API key not configured. Please add your OpenRouter API key in Settings."))
+        val apiKey = loadChatApiKey()
+            ?: return Result.failure(missingChatConfigurationError())
 
         val engine = createEngine(apiKey, sysInfo)
 
@@ -125,8 +143,8 @@ class ChatRepository private constructor(
         maxPasses: Int? = null,
         sessionId: String? = null
     ): Flow<ChatStreamEvent> {
-        val apiKey = loadApiKey()
-            ?: throw IllegalStateException("API key not configured. Please add your OpenRouter API key in Settings.")
+        val apiKey = loadChatApiKey()
+            ?: throw missingChatConfigurationError()
         return createEngine(apiKey, sysInfo, maxPasses, sessionId).streamMessage(
             userMessage = userMessage,
             conversationHistory = conversationHistory.toCoreMessages()
@@ -164,8 +182,23 @@ class ChatRepository private constructor(
     ): ChatEngine {
         val model = apiKeyStore.loadModel()
         val resolvedMaxPasses = maxPasses ?: 10
+        if (model == LocalGemmaModelStore.LOCAL_MODEL_ID) {
+            val modelPath = dependencies.localModelPathProvider?.invoke()
+                ?: throw IllegalStateException("Local Gemma 3n is selected, but no model is installed. Import a .litertlm model in Settings.")
+            return dependencies.localChatEngineFactory?.invoke(
+                modelPath,
+                SystemPrompts.buildSystemPrompt(sysInfo)
+            ) ?: throw IllegalStateException("Local Gemma 3n inference is unavailable in this build.")
+        }
         dependencies.chatEngineFactory?.let { factory ->
             return factory(ChatEngineRequest(apiKey, model, sysInfo, resolvedMaxPasses))
+        }
+        if (model.startsWith(TogetherChatEngine.MODEL_PREFIX)) {
+            return TogetherChatEngine(
+                apiKey = apiKey,
+                model = model.removePrefix(TogetherChatEngine.MODEL_PREFIX),
+                systemPrompt = SystemPrompts.buildSystemPrompt(sysInfo)
+            )
         }
 
         val tickTickProvider = object : TickTickCredentialsProvider {
@@ -189,6 +222,24 @@ class ChatRepository private constructor(
             null
         }
 
+        val notionProvider = object : NotionCredentialsProvider {
+            override fun getCredentials(): NotionCredentials? = apiKeyStore.loadNotionCredentials()
+
+            override fun onCredentialsRefreshed(credentials: NotionCredentials) {
+                apiKeyStore.saveNotionCredentials(credentials)
+            }
+        }
+        val notionMcpClient = if (apiKeyStore.hasNotionAuth()) {
+            NotionMcpClient(notionProvider)
+        } else {
+            null
+        }
+        val githubMcpClient = if (apiKeyStore.hasGitHubAuth()) {
+            GitHubMcpClient(GitHubCredentialsProvider(apiKeyStore::loadGitHubAccessToken))
+        } else {
+            null
+        }
+
         return OpenRouterChatEngine(
             apiKey = apiKey,
             model = model,
@@ -196,12 +247,18 @@ class ChatRepository private constructor(
             webSearchClient = createWebSearchClient(apiKey),
             localKnowledgeSearchClient = localKnowledgeSearchClient,
             tickTickClient = tickTickClient,
+            notionMcpClient = notionMcpClient,
+            githubMcpClient = githubMcpClient,
+            imageGenerator = generatedImageDirectory?.let { directory ->
+                { imagePrompt -> generateImageWidget(apiKey, imagePrompt, directory) }
+            },
             obsidianClient = resolveObsidianClient(),
             skillClient = resolveSkillClient(),
             reminderClient = reminderClient,
             maxAgentPasses = resolvedMaxPasses,
             efficiencyModeEnabled = apiKeyStore.isEfficiencyModeEnabled(),
             privacyModeEnabled = apiKeyStore.isPrivacyModeEnabled(),
+            toolsEnabled = apiKeyStore.areToolsEnabled(),
             sessionId = sessionId
         )
     }
@@ -209,6 +266,21 @@ class ChatRepository private constructor(
     private fun loadApiKey(): String? = apiKeyStore.loadOpenRouterKey()
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
+
+    private fun loadChatApiKey(): String? = when {
+        apiKeyStore.loadModel() == LocalGemmaModelStore.LOCAL_MODEL_ID -> LOCAL_CHAT_SENTINEL_KEY
+        apiKeyStore.loadModel().startsWith(TogetherChatEngine.MODEL_PREFIX) -> apiKeyStore.loadTogetherApiKey()
+            ?.trim()?.takeIf(String::isNotEmpty)
+        else -> loadApiKey()
+    }
+
+    private fun missingChatConfigurationError(): IllegalStateException = IllegalStateException(
+        if (apiKeyStore.loadModel().startsWith(TogetherChatEngine.MODEL_PREFIX)) {
+            "Together API key not configured. Add it in Settings > Models to use PrismML."
+        } else {
+            "API key not configured. Please add your OpenRouter API key in Settings."
+        }
+    )
 
     /** Returns the currently active ObsidianClient, preferring the dynamic provider over the fixed one. */
     fun resolveObsidianClient(): ObsidianClient? =
@@ -239,6 +311,33 @@ class ChatRepository private constructor(
         }
     }
 
+    private suspend fun generateImageWidget(apiKey: String, prompt: String, directory: File): Result<String> {
+        return try {
+            OpenRouterImageClient(apiKey).use { client ->
+                client.generate(prompt).map { image ->
+                    directory.mkdirs()
+                    val extension = when (image.mediaType.lowercase()) {
+                        "image/jpeg" -> "jpg"
+                        "image/webp" -> "webp"
+                        else -> "png"
+                    }
+                    val outputFile = directory.resolve("generated-${UUID.randomUUID()}.$extension")
+                    outputFile.writeBytes(image.bytes)
+                    val widgetJson = com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(
+                        mapOf(
+                            "type" to "image",
+                            "path" to outputFile.absolutePath,
+                            "alt" to prompt.take(240)
+                        )
+                    )
+                    "```alfred-widget\n$widgetJson\n```"
+                }
+            }
+        } catch (error: Exception) {
+            Result.failure(error)
+        }
+    }
+
     // Retained for test compatibility and tool schema intent.
     @JsonClassDescription("Search the web for current information.")
     class WebSearchTool {
@@ -258,8 +357,8 @@ class ChatRepository private constructor(
         var source: String? = null
     }
 
-    @JsonClassDescription("Delegate complex planning, logical reasoning, or step-by-step structuring tasks to a stronger reasoning model (DeepSeek Version 4 Pro).")
-    class AskSmartModelTool {
+    @JsonClassDescription("Create a detailed execution plan for a complex task with a stronger reasoning model.")
+    class CreatePlanTool {
         @JsonPropertyDescription("The specific complex task, problem, or objective that needs planning, reasoning, or direction")
         var task_details: String? = null
 
@@ -274,6 +373,7 @@ class ChatRepository private constructor(
         const val GROK_SEARCH_MODEL = GrokSearchClient.DEFAULT_MODEL
         const val SEARCH_TOOL_PERPLEXITY = "perplexity"
         const val SEARCH_TOOL_GROK = "grok"
+        private const val LOCAL_CHAT_SENTINEL_KEY = "local"
     }
 
     @Deprecated("Use core engine package directly for new integrations.")

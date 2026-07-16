@@ -15,6 +15,7 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.aibyjohannes.alfred.R
 import com.aibyjohannes.alfred.core.ticktick.TickTickClient
+import com.aibyjohannes.alfred.core.notion.NotionOAuthClient
 import com.aibyjohannes.alfred.core.ticktick.TickTickClient.Companion.OAUTH_REDIRECT_URI
 import com.aibyjohannes.alfred.core.ticktick.TickTickClient.Companion.OAUTH_SCOPE
 import com.aibyjohannes.alfred.data.ApiKeyStore
@@ -79,6 +80,10 @@ class ToolSettingsFragment : Fragment() {
         setupSearchToolDropdown()
         setupTickTickControls()
         updateTickTickStatus()
+        setupNotionControls()
+        updateNotionStatus()
+        setupGitHubControls()
+        updateGitHubStatus()
         setupObsidianControls()
         updateObsidianStatus()
 
@@ -233,6 +238,102 @@ class ToolSettingsFragment : Fragment() {
         }
     }
 
+    private fun setupNotionControls() {
+        binding.notionConnectButton.setOnClickListener {
+            binding.notionConnectButton.isEnabled = false
+            Snackbar.make(binding.root, R.string.notion_connecting, Snackbar.LENGTH_LONG).show()
+            lifecycleScope.launch {
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        NotionOAuthClient().use { client ->
+                            client.beginAuthorization(NotionOAuthClient.REDIRECT_URI)
+                        }
+                    }
+                }.onSuccess { pending ->
+                    apiKeyStore.saveNotionPendingAuthorization(pending)
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(pending.authorizationUrl)))
+                }.onFailure { error ->
+                    binding.notionConnectButton.isEnabled = true
+                    Snackbar.make(
+                        binding.root,
+                        getString(R.string.notion_auth_failed, error.message ?: "Unknown error"),
+                        Snackbar.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+        binding.notionDisconnectButton.setOnClickListener {
+            apiKeyStore.clearNotionCredentials()
+            updateNotionStatus()
+            Snackbar.make(binding.root, R.string.notion_cleared, Snackbar.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun updateNotionStatus() {
+        if (!::apiKeyStore.isInitialized || _binding == null) return
+        val connected = apiKeyStore.hasNotionAuth()
+        binding.notionStatusChip.setText(
+            if (connected) R.string.notion_status_connected else R.string.notion_status_not_connected
+        )
+        binding.notionStatusChip.chipBackgroundColor = ColorStateList.valueOf(
+            ContextCompat.getColor(
+                requireContext(),
+                if (connected) R.color.status_configured_bg else R.color.status_not_configured_bg
+            )
+        )
+        binding.notionStatusChip.setTextColor(
+            ContextCompat.getColor(
+                requireContext(),
+                if (connected) R.color.status_configured_text else R.color.status_not_configured_text
+            )
+        )
+        binding.notionConnectButton.isEnabled = !connected
+        binding.notionDisconnectButton.isEnabled = connected
+    }
+
+    private fun setupGitHubControls() {
+        binding.githubConnectButton.setOnClickListener {
+            val token = binding.githubTokenInput.text?.toString()?.trim()
+            if (token.isNullOrBlank()) {
+                Snackbar.make(binding.root, R.string.github_token_required, Snackbar.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            apiKeyStore.saveGitHubAccessToken(token)
+            binding.githubTokenInput.text?.clear()
+            updateGitHubStatus()
+            Snackbar.make(binding.root, R.string.github_connected, Snackbar.LENGTH_SHORT).show()
+        }
+        binding.githubDisconnectButton.setOnClickListener {
+            apiKeyStore.clearGitHubCredentials()
+            binding.githubTokenInput.text?.clear()
+            updateGitHubStatus()
+            Snackbar.make(binding.root, R.string.github_cleared, Snackbar.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun updateGitHubStatus() {
+        if (!::apiKeyStore.isInitialized || _binding == null) return
+        val connected = apiKeyStore.hasGitHubAuth()
+        binding.githubStatusChip.setText(
+            if (connected) R.string.github_status_connected else R.string.github_status_not_connected
+        )
+        binding.githubStatusChip.chipBackgroundColor = ColorStateList.valueOf(
+            ContextCompat.getColor(
+                requireContext(),
+                if (connected) R.color.status_configured_bg else R.color.status_not_configured_bg
+            )
+        )
+        binding.githubStatusChip.setTextColor(
+            ContextCompat.getColor(
+                requireContext(),
+                if (connected) R.color.status_configured_text else R.color.status_not_configured_text
+            )
+        )
+        binding.githubTokenInput.isEnabled = !connected
+        binding.githubConnectButton.isEnabled = !connected
+        binding.githubDisconnectButton.isEnabled = connected
+    }
+
     private fun updateObsidianStatus() {
         if (!::obsidianVaultStore.isInitialized || _binding == null) return
 
@@ -264,5 +365,11 @@ class ToolSettingsFragment : Fragment() {
         oauthServer?.stop()
         super.onDestroyView()
         _binding = null
+    }
+
+    override fun onResume() {
+        super.onResume()
+        updateNotionStatus()
+        updateGitHubStatus()
     }
 }

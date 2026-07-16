@@ -6,6 +6,8 @@ import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.aibyjohannes.alfred.core.audio.OpenRouterTtsClient
+import com.aibyjohannes.alfred.core.notion.NotionCredentials
+import com.aibyjohannes.alfred.core.notion.NotionOAuthPending
 
 class ApiKeyStore internal constructor(
     private val prefs: SharedPreferences,
@@ -64,6 +66,20 @@ class ApiKeyStore internal constructor(
             Log.e(TAG, "Error loading model", e)
             DEFAULT_MODEL_VAL
         }
+    }
+
+    fun saveTogetherApiKey(key: String) {
+        prefs.edit().putString(KEY_TOGETHER_API_KEY, key.trim()).apply()
+    }
+
+    fun loadTogetherApiKey(): String? = prefs.getString(KEY_TOGETHER_API_KEY, null)
+        ?.trim()
+        ?.takeIf(String::isNotEmpty)
+
+    fun hasTogetherApiKey(): Boolean = loadTogetherApiKey() != null
+
+    fun clearTogetherApiKey() {
+        prefs.edit().remove(KEY_TOGETHER_API_KEY).apply()
     }
 
     fun saveSttModel(model: String) {
@@ -211,6 +227,95 @@ class ApiKeyStore internal constructor(
         }
     }
 
+    fun saveNotionPendingAuthorization(pending: NotionOAuthPending) {
+        prefs.edit()
+            .putString(KEY_NOTION_CLIENT_ID, pending.clientId)
+            .putString(KEY_NOTION_CLIENT_SECRET, pending.clientSecret)
+            .putString(KEY_NOTION_TOKEN_ENDPOINT, pending.tokenEndpoint)
+            .putString(KEY_NOTION_REDIRECT_URI, pending.redirectUri)
+            .putString(KEY_NOTION_CODE_VERIFIER, pending.codeVerifier)
+            .putString(KEY_NOTION_OAUTH_STATE, pending.state)
+            .apply()
+    }
+
+    fun loadNotionPendingAuthorization(): NotionOAuthPending? {
+        val clientId = prefs.getString(KEY_NOTION_CLIENT_ID, null)?.takeIf { it.isNotBlank() } ?: return null
+        val tokenEndpoint = prefs.getString(KEY_NOTION_TOKEN_ENDPOINT, null)?.takeIf { it.isNotBlank() } ?: return null
+        val redirectUri = prefs.getString(KEY_NOTION_REDIRECT_URI, null)?.takeIf { it.isNotBlank() } ?: return null
+        val verifier = prefs.getString(KEY_NOTION_CODE_VERIFIER, null)?.takeIf { it.isNotBlank() } ?: return null
+        val state = prefs.getString(KEY_NOTION_OAUTH_STATE, null)?.takeIf { it.isNotBlank() } ?: return null
+        return NotionOAuthPending(
+            clientId = clientId,
+            clientSecret = prefs.getString(KEY_NOTION_CLIENT_SECRET, null)?.takeIf { it.isNotBlank() },
+            tokenEndpoint = tokenEndpoint,
+            redirectUri = redirectUri,
+            codeVerifier = verifier,
+            state = state,
+            authorizationUrl = ""
+        )
+    }
+
+    fun saveNotionCredentials(credentials: NotionCredentials) {
+        prefs.edit()
+            .putString(KEY_NOTION_CLIENT_ID, credentials.clientId)
+            .putString(KEY_NOTION_CLIENT_SECRET, credentials.clientSecret)
+            .putString(KEY_NOTION_ACCESS_TOKEN, credentials.accessToken)
+            .putString(KEY_NOTION_REFRESH_TOKEN, credentials.refreshToken)
+            .putString(KEY_NOTION_TOKEN_ENDPOINT, credentials.tokenEndpoint)
+            .putLong(KEY_NOTION_EXPIRES_AT, credentials.expiresAtEpochSeconds ?: 0L)
+            .putString(KEY_NOTION_WORKSPACE_ID, credentials.workspaceId)
+            .remove(KEY_NOTION_REDIRECT_URI)
+            .remove(KEY_NOTION_CODE_VERIFIER)
+            .remove(KEY_NOTION_OAUTH_STATE)
+            .apply()
+    }
+
+    fun loadNotionCredentials(): NotionCredentials? {
+        val clientId = prefs.getString(KEY_NOTION_CLIENT_ID, null)?.takeIf { it.isNotBlank() } ?: return null
+        val accessToken = prefs.getString(KEY_NOTION_ACCESS_TOKEN, null)?.takeIf { it.isNotBlank() } ?: return null
+        val tokenEndpoint = prefs.getString(KEY_NOTION_TOKEN_ENDPOINT, null)?.takeIf { it.isNotBlank() } ?: return null
+        return NotionCredentials(
+            clientId = clientId,
+            clientSecret = prefs.getString(KEY_NOTION_CLIENT_SECRET, null)?.takeIf { it.isNotBlank() },
+            accessToken = accessToken,
+            refreshToken = prefs.getString(KEY_NOTION_REFRESH_TOKEN, null)?.takeIf { it.isNotBlank() },
+            tokenEndpoint = tokenEndpoint,
+            expiresAtEpochSeconds = prefs.getLong(KEY_NOTION_EXPIRES_AT, 0L).takeIf { it > 0L },
+            workspaceId = prefs.getString(KEY_NOTION_WORKSPACE_ID, null)?.takeIf { it.isNotBlank() }
+        )
+    }
+
+    fun hasNotionAuth(): Boolean = loadNotionCredentials() != null
+
+    fun clearNotionCredentials() {
+        prefs.edit()
+            .remove(KEY_NOTION_CLIENT_ID)
+            .remove(KEY_NOTION_CLIENT_SECRET)
+            .remove(KEY_NOTION_ACCESS_TOKEN)
+            .remove(KEY_NOTION_REFRESH_TOKEN)
+            .remove(KEY_NOTION_TOKEN_ENDPOINT)
+            .remove(KEY_NOTION_EXPIRES_AT)
+            .remove(KEY_NOTION_WORKSPACE_ID)
+            .remove(KEY_NOTION_REDIRECT_URI)
+            .remove(KEY_NOTION_CODE_VERIFIER)
+            .remove(KEY_NOTION_OAUTH_STATE)
+            .apply()
+    }
+
+    fun saveGitHubAccessToken(token: String) {
+        prefs.edit().putString(KEY_GITHUB_ACCESS_TOKEN, token.trim()).apply()
+    }
+
+    fun loadGitHubAccessToken(): String? = prefs.getString(KEY_GITHUB_ACCESS_TOKEN, null)
+        ?.trim()
+        ?.takeIf(String::isNotEmpty)
+
+    fun hasGitHubAuth(): Boolean = loadGitHubAccessToken() != null
+
+    fun clearGitHubCredentials() {
+        prefs.edit().remove(KEY_GITHUB_ACCESS_TOKEN).apply()
+    }
+
     fun saveSearchTool(searchTool: String) {
         try {
             prefs.edit().putString(KEY_SEARCH_TOOL, searchTool.trim()).apply()
@@ -240,29 +345,65 @@ class ApiKeyStore internal constructor(
 
     fun isPrivacyModeEnabled(): Boolean = prefs.getBoolean(KEY_PRIVACY_MODE, false)
 
+    fun saveCostConfirmation(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_COST_CONFIRMATION, enabled).apply()
+    }
+
+    fun isCostConfirmationEnabled(): Boolean = prefs.getBoolean(KEY_COST_CONFIRMATION, false)
+
+    fun saveToolsEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_TOOLS_ENABLED, enabled).apply()
+    }
+
+    fun areToolsEnabled(): Boolean = prefs.getBoolean(KEY_TOOLS_ENABLED, true)
+
+    fun savePreferLocalVoice(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_PREFER_LOCAL_VOICE, enabled).apply()
+    }
+
+    fun isPreferLocalVoiceEnabled(): Boolean = prefs.getBoolean(KEY_PREFER_LOCAL_VOICE, false)
+
+    fun saveLocalVoiceFallback(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_LOCAL_VOICE_FALLBACK, enabled).apply()
+    }
+
+    fun isLocalVoiceFallbackEnabled(): Boolean = prefs.getBoolean(KEY_LOCAL_VOICE_FALLBACK, true)
+
     companion object {
         private const val TAG = "ApiKeyStore"
         private const val PREFS_FILE_NAME = "alfred_secret_prefs"
         private const val KEY_OPENROUTER_API_KEY = "openrouter_api_key"
+        private const val KEY_TOGETHER_API_KEY = "together_api_key"
         private const val KEY_TICKTICK_CLIENT_ID = "ticktick_client_id"
         private const val KEY_TICKTICK_CLIENT_SECRET = "ticktick_client_secret"
         private const val KEY_TICKTICK_ACCESS_TOKEN = "ticktick_access_token"
         private const val KEY_TICKTICK_REFRESH_TOKEN = "ticktick_refresh_token"
+        private const val KEY_NOTION_CLIENT_ID = "notion_client_id"
+        private const val KEY_NOTION_CLIENT_SECRET = "notion_client_secret"
+        private const val KEY_NOTION_ACCESS_TOKEN = "notion_access_token"
+        private const val KEY_NOTION_REFRESH_TOKEN = "notion_refresh_token"
+        private const val KEY_NOTION_TOKEN_ENDPOINT = "notion_token_endpoint"
+        private const val KEY_NOTION_EXPIRES_AT = "notion_expires_at"
+        private const val KEY_NOTION_WORKSPACE_ID = "notion_workspace_id"
+        private const val KEY_NOTION_REDIRECT_URI = "notion_redirect_uri"
+        private const val KEY_NOTION_CODE_VERIFIER = "notion_code_verifier"
+        private const val KEY_NOTION_OAUTH_STATE = "notion_oauth_state"
+        private const val KEY_GITHUB_ACCESS_TOKEN = "github_access_token"
         private const val KEY_MODEL = "selected_model"
         private const val KEY_SEARCH_TOOL = "selected_search_tool"
         private const val KEY_EFFICIENCY_MODE = "efficiency_mode"
         private const val KEY_PRIVACY_MODE = "privacy_mode"
-        /**
-         * Maintained OpenRouter alias with throughput-first provider routing.
-         * Existing saved selections are intentionally left untouched.
-         */
-        private const val DEFAULT_MODEL_VAL = "~google/gemini-flash-latest:nitro"
+        private const val KEY_COST_CONFIRMATION = "cost_confirmation"
+        private const val KEY_TOOLS_ENABLED = "tools_enabled"
+        private const val KEY_PREFER_LOCAL_VOICE = "prefer_local_voice"
+        private const val KEY_LOCAL_VOICE_FALLBACK = "local_voice_fallback"
+        private const val DEFAULT_MODEL_VAL = "openai/gpt-5.6-luna"
         private const val DEFAULT_SEARCH_TOOL_VAL = "perplexity"
         private val LEGACY_FREE_CHAT_MODEL_MIGRATIONS = mapOf(
             "google/gemma-4-31b-it:free" to "google/gemma-4-31b-it",
             "google/gemma-4-26b-a4b-it:free" to "google/gemma-4-26b-a4b-it",
             "qwen/qwen3-next-80b-a3b-instruct:free" to "qwen/qwen3-next-80b-a3b-instruct",
-            "openrouter/free" to "openrouter/auto"
+            "openrouter/free" to "google/gemma-4-26b-a4b-it"
         )
         private const val KEY_STT_MODEL = "selected_stt_model"
         private const val DEFAULT_STT_MODEL_VAL = "openai/whisper-1"

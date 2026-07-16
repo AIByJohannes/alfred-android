@@ -1,4 +1,6 @@
 <resources>
     <dimen name="fab_margin">48dp</dimen>
     <dimen name="conversation_drawer_width">304dp</dimen>
+    <dimen name="assistant_message_max_width">560dp</dimen>
+    <dimen name="user_message_max_width">420dp</dimen>
 </resources>

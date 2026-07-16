@@ -109,6 +109,31 @@ class StorageSkillClient(
         }
     }
 
+    override suspend fun deleteReference(skillId: String, path: String): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            requireValidSkillId(skillId)
+            require(parseSummary(skillId) != null) { "Skill is missing or invalid: $skillId" }
+            val segments = validateReferencePath(path)
+            require(segments != listOf(SKILL_FILE)) { "SKILL.md is managed by the skill lifecycle tools" }
+            storage.delete(SKILLS_ROOT + skillId + segments)
+            "Deleted skill reference: $skillId/${segments.joinToString("/")}"
+        }
+    }
+
+    override suspend fun moveReference(skillId: String, fromPath: String, toPath: String): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            requireValidSkillId(skillId)
+            require(parseSummary(skillId) != null) { "Skill is missing or invalid: $skillId" }
+            val from = validateReferencePath(fromPath)
+            val to = validateReferencePath(toPath)
+            require(from != listOf(SKILL_FILE) && to != listOf(SKILL_FILE)) { "SKILL.md is managed by the skill lifecycle tools" }
+            val content = readBounded(SKILLS_ROOT + skillId + from)
+            storage.writeText(SKILLS_ROOT + skillId + to, content, referenceMimeType(to.last()))
+            storage.delete(SKILLS_ROOT + skillId + from)
+            "Moved skill reference: $skillId/${from.joinToString("/")} -> ${to.joinToString("/")}"
+        }
+    }
+
     private fun parseSummary(skillId: String): SkillSummary? {
         val text = when (val result = storage.readText(SKILLS_ROOT + listOf(skillId, SKILL_FILE))) {
             is StorageReadResult.Found -> result.text

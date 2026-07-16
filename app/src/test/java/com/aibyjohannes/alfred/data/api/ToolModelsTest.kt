@@ -43,15 +43,15 @@ class ToolModelsTest {
     }
 
     @Test
-    fun `AskSmartModelTool can be instantiated`() {
-        val tool = ChatRepository.AskSmartModelTool()
+    fun `CreatePlanTool can be instantiated`() {
+        val tool = ChatRepository.CreatePlanTool()
         assertNull(tool.task_details)
         assertNull(tool.context)
     }
 
     @Test
-    fun `AskSmartModelTool fields can be set`() {
-        val tool = ChatRepository.AskSmartModelTool()
+    fun `CreatePlanTool fields can be set`() {
+        val tool = ChatRepository.CreatePlanTool()
         tool.task_details = "Plan my study schedule"
         tool.context = "Target 2 hours daily"
 

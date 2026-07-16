@@ -11,6 +11,7 @@ import com.aibyjohannes.alfred.data.api.ChatMessage
 import com.aibyjohannes.alfred.data.local.ConversationStore
 import com.aibyjohannes.alfred.data.local.ConversationSummary
 import com.aibyjohannes.alfred.data.local.StoredChatMessage
+import com.aibyjohannes.alfred.data.local.LocalGemmaModelStore
 import com.aibyjohannes.alfred.data.local.WorkspaceSummary
 import io.mockk.*
 import kotlinx.coroutines.CompletableDeferred
@@ -108,6 +109,16 @@ class HomeViewModelTest {
 
         // Assert
         coVerify(exactly = 1) { conversationStore.createConversation() }
+    }
+
+    @Test
+    fun `local Gemma does not show the OpenRouter key warning`() {
+        every { apiKeyStore.loadModel() } returns LocalGemmaModelStore.LOCAL_MODEL_ID
+        every { apiKeyStore.hasApiKey() } returns false
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+
+        assertEquals(false, viewModel.needsApiKey.value)
     }
 
     @Test

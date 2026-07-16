@@ -1,3 +1,5 @@
 <resources>
     <dimen name="fab_margin">48dp</dimen>
+    <dimen name="assistant_message_max_width">640dp</dimen>
+    <dimen name="user_message_max_width">420dp</dimen>
 </resources>

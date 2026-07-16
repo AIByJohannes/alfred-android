@@ -109,6 +109,7 @@ dependencies {
     implementation(libs.snakeyaml.engine)
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
+    implementation(libs.litert.lm.android)
     ksp(libs.androidx.room.compiler)
 
     // OpenAI Java SDK (includes OkHttp internally)

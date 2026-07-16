@@ -6,6 +6,8 @@ import android.animation.ObjectAnimator
 import android.animation.PropertyValuesHolder
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.media.MediaPlayer
 import android.os.Bundle
 import android.text.Editable
@@ -25,13 +27,14 @@ import android.widget.Toast
 import com.google.android.material.snackbar.Snackbar
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.aibyjohannes.alfred.R
+import com.aibyjohannes.alfred.data.ApiKeyStore
+import com.aibyjohannes.alfred.data.local.LocalGemmaModelStore
 import com.aibyjohannes.alfred.databinding.FragmentHomeBinding
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -52,6 +55,7 @@ class HomeFragment : Fragment() {
     // Dictation (btn_mic) state
     private var isRecording = false
     private var audioRecorder: AudioRecorder? = null
+    private var localSpeechRecognizer: AndroidLocalSpeechRecognizer? = null
 
     // Voice mode (wave button) state
     private var voiceAudioRecorder: AudioRecorder? = null
@@ -212,6 +216,10 @@ class HomeFragment : Fragment() {
 
     private fun setupInputHandling() {
         binding.sendButton.setOnClickListener {
+            if (homeViewModel.isLoading.value == true) {
+                homeViewModel.stopGeneration()
+                return@setOnClickListener
+            }
             val message = binding.messageInput.text?.toString() ?: ""
             if (message.isNotBlank()) {
                 sendMessage()
@@ -256,9 +264,22 @@ class HomeFragment : Fragment() {
         }
     }
 
-    private fun sendMessage() {
+    private fun sendMessage(skipCostConfirmation: Boolean = false) {
         val message = binding.messageInput.text?.toString() ?: return
         if (message.isBlank()) return
+
+        val store = ApiKeyStore(requireContext())
+        if (!skipCostConfirmation && store.isCostConfirmationEnabled() &&
+            store.loadModel() != LocalGemmaModelStore.LOCAL_MODEL_ID
+        ) {
+            MaterialAlertDialogBuilder(requireContext())
+                .setTitle(R.string.cost_confirmation_title)
+                .setMessage(R.string.cost_confirmation_message)
+                .setNegativeButton(R.string.cancel, null)
+                .setPositiveButton(R.string.send) { _, _ -> sendMessage(skipCostConfirmation = true) }
+                .show()
+            return
+        }
 
         homeViewModel.sendMessage(message)
         binding.messageInput.text?.clear()
@@ -289,16 +310,40 @@ class HomeFragment : Fragment() {
         // Stop any ongoing TTS playback
         stopMediaPlayer()
 
-        if (voiceAudioRecorder == null) {
-            voiceAudioRecorder = AudioRecorder(ctx)
+        if (shouldUseLocalVoice()) {
+            val recognizer = localSpeechRecognizer ?: AndroidLocalSpeechRecognizer(ctx).also {
+                localSpeechRecognizer = it
+            }
+            recognizer.start(
+                onResult = { text ->
+                    pendingVoiceText = null
+                    homeViewModel.setVoiceModeState(VoiceModeState.THINKING)
+                    applyVoiceModeUi(VoiceModeState.THINKING)
+                    homeViewModel.sendMessage(text)
+                },
+                onError = { detail ->
+                    endVoiceMode()
+                    Snackbar.make(binding.root, detail, Snackbar.LENGTH_LONG).show()
+                }
+            )
+        } else {
+            if (voiceAudioRecorder == null) {
+                voiceAudioRecorder = AudioRecorder(ctx)
+            }
+            voiceAudioRecorder?.startRecording()
         }
-        voiceAudioRecorder?.startRecording()
 
         homeViewModel.setVoiceModeState(VoiceModeState.LISTENING)
         applyVoiceModeUi(VoiceModeState.LISTENING)
     }
 
     private fun stopListeningAndProcess() {
+        if (localSpeechRecognizer?.isListening == true) {
+            localSpeechRecognizer?.stop()
+            homeViewModel.setVoiceModeState(VoiceModeState.THINKING)
+            applyVoiceModeUi(VoiceModeState.THINKING)
+            return
+        }
         val audioFile = voiceAudioRecorder?.stopRecording()
         homeViewModel.setVoiceModeState(VoiceModeState.THINKING)
         applyVoiceModeUi(VoiceModeState.THINKING)
@@ -552,53 +597,34 @@ class HomeFragment : Fragment() {
             .setPositiveButton("Generate") { _, _ ->
                 val prompt = input.text?.toString().orEmpty()
                 if (prompt.isBlank()) return@setPositiveButton
-                generateImage(prompt)
+                Toast.makeText(context, "Starting image generation…", Toast.LENGTH_SHORT).show()
+                homeViewModel.sendImageGenerationRequest(prompt)
             }
             .show()
     }
 
-    private fun generateImage(prompt: String) {
-        val context = context ?: return
-        viewLifecycleOwner.lifecycleScope.launch {
-            Toast.makeText(context, "Generating image…", Toast.LENGTH_SHORT).show()
-            homeViewModel.generateImage(prompt, context.cacheDir).fold(
-                onSuccess = { file ->
-                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-                    startActivity(Intent(Intent.ACTION_VIEW).apply {
-                        setDataAndType(uri, "image/*")
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    })
-                },
-                onFailure = { error ->
-                    Snackbar.make(
-                        binding.root,
-                        "Image generation failed: ${error.message ?: "Unknown error"}",
-                        Snackbar.LENGTH_LONG
-                    ).setAction(R.string.retry) {
-                        generateImage(prompt)
-                    }.show()
-                }
-            )
-        }
-    }
-
     private fun updateLoadingUi() {
         val isBusy = isStreamingResponse || isConversationLoading
-        if (isConversationLoading) {
-            binding.conversationLoadingOverlay.isVisible = true
-            startConversationLoadingAnimation()
-        } else {
-            stopConversationLoadingAnimation()
-            binding.conversationLoadingOverlay.isVisible = false
-        }
+        // Streaming text and the disabled input already communicate progress.
+        // Avoid a second, blocking spinner while a conversation is restored.
+        stopConversationLoadingAnimation()
+        binding.conversationLoadingOverlay.isVisible = false
         binding.inputLayout.alpha = if (isBusy) 0.5f else 1f
         binding.messageInput.isEnabled = !isBusy
         binding.btnAdd.isEnabled = !isBusy
         binding.btnMic.isEnabled = !isBusy
 
         if (!isInVoiceMode) {
-            binding.loadingIndicator.isVisible = isStreamingResponse
-            binding.sendButton.isEnabled = !isBusy
+            binding.loadingIndicator.isVisible = false
+            binding.sendButton.isEnabled = !isConversationLoading
+            if (isStreamingResponse) {
+                binding.sendButton.setImageResource(R.drawable.ic_stop)
+            } else {
+                val hasText = !binding.messageInput.text.isNullOrBlank()
+                binding.sendButton.setImageResource(
+                    if (hasText) R.drawable.ic_arrow_up else R.drawable.ic_waveform
+                )
+            }
         } else {
             // In voice mode the streaming indicator is not shown; TTS handles the transition.
             binding.loadingIndicator.isVisible = false
@@ -668,8 +694,17 @@ class HomeFragment : Fragment() {
     private fun synthesizeAndEmitTts(text: String) {
         val ctx = context ?: return
         viewLifecycleOwner.lifecycleScope.launch {
-            val cacheDir = ctx.cacheDir
-            val result = homeViewModel.synthesizeSpeech(text, cacheDir)
+            val store = ApiKeyStore(ctx)
+            val useLocalFirst = shouldUseLocalVoice()
+            val localOutput = java.io.File(ctx.cacheDir, "tts_local_${System.currentTimeMillis()}.wav")
+            var result = if (useLocalFirst) {
+                AndroidLocalTtsSynthesizer(ctx).synthesize(text, localOutput)
+            } else {
+                homeViewModel.synthesizeSpeech(text, ctx.cacheDir)
+            }
+            if (result.isFailure && !useLocalFirst && store.isLocalVoiceFallbackEnabled()) {
+                result = AndroidLocalTtsSynthesizer(ctx).synthesize(text, localOutput)
+            }
             result.fold(
                 onSuccess = { file ->
                     homeViewModel.emitTtsFile(file)
@@ -718,6 +753,7 @@ class HomeFragment : Fragment() {
         // Cancel dictation mic if active
         if (isRecording) {
             audioRecorder?.cancelRecording()
+            localSpeechRecognizer?.cancel()
             isRecording = false
             binding.btnMic.setColorFilter(null)
             binding.btnMic.setImageResource(R.drawable.ic_mic)
@@ -725,6 +761,7 @@ class HomeFragment : Fragment() {
         // Cancel voice mode if active
         if (isInVoiceMode) {
             voiceAudioRecorder?.cancelRecording()
+            localSpeechRecognizer?.cancel()
             stopMediaPlayer()
             endVoiceMode()
         }
@@ -734,6 +771,8 @@ class HomeFragment : Fragment() {
         stopConversationLoadingAnimation()
         stopMediaPlayer()
         voiceOrAnimator?.cancel()
+        localSpeechRecognizer?.close()
+        localSpeechRecognizer = null
         super.onDestroyView()
         _binding = null
     }
@@ -744,6 +783,10 @@ class HomeFragment : Fragment() {
             isRecording = false
             binding.btnMic.setColorFilter(null)
             binding.btnMic.setImageResource(R.drawable.ic_mic)
+            if (localSpeechRecognizer?.isListening == true) {
+                localSpeechRecognizer?.stop()
+                return
+            }
             val audioFile = audioRecorder?.stopRecording()
             if (audioFile != null && audioFile.exists()) {
                 transcribeAndAppend(audioFile)
@@ -753,10 +796,30 @@ class HomeFragment : Fragment() {
                 isRecording = true
                 binding.btnMic.setImageResource(R.drawable.ic_stop)
                 binding.btnMic.setColorFilter(ContextCompat.getColor(context, android.R.color.holo_red_light))
-                if (audioRecorder == null) {
-                    audioRecorder = AudioRecorder(context)
+                if (shouldUseLocalVoice()) {
+                    val recognizer = localSpeechRecognizer ?: AndroidLocalSpeechRecognizer(context).also {
+                        localSpeechRecognizer = it
+                    }
+                    recognizer.start(
+                        onResult = { text ->
+                            isRecording = false
+                            binding.btnMic.setColorFilter(null)
+                            binding.btnMic.setImageResource(R.drawable.ic_mic)
+                            appendDictation(text)
+                        },
+                        onError = { detail ->
+                            isRecording = false
+                            binding.btnMic.setColorFilter(null)
+                            binding.btnMic.setImageResource(R.drawable.ic_mic)
+                            Snackbar.make(binding.root, detail, Snackbar.LENGTH_LONG).show()
+                        }
+                    )
+                } else {
+                    if (audioRecorder == null) {
+                        audioRecorder = AudioRecorder(context)
+                    }
+                    audioRecorder?.startRecording()
                 }
-                audioRecorder?.startRecording()
                 Toast.makeText(context, getString(R.string.recording_toast), Toast.LENGTH_SHORT).show()
             } else {
                 recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
@@ -778,13 +841,7 @@ class HomeFragment : Fragment() {
 
             result.fold(
                 onSuccess = { text ->
-                    if (text.isNotBlank()) {
-                        val currentText = binding.messageInput.text?.toString() ?: ""
-                        val newText = if (currentText.isBlank()) text else "$currentText $text"
-                        binding.messageInput.setText(newText)
-                        binding.messageInput.setSelection(newText.length)
-                        binding.messageInput.requestFocus()
-                    }
+                    appendDictation(text)
                 },
                 onFailure = { error ->
                     val errorMsg = error.message ?: "Unknown error"
@@ -799,6 +856,30 @@ class HomeFragment : Fragment() {
             )
             audioFile.delete()
         }
+    }
+
+    private fun appendDictation(text: String) {
+        if (text.isBlank() || _binding == null) return
+        val currentText = binding.messageInput.text?.toString() ?: ""
+        val newText = if (currentText.isBlank()) text else "$currentText $text"
+        binding.messageInput.setText(newText)
+        binding.messageInput.setSelection(newText.length)
+        binding.messageInput.requestFocus()
+    }
+
+    private fun shouldUseLocalVoice(): Boolean {
+        val ctx = context ?: return false
+        val store = ApiKeyStore(ctx)
+        return store.isPreferLocalVoiceEnabled() ||
+            (store.isLocalVoiceFallbackEnabled() && !hasInternetConnection(ctx))
+    }
+
+    private fun hasInternetConnection(context: android.content.Context): Boolean {
+        val manager = context.getSystemService(ConnectivityManager::class.java) ?: return false
+        val network = manager.activeNetwork ?: return false
+        val capabilities = manager.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     }
 
     private fun isNearBottom(): Boolean {
