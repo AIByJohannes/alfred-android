@@ -21,3 +21,6 @@ evals/reports/
 evals/build/
 evals/bin/
 /.codex-remote-attachments/
+*.jks
+*.keystore
+keystore.properties

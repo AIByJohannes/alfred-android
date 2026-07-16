@@ -17,6 +17,23 @@ val localProperties = Properties().apply {
     }
 }
 
+fun releaseSetting(name: String): String? = providers.gradleProperty(name)
+    .orElse(providers.environmentVariable(name))
+    .orNull
+    ?.trim()
+    ?.takeIf(String::isNotEmpty)
+
+val releaseStoreFile = releaseSetting("ALFRED_RELEASE_STORE_FILE")
+val releaseStorePassword = releaseSetting("ALFRED_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = releaseSetting("ALFRED_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = releaseSetting("ALFRED_RELEASE_KEY_PASSWORD")
+val releaseSigningConfigured = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword
+).all { it != null }
+
 android {
     namespace = "com.aibyjohannes.alfred"
     compileSdk = 36
@@ -34,9 +51,23 @@ android {
         buildConfigField("String", "OPENROUTER_API_KEY", "\"$openRouterKey\"")
     }
 
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("release") {
+                storeFile = rootProject.file(requireNotNull(releaseStoreFile))
+                storePassword = requireNotNull(releaseStorePassword)
+                keyAlias = requireNotNull(releaseKeyAlias)
+                keyPassword = requireNotNull(releaseKeyPassword)
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (releaseSigningConfigured) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -108,6 +139,14 @@ dependencies {
     testImplementation(libs.robolectric)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
+}
+
+tasks.matching { it.name == "assembleRelease" || it.name == "bundleRelease" }.configureEach {
+    doFirst {
+        check(releaseSigningConfigured) {
+            "Release signing is not configured. Set the four ALFRED_RELEASE_* Gradle properties or environment variables documented in docs/release-distribution.md."
+        }
+    }
 }
 
 tasks.register("adbConnect") {
