@@ -11,11 +11,58 @@ import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.Message
+import com.google.ai.edge.litertlm.MessageCallback
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
+
+internal interface LocalGemmaEngineHandle : AutoCloseable {
+    fun initialize()
+    fun isInitialized(): Boolean
+}
+
+internal fun <T : LocalGemmaEngineHandle> initializeWithCpuFallback(
+    createGpuEngine: () -> T,
+    createCpuEngine: () -> T
+): T {
+    val gpuEngine = createGpuEngine()
+    return try {
+        gpuEngine.initialize()
+        gpuEngine
+    } catch (gpuError: Throwable) {
+        closeAfterFailedInitialization(gpuEngine, gpuError)
+        val cpuEngine = createCpuEngine()
+        try {
+            cpuEngine.initialize()
+            cpuEngine
+        } catch (cpuError: Throwable) {
+            closeAfterFailedInitialization(cpuEngine, cpuError)
+            cpuError.addSuppressed(gpuError)
+            throw cpuError
+        }
+    }
+}
+
+private fun closeAfterFailedInitialization(
+    engine: LocalGemmaEngineHandle,
+    initializationError: Throwable
+) {
+    if (!engine.isInitialized()) return
+    runCatching { engine.close() }
+        .exceptionOrNull()
+        ?.let(initializationError::addSuppressed)
+}
+
+private class LiteRtEngineHandle(val engine: Engine) : LocalGemmaEngineHandle {
+    override fun initialize() = engine.initialize()
+    override fun isInitialized(): Boolean = engine.isInitialized()
+    override fun close() = engine.close()
+}
 
 class LocalGemmaChatEngine(
     private val modelPath: String,
@@ -46,7 +93,7 @@ class LocalGemmaChatEngine(
                 engine.createConversation(conversationConfig(conversationHistory)).use { conversation ->
                     val completeText = StringBuilder()
                     send(ChatStreamEvent.PassStarted(passIndex = 0))
-                    conversation.sendMessageAsync(userMessage).collect { message ->
+                    conversation.compatibleMessageFlow(userMessage).collect { message ->
                         val chunk = message.toString()
                         if (chunk.isNotEmpty()) {
                             completeText.append(chunk)
@@ -62,22 +109,10 @@ class LocalGemmaChatEngine(
     }
 
     private suspend fun createInitializedEngine(): Engine {
-        val gpuEngine = Engine(engineConfig(Backend.GPU()))
-        return try {
-            gpuEngine.initialize()
-            gpuEngine
-        } catch (gpuError: Throwable) {
-            gpuEngine.close()
-            val cpuEngine = Engine(engineConfig(Backend.CPU()))
-            try {
-                cpuEngine.initialize()
-                cpuEngine
-            } catch (cpuError: Throwable) {
-                cpuEngine.close()
-                cpuError.addSuppressed(gpuError)
-                throw cpuError
-            }
-        }
+        return initializeWithCpuFallback(
+            createGpuEngine = { LiteRtEngineHandle(Engine(engineConfig(Backend.GPU()))) },
+            createCpuEngine = { LiteRtEngineHandle(Engine(engineConfig(Backend.CPU()))) }
+        ).engine
     }
 
     private fun engineConfig(backend: Backend): EngineConfig = EngineConfig(
@@ -85,6 +120,36 @@ class LocalGemmaChatEngine(
         backend = backend,
         cacheDir = cacheDirectory.absolutePath
     )
+
+    private fun com.google.ai.edge.litertlm.Conversation.compatibleMessageFlow(
+        userMessage: String
+    ): Flow<Message> = callbackFlow {
+        val terminated = AtomicBoolean(false)
+        sendMessageAsync(
+            userMessage,
+            object : MessageCallback {
+                override fun onMessage(message: Message) {
+                    trySend(message)
+                }
+
+                override fun onDone() {
+                    terminated.set(true)
+                    close()
+                }
+
+                override fun onError(throwable: Throwable) {
+                    terminated.set(true)
+                    close(throwable)
+                }
+            }
+        )
+        awaitClose {
+            // LiteRT-LM 0.14.0's Flow wrapper is binary-incompatible with coroutines 1.10.x.
+            if (!terminated.get() && isAlive) {
+                runCatching { cancelProcess() }
+            }
+        }
+    }
 
     private fun conversationConfig(history: List<CoreChatMessage>): ConversationConfig {
         val initialMessages = history
