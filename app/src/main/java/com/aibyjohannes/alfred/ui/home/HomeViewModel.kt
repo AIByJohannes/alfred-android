@@ -91,6 +91,10 @@ class HomeViewModel : ViewModel() {
     private val _conversations = MutableLiveData<List<UiConversation>>(emptyList())
     val conversations: LiveData<List<UiConversation>> = _conversations
 
+    private val _isConversationListLoading = MutableLiveData(true)
+    /** True until the active workspace's conversation list has emitted from storage. */
+    val isConversationListLoading: LiveData<Boolean> = _isConversationListLoading
+
     private val _activeConversationId = MutableLiveData<String?>(null)
     val activeConversationId: LiveData<String?> = _activeConversationId
 
@@ -130,6 +134,7 @@ class HomeViewModel : ViewModel() {
     private var currentConversationId: String? = null
     private var nextMessageId = 1L
     private var conversationsJob: kotlinx.coroutines.Job? = null
+    private var conversationListLoadGeneration = 0L
     private var chatJob: Job? = null
     private var pendingConversationOperations = 0
 
@@ -566,16 +571,33 @@ class HomeViewModel : ViewModel() {
     private fun observeConversationsForActiveWorkspace(workspaceId: String) {
         conversationsJob?.cancel()
         val store = conversationStore ?: return
+        val generation = ++conversationListLoadGeneration
+        _isConversationListLoading.value = true
+        _conversations.value = emptyList()
         conversationsJob = viewModelScope.launch {
-            store.observeConversations(workspaceId).collect { list ->
-                val uiList = list.map { summary ->
-                    UiConversation(
-                        id = summary.id,
-                        title = summary.title?.takeIf { it.isNotBlank() } ?: "Conversation ${summary.id}",
-                        updatedAtEpochMs = summary.updatedAtEpochMs
+            try {
+                store.observeConversations(workspaceId).collect { list ->
+                    val uiList = list.map { summary ->
+                        UiConversation(
+                            id = summary.id,
+                            title = summary.title?.takeIf { it.isNotBlank() } ?: "Conversation ${summary.id}",
+                            updatedAtEpochMs = summary.updatedAtEpochMs
+                        )
+                    }
+                    if (generation == conversationListLoadGeneration) {
+                        _conversations.postValue(uiList)
+                        _isConversationListLoading.postValue(false)
+                    }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (generation == conversationListLoadGeneration) {
+                    _isConversationListLoading.postValue(false)
+                    _storageError.postValue(
+                        error.message ?: "Chat history is temporarily unavailable"
                     )
                 }
-                _conversations.postValue(uiList)
             }
         }
     }

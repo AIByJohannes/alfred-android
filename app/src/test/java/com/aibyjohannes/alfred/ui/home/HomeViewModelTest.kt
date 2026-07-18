@@ -17,6 +17,7 @@ import io.mockk.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.*
 import org.junit.After
@@ -82,6 +83,67 @@ class HomeViewModelTest {
         assert(viewModel.storageError.value == null)
         assert(viewModel.activeConversationId.value == "1")
         assert(viewModel.messages.value.orEmpty().single().content == "Still here")
+    }
+
+    @Test
+    fun `conversation list loading remains true until the active workspace emits`() = runTest {
+        val workspace = WorkspaceSummary("1", "Personal")
+        val conversation = ConversationSummary("1", "Loaded", System.currentTimeMillis())
+        val conversationFlow = MutableSharedFlow<List<ConversationSummary>>()
+
+        coEvery { conversationStore.getOrCreateActiveWorkspace() } returns workspace
+        coEvery { conversationStore.listWorkspaces() } returns listOf(workspace)
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
+        coEvery { conversationStore.loadMessages("1") } returns emptyList()
+        coEvery { conversationStore.observeConversations("1") } returns conversationFlow
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.runCurrent()
+
+        assertEquals(true, viewModel.isConversationListLoading.value)
+
+        conversationFlow.emit(emptyList())
+        testScheduler.runCurrent()
+
+        assertEquals(false, viewModel.isConversationListLoading.value)
+        assertEquals(emptyList<UiConversation>(), viewModel.conversations.value)
+    }
+
+    @Test
+    fun `workspace list loading ignores a replaced workspace observer`() = runTest {
+        val personal = WorkspaceSummary("1", "Personal")
+        val work = WorkspaceSummary("2", "Work")
+        val personalConversation = ConversationSummary("1", "Personal chat", System.currentTimeMillis())
+        val workConversation = ConversationSummary("2", "Work chat", System.currentTimeMillis())
+        val personalFlow = MutableSharedFlow<List<ConversationSummary>>()
+        val workFlow = MutableSharedFlow<List<ConversationSummary>>()
+
+        coEvery { conversationStore.getOrCreateActiveWorkspace() } returns personal
+        coEvery { conversationStore.listWorkspaces() } returns listOf(personal, work)
+        coEvery { conversationStore.getOrCreateActiveConversation() } returnsMany listOf(
+            personalConversation,
+            workConversation
+        )
+        coEvery { conversationStore.loadMessages(any()) } returns emptyList()
+        coEvery { conversationStore.observeConversations("1") } returns personalFlow
+        coEvery { conversationStore.observeConversations("2") } returns workFlow
+        coEvery { conversationStore.switchActiveWorkspace("2") } returns work
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.runCurrent()
+        personalFlow.emit(listOf(personalConversation))
+        testScheduler.runCurrent()
+
+        viewModel.switchWorkspace("2")
+        testScheduler.runCurrent()
+
+        assertEquals(true, viewModel.isConversationListLoading.value)
+
+        workFlow.emit(listOf(workConversation))
+        testScheduler.runCurrent()
+
+        assertEquals(false, viewModel.isConversationListLoading.value)
+        assertEquals("2", viewModel.conversations.value.orEmpty().single().id)
     }
 
     @Test

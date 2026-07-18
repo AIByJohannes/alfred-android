@@ -1,7 +1,10 @@
 package com.aibyjohannes.alfred
 
+import android.animation.Animator
+import android.animation.ObjectAnimator
 import android.content.Intent
 import android.os.Bundle
+import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.Toast
 import androidx.core.view.GravityCompat
 import androidx.navigation.NavOptions
@@ -71,6 +74,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var workspaceAdapter: DrawerProjectsAdapter
     private lateinit var profilePreferencesStore: ProfilePreferencesStore
     private lateinit var chatHistoryLocationStore: ChatHistoryLocationStore
+    private val drawerConversationPlaceholderAnimators = mutableListOf<Animator>()
     private var drawerSwipeStartX = 0f
     private var drawerSwipeStartY = 0f
     private var drawerSwipeTracking = false
@@ -353,8 +357,50 @@ class MainActivity : AppCompatActivity() {
         homeViewModel.activeConversationId.observe(this) { activeConversationId ->
             conversationAdapter.setActiveConversationId(activeConversationId)
         }
+        homeViewModel.isConversationListLoading.observe(this) { isLoading ->
+            updateConversationListLoadingUi(isLoading)
+        }
         homeViewModel.isLoading.observe(this) { updateNewChatEnabledState() }
         homeViewModel.isConversationLoading.observe(this) { updateNewChatEnabledState() }
+    }
+
+    private fun updateConversationListLoadingUi(isLoading: Boolean) {
+        binding.drawerConversationsLoadingPlaceholder.isVisible = isLoading
+        binding.drawerConversationsRecyclerView.isVisible = !isLoading
+        if (isLoading) {
+            startDrawerConversationPlaceholderAnimation()
+        } else {
+            stopDrawerConversationPlaceholderAnimation()
+        }
+    }
+
+    private fun startDrawerConversationPlaceholderAnimation() {
+        if (drawerConversationPlaceholderAnimators.isNotEmpty()) return
+
+        listOf(
+            binding.drawerConversationPlaceholderTitle1,
+            binding.drawerConversationPlaceholderTitle2,
+            binding.drawerConversationPlaceholderTitle3
+        ).forEachIndexed { index, view ->
+            drawerConversationPlaceholderAnimators += ObjectAnimator.ofFloat(view, View.ALPHA, 0.38f, 0.9f).apply {
+                duration = 1_100L
+                startDelay = index * 160L
+                repeatCount = ObjectAnimator.INFINITE
+                repeatMode = ObjectAnimator.REVERSE
+                interpolator = AccelerateDecelerateInterpolator()
+                start()
+            }
+        }
+    }
+
+    private fun stopDrawerConversationPlaceholderAnimation() {
+        drawerConversationPlaceholderAnimators.forEach(Animator::cancel)
+        drawerConversationPlaceholderAnimators.clear()
+        listOf(
+            binding.drawerConversationPlaceholderTitle1,
+            binding.drawerConversationPlaceholderTitle2,
+            binding.drawerConversationPlaceholderTitle3
+        ).forEach { it.alpha = 1f }
     }
 
     private fun updateNewChatEnabledState() {
@@ -375,6 +421,11 @@ class MainActivity : AppCompatActivity() {
                 updateModelSelectorPillText()
             }
         }
+    }
+
+    override fun onDestroy() {
+        stopDrawerConversationPlaceholderAnimation()
+        super.onDestroy()
     }
 
     private fun setupModelSelector() {
