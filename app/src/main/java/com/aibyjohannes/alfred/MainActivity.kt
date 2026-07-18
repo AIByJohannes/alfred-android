@@ -4,7 +4,9 @@ import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.core.view.GravityCompat
+import androidx.navigation.NavOptions
 import androidx.navigation.findNavController
+import androidx.navigation.navOptions
 import androidx.navigation.ui.AppBarConfiguration
 import androidx.navigation.ui.navigateUp
 import androidx.navigation.ui.setupActionBarWithNavController
@@ -56,6 +58,9 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import kotlin.math.abs
 
+internal fun onboardingCompletionNavOptions(): NavOptions = navOptions {
+    popUpTo(R.id.nav_onboarding) { inclusive = true }
+}
 
 class MainActivity : AppCompatActivity() {
 
@@ -615,9 +620,7 @@ class MainActivity : AppCompatActivity() {
         initializeHomeViewModel()
         startupLocationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
         val navController = findNavController(R.id.nav_host_fragment_content_main)
-        navController.navigate(R.id.nav_home) {
-            popUpTo(R.id.nav_onboarding) { inclusive = true }
-        }
+        navController.navigate(R.id.nav_home, null, onboardingCompletionNavOptions())
     }
 
     override fun onSupportNavigateUp(): Boolean {
