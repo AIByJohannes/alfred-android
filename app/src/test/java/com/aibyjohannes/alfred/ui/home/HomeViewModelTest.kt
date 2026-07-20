@@ -166,7 +166,7 @@ class HomeViewModelTest {
         viewModel.initialize(apiKeyStore, repository, conversationStore)
         testScheduler.advanceUntilIdle()
 
-        viewModel.createConversationAndSwitch()
+        viewModel.requestNewChat()
         testScheduler.advanceUntilIdle()
 
         // Assert
@@ -226,7 +226,7 @@ class HomeViewModelTest {
         viewModel.initialize(apiKeyStore, repository, conversationStore)
         testScheduler.advanceUntilIdle()
 
-        viewModel.createConversationAndSwitch()
+        viewModel.requestNewChat()
         testScheduler.advanceUntilIdle()
 
         // Assert
@@ -260,8 +260,8 @@ class HomeViewModelTest {
         viewModel.initialize(apiKeyStore, repository, conversationStore)
         testScheduler.advanceUntilIdle()
 
-        viewModel.createConversationAndSwitch()
-        viewModel.createConversationAndSwitch()
+        viewModel.requestNewChat()
+        viewModel.requestNewChat()
         testScheduler.runCurrent()
         assert(firstCreateStarted.isCompleted)
         releaseFirstCreate.complete(Unit)
@@ -285,7 +285,7 @@ class HomeViewModelTest {
         testScheduler.advanceUntilIdle()
 
         viewModel.sendMessage("Keep this response in the current chat")
-        viewModel.createConversationAndSwitch()
+        viewModel.requestNewChat()
         testScheduler.runCurrent()
 
         coVerify(exactly = 0) { conversationStore.createConversation() }
@@ -317,6 +317,56 @@ class HomeViewModelTest {
         // Assert
         coVerify(exactly = 1) { conversationStore.deleteConversation("1") }
         coVerify(exactly = 1) { conversationStore.switchActiveConversation("2") }
+    }
+
+    @Test
+    fun `deleteConversation exposes immediate progress and ignores repeated requests`() = runTest {
+        val initialConversation = ConversationSummary("1", "First Chat", System.currentTimeMillis())
+        val deleteStarted = CompletableDeferred<Unit>()
+        val finishDelete = CompletableDeferred<Unit>()
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns initialConversation
+        coEvery { conversationStore.loadMessages("1") } returns emptyList()
+        coEvery { conversationStore.listConversations() } returns emptyList()
+        coEvery { conversationStore.deleteConversation("1") } coAnswers {
+            deleteStarted.complete(Unit)
+            finishDelete.await()
+        }
+        coEvery { conversationStore.createConversation() } returns ConversationSummary("2", null, 2L)
+        coEvery { conversationStore.loadMessages("2") } returns emptyList()
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.deleteConversation("1")
+        assertTrue("1" in viewModel.deletingConversationIds.value.orEmpty())
+        viewModel.deleteConversation("1")
+        testScheduler.runCurrent()
+        assertTrue(deleteStarted.isCompleted)
+
+        finishDelete.complete(Unit)
+        testScheduler.advanceUntilIdle()
+
+        coVerify(exactly = 1) { conversationStore.deleteConversation("1") }
+        assertTrue(viewModel.deletingConversationIds.value.orEmpty().isEmpty())
+        assertEquals("2", viewModel.activeConversationId.value)
+    }
+
+    @Test
+    fun `failed deletion restores row state and exposes an error`() = runTest {
+        val initialConversation = ConversationSummary("1", "First Chat", System.currentTimeMillis())
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns initialConversation
+        coEvery { conversationStore.loadMessages("1") } returns emptyList()
+        coEvery { conversationStore.listConversations() } returns listOf(initialConversation)
+        coEvery { conversationStore.deleteConversation("1") } throws IllegalStateException("disk unavailable")
+
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+        viewModel.deleteConversation("1")
+        testScheduler.advanceUntilIdle()
+
+        assertTrue(viewModel.deletingConversationIds.value.orEmpty().isEmpty())
+        assertTrue(viewModel.storageError.value.orEmpty().contains("disk unavailable"))
+        assertEquals("1", viewModel.activeConversationId.value)
     }
 
     @Test
@@ -1203,7 +1253,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.loadMessages("2") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(activeConversation, newConversation)
 
-        viewModel.clearChat()
+        viewModel.requestNewChat()
         testScheduler.advanceUntilIdle()
 
         coVerify(exactly = 0) { conversationStore.deleteConversation(any()) }

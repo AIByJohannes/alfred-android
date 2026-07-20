@@ -81,6 +81,7 @@ class HomeViewModel : ViewModel() {
     private var conversationStore: ConversationStore? = null
     private var sysInfoProvider: SysInfoProvider? = null
     private var onChatActivity: (() -> Unit)? = null
+    private var workspaceDeletionHandler: suspend (String) -> Unit = {}
     private var chatRunPowerKeeper: ChatRunPowerKeeper = NoOpChatRunPowerKeeper
     private var nextTurnMaxPasses: Int? = null
     private val newChatMutex = Mutex()
@@ -110,6 +111,9 @@ class HomeViewModel : ViewModel() {
     private val _isConversationLoading = MutableLiveData(false)
     /** True while a file-backed conversation or workspace change is in progress. */
     val isConversationLoading: LiveData<Boolean> = _isConversationLoading
+
+    private val _deletingConversationIds = MutableLiveData<Set<String>>(emptySet())
+    val deletingConversationIds: LiveData<Set<String>> = _deletingConversationIds
 
     private val _needsApiKey = MutableLiveData(false)
     val needsApiKey: LiveData<Boolean> = _needsApiKey
@@ -145,12 +149,14 @@ class HomeViewModel : ViewModel() {
         sysInfoProvider: SysInfoProvider? = null,
         onChatActivity: (() -> Unit)? = null,
         chatRunPowerKeeper: ChatRunPowerKeeper = NoOpChatRunPowerKeeper,
+        workspaceDeletionHandler: suspend (String) -> Unit = {},
         startWithNewConversation: Boolean = false
     ) {
         if (this.apiKeyStore != null && this.repository != null && this.conversationStore != null) {
             this.sysInfoProvider = sysInfoProvider
             this.onChatActivity = onChatActivity
             this.chatRunPowerKeeper = chatRunPowerKeeper
+            this.workspaceDeletionHandler = workspaceDeletionHandler
             checkApiKey()
             return
         }
@@ -160,6 +166,7 @@ class HomeViewModel : ViewModel() {
         this.sysInfoProvider = sysInfoProvider
         this.onChatActivity = onChatActivity
         this.chatRunPowerKeeper = chatRunPowerKeeper
+        this.workspaceDeletionHandler = workspaceDeletionHandler
         checkApiKey()
         loadWorkspacesAndActiveConversation(startWithNewConversation)
     }
@@ -602,47 +609,48 @@ class HomeViewModel : ViewModel() {
         }
     }
 
-    fun clearChat() {
-        val store = conversationStore ?: return
-        viewModelScope.launch {
-            // Invariant: New Chat is create-only; it must never tombstone another conversation.
-            val newConversation = store.createConversation()
-            loadConversation(newConversation)
-        }
-    }
-
     fun deleteConversation(conversationId: String) {
         val store = conversationStore ?: return
+        if (conversationId in _deletingConversationIds.value.orEmpty()) return
+        _deletingConversationIds.value = _deletingConversationIds.value.orEmpty() + conversationId
         viewModelScope.launch {
-            store.deleteConversation(conversationId)
-
-            if (currentConversationId == conversationId) {
-                val remaining = store.listConversations()
-                if (remaining.isNotEmpty()) {
-                    val nextConversation = remaining.maxByOrNull { it.updatedAtEpochMs }!!
-                    val switched = store.switchActiveConversation(nextConversation.id)
-                    loadConversation(switched)
-                } else {
-                    val newConversation = store.createConversation()
-                    loadConversation(newConversation)
+            try {
+                store.deleteConversation(conversationId)
+                if (currentConversationId == conversationId) {
+                    val remaining = store.listConversations()
+                    if (remaining.isNotEmpty()) {
+                        val nextConversation = remaining.maxByOrNull { it.updatedAtEpochMs }!!
+                        val switched = store.switchActiveConversation(nextConversation.id)
+                        loadConversation(switched)
+                    } else {
+                        loadConversation(store.createConversation())
+                    }
                 }
+            } catch (error: Exception) {
+                _storageError.value = "Couldn't delete the conversation: ${error.message ?: error.javaClass.simpleName}"
+            } finally {
+                _deletingConversationIds.value = _deletingConversationIds.value.orEmpty() - conversationId
             }
         }
     }
 
-    fun createConversationAndSwitch() {
+    fun requestNewChat() {
         val store = conversationStore ?: return
         if (_isLoading.value == true || _isConversationLoading.value == true) return
         viewModelScope.launch {
             newChatMutex.withLock {
-                if (_isLoading.value == true) return@withLock
-                val currentId = currentConversationId
-                if (currentId != null && store.loadMessages(currentId).isEmpty()) {
-                    // Already in an empty persisted conversation, keep using it.
-                    return@withLock
+                if (_isLoading.value == true || _isConversationLoading.value == true) return@withLock
+                try {
+                    withConversationLoading {
+                        val currentId = currentConversationId
+                        if (currentId != null && store.loadMessages(currentId).isEmpty()) {
+                            return@withConversationLoading
+                        }
+                        loadConversation(store.createConversation())
+                    }
+                } catch (error: Exception) {
+                    _storageError.value = "Couldn't create a new chat: ${error.message ?: error.javaClass.simpleName}"
                 }
-                val newConversation = store.createConversation()
-                loadConversation(newConversation)
             }
         }
     }
@@ -705,6 +713,7 @@ class HomeViewModel : ViewModel() {
             if (currentList.size <= 1) return@launch
             
             store.deleteWorkspace(workspaceId)
+            workspaceDeletionHandler(workspaceId)
             
             val activeWs = store.getOrCreateActiveWorkspace()
             _activeWorkspaceId.value = activeWs.id

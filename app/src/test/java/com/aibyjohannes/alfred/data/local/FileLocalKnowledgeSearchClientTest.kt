@@ -171,7 +171,8 @@ class FileLocalKnowledgeSearchClientTest {
     @Test
     fun `search returns failure on exception`() = runTest {
         val badStore = mockk<FileConversationStore>()
-        coEvery { badStore.searchSessionMessages(any(), any()) } throws RuntimeException("Storage failure")
+        coEvery { badStore.getOrCreateActiveWorkspace() } returns WorkspaceSummary("workspace", "Workspace")
+        coEvery { badStore.searchSessionMessages(any(), any(), any()) } throws RuntimeException("Storage failure")
 
         val client = FileLocalKnowledgeSearchClient(
             conversationStore = badStore,
@@ -181,5 +182,54 @@ class FileLocalKnowledgeSearchClientTest {
         val result = client.search(LocalKnowledgeSearchRequest(query = "test", source = LocalKnowledgeSource.SESSIONS))
         assertTrue(result.isFailure)
         assertEquals("Storage failure", result.exceptionOrNull()?.message)
+    }
+
+    @Test
+    fun `memories and sessions switch immediately with the active workspace and survive rename`() = runTest {
+        val root = temporaryFolder.newFolder()
+        val conversationStore = FileConversationStore(root.resolve("history"))
+        val memorySource = FileMemorySearchSource(root.resolve("workspace-memories"), root.resolve("memories.jsonl"))
+        val client = FileLocalKnowledgeSearchClient(conversationStore, memorySource)
+
+        val workspaceA = conversationStore.getOrCreateActiveWorkspace()
+        memorySource.save(workspaceA.id, WorkspaceMemory(id = "a-memory", content = "alpha private memory"))
+        val conversationA = conversationStore.getOrCreateActiveConversation()
+        conversationStore.appendMessage(conversationA.id, ChatMessage.ROLE_USER, "alpha private session")
+
+        val workspaceB = conversationStore.createWorkspace("Work")
+        memorySource.save(workspaceB.id, WorkspaceMemory(id = "b-memory", content = "beta private memory"))
+        val conversationB = conversationStore.getOrCreateActiveConversation()
+        conversationStore.appendMessage(conversationB.id, ChatMessage.ROLE_USER, "beta private session")
+
+        assertTrue(client.search(LocalKnowledgeSearchRequest("alpha", 10)).getOrThrow().isEmpty())
+        assertEquals(2, client.search(LocalKnowledgeSearchRequest("beta", 10)).getOrThrow().size)
+
+        conversationStore.switchActiveWorkspace(workspaceA.id)
+        assertEquals(2, client.search(LocalKnowledgeSearchRequest("alpha", 10)).getOrThrow().size)
+        assertTrue(client.search(LocalKnowledgeSearchRequest("beta", 10)).getOrThrow().isEmpty())
+
+        conversationStore.renameWorkspace(workspaceA.id, "Personal renamed")
+        assertEquals("a-memory", client.search(LocalKnowledgeSearchRequest("alpha", 10, LocalKnowledgeSource.MEMORIES))
+            .getOrThrow().single().memoryId)
+    }
+
+    @Test
+    fun `legacy memories migrate once and workspace deletion removes only its memory data`() = runTest {
+        val root = temporaryFolder.newFolder()
+        val legacy = root.resolve("memories.jsonl")
+        legacy.writeText("""{"id":"legacy","content":"legacy fact","createdAtEpochMs":1}""" + "\n")
+        val source = FileMemorySearchSource(root.resolve("workspace-memories"), legacy)
+
+        assertEquals(1, source.search("workspace-a", "legacy", 10).size)
+        assertEquals(1, source.search("workspace-a", "legacy", 10).size)
+        val migratedLines = source.workspaceMemoryFile("workspace-a").readLines().filter(String::isNotBlank)
+        assertEquals(1, migratedLines.size)
+        assertTrue(migratedLines.single().contains("\"workspaceId\":\"workspace-a\""))
+
+        source.save("workspace-b", WorkspaceMemory(id = "other", content = "other fact"))
+        source.deleteWorkspace("workspace-a")
+
+        assertFalse(source.workspaceMemoryFile("workspace-a").exists())
+        assertEquals(1, source.search("workspace-b", "other", 10).size)
     }
 }

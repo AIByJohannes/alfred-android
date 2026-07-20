@@ -3,6 +3,7 @@ package com.aibyjohannes.alfred.ui.home
 import android.text.format.DateUtils
 import android.view.LayoutInflater
 import android.view.ViewGroup
+import androidx.core.view.isVisible
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
@@ -16,6 +17,7 @@ class ConversationAdapter(
 ) : ListAdapter<UiConversation, ConversationAdapter.ConversationViewHolder>(ConversationDiffCallback()) {
 
     private var activeConversationId: String? = null
+    private var deletingConversationIds: Set<String> = emptySet()
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ConversationViewHolder {
         val binding = ItemConversationBinding.inflate(
@@ -27,7 +29,7 @@ class ConversationAdapter(
     }
 
     override fun onBindViewHolder(holder: ConversationViewHolder, position: Int) {
-        holder.bind(getItem(position), activeConversationId)
+        holder.bind(getItem(position), activeConversationId, getItem(position).id in deletingConversationIds)
     }
 
     fun setActiveConversationId(conversationId: String?) {
@@ -36,13 +38,23 @@ class ConversationAdapter(
         notifyDataSetChanged()
     }
 
+    fun setDeletingConversationIds(ids: Set<String>) {
+        if (deletingConversationIds == ids) return
+        val changed = deletingConversationIds + ids
+        deletingConversationIds = ids
+        changed.forEach { id ->
+            val position = currentList.indexOfFirst { it.id == id }
+            if (position >= 0) notifyItemChanged(position)
+        }
+    }
+
     class ConversationViewHolder(
         private val binding: ItemConversationBinding,
         private val onConversationSelected: (UiConversation) -> Unit,
         private val onConversationDeleted: (UiConversation) -> Unit
     ) : RecyclerView.ViewHolder(binding.root) {
 
-        fun bind(conversation: UiConversation, activeConversationId: String?) {
+        fun bind(conversation: UiConversation, activeConversationId: String?, isDeleting: Boolean) {
             val context = binding.root.context
             val isActive = conversation.id == activeConversationId
             val activeColor = ContextCompat.getColor(context, R.color.palette_blue)
@@ -70,11 +82,16 @@ class ConversationAdapter(
             } else {
                 null
             }
+            binding.conversationDeleteButton.isVisible = !isDeleting
+            binding.conversationDeleteProgress.isVisible = isDeleting
+            binding.conversationCard.isEnabled = !isDeleting
+            binding.root.isEnabled = !isDeleting
+            binding.root.alpha = if (isDeleting) 0.65f else 1f
             binding.root.setOnClickListener {
-                onConversationSelected(conversation)
+                if (!isDeleting) onConversationSelected(conversation)
             }
             binding.conversationDeleteButton.setOnClickListener {
-                onConversationDeleted(conversation)
+                if (!isDeleting) onConversationDeleted(conversation)
             }
         }
     }

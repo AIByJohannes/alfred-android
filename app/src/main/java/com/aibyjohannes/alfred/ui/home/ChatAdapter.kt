@@ -1,14 +1,22 @@
 package com.aibyjohannes.alfred.ui.home
 
 import android.content.Intent
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.graphics.BitmapFactory
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
+import android.util.LruCache
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ImageView
 import android.widget.TextView
+import android.widget.Toast
 import android.net.Uri
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.content.ContextCompat
@@ -22,10 +30,16 @@ import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.linkify.LinkifyPlugin
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.Executors
 
 class ChatAdapter(
-    private val onRetryClick: ((Long) -> Unit)? = null
+    private val onRetryClick: ((Long) -> Unit)? = null,
+    private val loadYouTubeThumbnail: (String, ImageView) -> Unit = YouTubeThumbnailLoader::load
 ) : ListAdapter<UiChatMessage, ChatAdapter.MessageViewHolder>(MessageDiffCallback()) {
+    private val expandedTraceIds = mutableSetOf<String>()
+
     init {
         setHasStableIds(true)
     }
@@ -42,7 +56,15 @@ class ChatAdapter(
         // For simplicity and performance, creating one here (or better, in the Adapter constructor or DI)
         // Since we don't have DI setup visible here easily, let's create it in the ViewHolder or pass context.
         // Actually, Markwon needs context.
-        return MessageViewHolder(binding, onRetryClick)
+        return MessageViewHolder(
+            binding = binding,
+            onRetryClick = onRetryClick,
+            loadYouTubeThumbnail = loadYouTubeThumbnail,
+            isTraceExpanded = expandedTraceIds::contains,
+            setTraceExpanded = { key, expanded ->
+                if (expanded) expandedTraceIds += key else expandedTraceIds -= key
+            }
+        )
     }
 
     override fun onBindViewHolder(holder: MessageViewHolder, position: Int) {
@@ -51,7 +73,10 @@ class ChatAdapter(
 
     class MessageViewHolder(
         private val binding: ItemChatMessageBinding,
-        private val onRetryClick: ((Long) -> Unit)?
+        private val onRetryClick: ((Long) -> Unit)?,
+        private val loadYouTubeThumbnail: (String, ImageView) -> Unit,
+        private val isTraceExpanded: (String) -> Boolean,
+        private val setTraceExpanded: (String, Boolean) -> Unit
     ) : RecyclerView.ViewHolder(binding.root) {
         private val markwon: Markwon = Markwon.builder(binding.root.context)
             .usePlugin(LinkifyPlugin.create())
@@ -184,24 +209,46 @@ class ChatAdapter(
             val context = binding.root.context
             val density = context.resources.displayMetrics.density
             return LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = android.view.Gravity.CENTER_VERTICAL
+                orientation = LinearLayout.VERTICAL
                 isClickable = true
                 isFocusable = true
-                setPadding((12 * density).toInt(), (10 * density).toInt(), (12 * density).toInt(), (10 * density).toInt())
+                contentDescription = context.getString(
+                    R.string.youtube_video_action,
+                    widget.title ?: context.getString(R.string.youtube_video_fallback)
+                )
                 background = ContextCompat.getDrawable(context, R.drawable.bg_chat_widget)
+                addView(AspectRatioFrameLayout(context).apply {
+                    val thumbnail = ImageView(context).apply {
+                        scaleType = ImageView.ScaleType.CENTER_CROP
+                        contentDescription = null
+                        background = ColorDrawable(ContextCompat.getColor(context, R.color.assistant_message_bg))
+                    }
+                    addView(thumbnail, FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                    ))
+                    addView(TextView(context).apply {
+                        text = "▶"
+                        gravity = android.view.Gravity.CENTER
+                        textSize = 30f
+                        setTextColor(ContextCompat.getColor(context, android.R.color.white))
+                        setShadowLayer(6f, 0f, 2f, ContextCompat.getColor(context, android.R.color.black))
+                    }, FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                    ))
+                    loadYouTubeThumbnail(widget.videoId, thumbnail)
+                }, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ))
                 addView(TextView(context).apply {
-                    text = "▶"
-                    textSize = 24f
-                    setTextColor(ContextCompat.getColor(context, R.color.palette_red))
-                })
-                addView(TextView(context).apply {
-                    text = widget.title ?: "Watch on YouTube"
+                    text = widget.title ?: context.getString(R.string.youtube_video_fallback)
                     textSize = 14f
                     setTypeface(typeface, Typeface.BOLD)
                     setTextColor(ContextCompat.getColor(context, R.color.assistant_message_text))
-                    setPadding((12 * density).toInt(), 0, 0, 0)
-                }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                    setPadding((12 * density).toInt(), (10 * density).toInt(), (12 * density).toInt(), (10 * density).toInt())
+                })
                 setOnClickListener {
                     context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(widget.url)))
                 }
@@ -245,60 +292,95 @@ class ChatAdapter(
             val padding4 = (4 * density).toInt()
             binding.messageText.setPadding(padding12, padding4, padding12, padding12)
             val secondaryColor = ContextCompat.getColor(context, R.color.assistant_message_text)
+            binding.traceContainer.removeAllViews()
 
-            val currentChildCount = binding.traceContainer.childCount
-            val requiredChildCount = message.traceItems.size * 2
+            message.traceItems.forEach { trace ->
+                val expansionKey = "${message.id}:${trace.id}"
+                val presentation = TracePayloadFormatter.format(trace.content)
+                var expanded = isTraceExpanded(expansionKey) || trace.isExpanded
 
-            // Remove extra views if we have too many
-            if (currentChildCount > requiredChildCount) {
-                binding.traceContainer.removeViews(requiredChildCount, currentChildCount - requiredChildCount)
-            }
-
-            message.traceItems.forEachIndexed { index, trace ->
-                val titleIndex = index * 2
-                val bodyIndex = titleIndex + 1
-
-                // Get or create title TextView
-                val title = if (titleIndex < binding.traceContainer.childCount) {
-                    binding.traceContainer.getChildAt(titleIndex) as TextView
-                } else {
-                    TextView(context).apply {
-                        layoutParams = LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.MATCH_PARENT,
-                            LinearLayout.LayoutParams.WRAP_CONTENT
-                        )
-                        setTypeface(typeface, Typeface.BOLD)
-                        textSize = 12f
-                        setTextColor(secondaryColor)
-                        binding.traceContainer.addView(this)
-                    }
+                val title = TextView(context).apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    )
+                    setTypeface(typeface, Typeface.BOLD)
+                    textSize = 12f
+                    setTextColor(if (trace.isError) {
+                        ContextCompat.getColor(context, R.color.error_message_text)
+                    } else {
+                        secondaryColor
+                    })
                 }
                 title.text = trace.title
-                title.setTextColor(secondaryColor)
+                binding.traceContainer.addView(title)
 
-                // Get or create body TextView
-                val body = if (bodyIndex < binding.traceContainer.childCount) {
-                    binding.traceContainer.getChildAt(bodyIndex) as TextView
-                } else {
-                    TextView(context).apply {
-                        layoutParams = LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.MATCH_PARENT,
-                            LinearLayout.LayoutParams.WRAP_CONTENT
-                        )
-                        textSize = 12f
-                        setTextColor(secondaryColor)
-                        setPadding(0, 2, 0, 8)
-                        binding.traceContainer.addView(this)
+                val body = TextView(context).apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    )
+                    textSize = 12f
+                    setTextColor(if (trace.isError) {
+                        ContextCompat.getColor(context, R.color.error_message_text)
+                    } else {
+                        secondaryColor
+                    })
+                    setPadding(0, 2, 0, 4)
+                    if (presentation.isStructuredJson || trace.kind == UiTraceKind.TOOL_CALL || trace.kind == UiTraceKind.TOOL_RESULT) {
+                        typeface = Typeface.MONOSPACE
                     }
                 }
-                body.text = trace.content.take(1_200)
-                body.setTextColor(secondaryColor)
+                body.text = presentation.displayText(expanded)
                 body.alpha = if (trace.isError) 1f else 0.78f
                 body.visibility = if (trace.kind == UiTraceKind.REASONING && !trace.isExpanded) {
                     View.GONE
                 } else {
                     View.VISIBLE
                 }
+                binding.traceContainer.addView(body)
+
+                val actions = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = android.view.Gravity.END
+                    visibility = if (
+                        presentation.canCollapse ||
+                        trace.kind == UiTraceKind.TOOL_CALL ||
+                        trace.kind == UiTraceKind.TOOL_RESULT
+                    ) View.VISIBLE else View.GONE
+                }
+
+                if (presentation.canCollapse) {
+                    actions.addView(Button(context).apply {
+                        isAllCaps = false
+                        textSize = 11f
+                        text = context.getString(
+                            if (expanded) R.string.tool_payload_collapse else R.string.tool_payload_expand
+                        )
+                        setOnClickListener {
+                            expanded = !expanded
+                            setTraceExpanded(expansionKey, expanded)
+                            body.text = presentation.displayText(expanded)
+                            text = context.getString(
+                                if (expanded) R.string.tool_payload_collapse else R.string.tool_payload_expand
+                            )
+                        }
+                    })
+                }
+
+                if (trace.kind == UiTraceKind.TOOL_CALL || trace.kind == UiTraceKind.TOOL_RESULT) {
+                    actions.addView(Button(context).apply {
+                        isAllCaps = false
+                        textSize = 11f
+                        text = context.getString(R.string.tool_payload_copy)
+                        setOnClickListener {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText(trace.title, presentation.original))
+                            Toast.makeText(context, R.string.tool_payload_copied, Toast.LENGTH_SHORT).show()
+                        }
+                    })
+                }
+                binding.traceContainer.addView(actions)
 
                 if (trace.kind == UiTraceKind.REASONING) {
                     title.setOnClickListener {
@@ -327,6 +409,41 @@ class ChatAdapter(
 
         override fun areContentsTheSame(oldItem: UiChatMessage, newItem: UiChatMessage): Boolean {
             return oldItem == newItem
+        }
+    }
+}
+
+private class AspectRatioFrameLayout(context: android.content.Context) : FrameLayout(context) {
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val width = MeasureSpec.getSize(widthMeasureSpec)
+        val height = (width * 9f / 16f).toInt()
+        super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY))
+    }
+}
+
+private object YouTubeThumbnailLoader {
+    private val executor = Executors.newFixedThreadPool(2)
+    private val cache = object : LruCache<String, android.graphics.Bitmap>(8) {}
+
+    fun load(videoId: String, target: ImageView) {
+        target.tag = videoId
+        cache.get(videoId)?.let {
+            target.setImageBitmap(it)
+            return
+        }
+        executor.execute {
+            val bitmap = runCatching {
+                val connection = URL("https://i.ytimg.com/vi/$videoId/hqdefault.jpg")
+                    .openConnection() as HttpURLConnection
+                connection.connectTimeout = 5_000
+                connection.readTimeout = 5_000
+                connection.instanceFollowRedirects = true
+                connection.inputStream.use(BitmapFactory::decodeStream).also { connection.disconnect() }
+            }.getOrNull()
+            if (bitmap != null) cache.put(videoId, bitmap)
+            target.post {
+                if (target.tag == videoId && bitmap != null) target.setImageBitmap(bitmap)
+            }
         }
     }
 }

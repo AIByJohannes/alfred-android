@@ -100,7 +100,7 @@ class NewChatRegressionTest {
         assertEquals("Hello from conversation A", viewModel.messages.value?.firstOrNull()?.content)
 
         // Invoke the exact path the New Chat button triggers (clearChat)
-        viewModel.clearChat()
+        viewModel.requestNewChat()
         
         // Wait for the new conversation to be created and loaded (which has 0 messages)
         waitForViewModelLoad(viewModel, testScheduler, targetToChangeFrom = chatA.id, expectedMessageCount = 0)

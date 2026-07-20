@@ -216,9 +216,13 @@ class MainActivity : AppCompatActivity() {
         val apiKeyStore = ApiKeyStore(this)
         val localGemmaModelStore = LocalGemmaModelStore(this)
         val conversationStore = FileConversationStore(storage, this)
+        val memorySearchSource = FileMemorySearchSource(
+            rootDirectory = filesDir.resolve("workspace_memories"),
+            legacyMemoryFile = filesDir.resolve("memories.jsonl")
+        )
         val localKnowledgeSearchClient = FileLocalKnowledgeSearchClient(
             conversationStore = conversationStore,
-            memorySearchSource = FileMemorySearchSource(filesDir.resolve("memories.jsonl"))
+            memorySearchSource = memorySearchSource
         )
         val obsidianVaultStore = ObsidianVaultStore(this)
         obsidianVaultStore.parentFolderUri?.takeIf { obsidianVaultStore.hasUsableFolder() }?.let { uri ->
@@ -259,6 +263,7 @@ class MainActivity : AppCompatActivity() {
             conversationStore = conversationStore,
             sysInfoProvider = sysInfoProvider,
             chatRunPowerKeeper = AndroidChatRunPowerKeeper(this),
+            workspaceDeletionHandler = memorySearchSource::deleteWorkspace,
             startWithNewConversation = true,
             onChatActivity = {
                 NotificationScheduler.recordChatActivity(this)
@@ -321,8 +326,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.btnNewChatLayout.setOnClickListener {
-            Toast.makeText(this, "Creating new chat…", Toast.LENGTH_SHORT).show()
-            homeViewModel.createConversationAndSwitch()
+            homeViewModel.requestNewChat()
             navigateToHome()
             binding.drawerLayout.closeDrawer(GravityCompat.START)
         }
@@ -359,6 +363,9 @@ class MainActivity : AppCompatActivity() {
         }
         homeViewModel.isConversationListLoading.observe(this) { isLoading ->
             updateConversationListLoadingUi(isLoading)
+        }
+        homeViewModel.deletingConversationIds.observe(this) { ids ->
+            conversationAdapter.setDeletingConversationIds(ids)
         }
         homeViewModel.isLoading.observe(this) { updateNewChatEnabledState() }
         homeViewModel.isConversationLoading.observe(this) { updateNewChatEnabledState() }

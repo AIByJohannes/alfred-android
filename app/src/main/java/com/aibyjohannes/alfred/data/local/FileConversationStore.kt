@@ -180,10 +180,15 @@ class FileConversationStore internal constructor(
         refreshIndex()
     }
 
-    suspend fun searchSessionMessages(query: String, limit: Int): List<SessionSearchHit> = withStoreLock {
+    suspend fun searchSessionMessages(query: String, limit: Int): List<SessionSearchHit> {
+        val workspaceId = getOrCreateActiveWorkspace().id
+        return searchSessionMessages(workspaceId, query, limit)
+    }
+
+    suspend fun searchSessionMessages(workspaceId: String, query: String, limit: Int): List<SessionSearchHit> = withStoreLock {
         val terms = normalizeTerms(query)
         if (terms.isEmpty()) return@withStoreLock emptyList()
-        loadSnapshot().conversations.filterNot { it.deleted }.flatMap { conversation ->
+        loadSnapshot().conversations.filter { !it.deleted && it.workspaceId == workspaceId }.flatMap { conversation ->
             conversation.messages.filter { it.searchable }.mapNotNull { message ->
                 val score = score(message.content, terms)
                 if (score <= 0) null else SessionSearchHit(

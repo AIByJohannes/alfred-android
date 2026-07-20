@@ -544,11 +544,13 @@ class HomeFragment : Fragment() {
         homeViewModel.isLoading.observe(viewLifecycleOwner) { isLoading ->
             isStreamingResponse = isLoading
             updateLoadingUi()
+            requireActivity().invalidateOptionsMenu()
         }
 
         homeViewModel.isConversationLoading.observe(viewLifecycleOwner) { loading ->
             isConversationLoading = loading
             updateLoadingUi()
+            requireActivity().invalidateOptionsMenu()
         }
 
         homeViewModel.needsApiKey.observe(viewLifecycleOwner) { needsKey ->
@@ -737,7 +739,7 @@ class HomeFragment : Fragment() {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         if (item.itemId == R.id.action_clear_chat) {
-            homeViewModel.clearChat()
+            homeViewModel.requestNewChat()
             return true
         }
         return super.onOptionsItemSelected(item)
@@ -856,6 +858,11 @@ class HomeFragment : Fragment() {
             )
             audioFile.delete()
         }
+    }
+
+    override fun onPrepareOptionsMenu(menu: Menu) {
+        menu.findItem(R.id.action_clear_chat)?.isEnabled = !isStreamingResponse && !isConversationLoading
+        super.onPrepareOptionsMenu(menu)
     }
 
     private fun appendDictation(text: String) {

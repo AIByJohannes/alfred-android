@@ -61,5 +61,14 @@
             android:contentDescription="@string/delete_conversation"
             app:tint="@color/palette_red" />
 
+        <ProgressBar
+            android:id="@+id/conversation_delete_progress"
+            style="?android:attr/progressBarStyleSmall"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_marginStart="8dp"
+            android:contentDescription="@string/conversation_deleting"
+            android:visibility="gone" />
+
     </LinearLayout>
 </com.google.android.material.card.MaterialCardView>

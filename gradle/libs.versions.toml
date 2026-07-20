@@ -29,7 +29,7 @@ kover = "0.9.8"
 snakeyamlEngine = "3.0.1"
 room = "2.8.4"
 ksp = "2.2.21-2.0.5"
-robolectric = "4.12.2"
+robolectric = "4.16.1"
 litertLm = "0.14.0"
 
 [libraries]

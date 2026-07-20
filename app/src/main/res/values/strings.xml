@@ -68,6 +68,8 @@
     <string name="language_model_helper">Changes apply to new chat requests.</string>
     <string name="local_gemma_title">Local Gemma 3n</string>
     <string name="local_gemma_description">Run Gemma 3n E2B fully on this device with Google LiteRT-LM. Import a compatible .litertlm model (about 3 GB); it is copied into Alfred\'s private storage.</string>
+    <string name="local_gemma_download">Download model from Hugging Face</string>
+    <string name="local_gemma_download_help">Hugging Face sign-in and acceptance of the Gemma licence may be required. Download the .litertlm file.</string>
     <string name="local_gemma_not_installed">No local model installed</string>
     <string name="local_gemma_installed">Installed (%1$s)</string>
     <string name="local_gemma_active">Active locally (%1$s)</string>
@@ -78,6 +80,15 @@
     <string name="replace_local_gemma">Replace model</string>
     <string name="use_local_gemma">Use locally</string>
     <string name="local_gemma_selected">Local Gemma 3n selected</string>
+    <string name="youtube_video_fallback">YouTube video</string>
+    <string name="youtube_video_action">Open YouTube video: %1$s</string>
+    <string name="tool_payload_copy">Copy full payload</string>
+    <string name="tool_payload_expand">Expand payload</string>
+    <string name="tool_payload_collapse">Collapse payload</string>
+    <string name="tool_payload_copied">Payload copied</string>
+    <string name="conversation_deleting">Deleting conversation</string>
+    <string name="delete_conversation_failed">Couldn\'t delete the conversation: %1$s</string>
+    <string name="new_chat_failed">Couldn\'t create a new chat: %1$s</string>
     <string name="profile_title">Profile</string>
     <string name="profile_description">Shown in the drawer on this device.</string>
     <string name="profile_display_name">Display name</string>

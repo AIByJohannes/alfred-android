@@ -33,6 +33,14 @@ val releaseSigningConfigured = listOf(
     releaseKeyAlias,
     releaseKeyPassword
 ).all { it != null }
+val missingReleaseSettings = listOf(
+    "ALFRED_RELEASE_STORE_FILE" to releaseStoreFile,
+    "ALFRED_RELEASE_STORE_PASSWORD" to releaseStorePassword,
+    "ALFRED_RELEASE_KEY_ALIAS" to releaseKeyAlias,
+    "ALFRED_RELEASE_KEY_PASSWORD" to releaseKeyPassword
+).filter { it.second == null }.map { it.first }
+val alfredVersionCode = releaseSetting("ALFRED_VERSION_CODE")?.toIntOrNull() ?: 1
+val alfredVersionName = releaseSetting("ALFRED_VERSION_NAME") ?: "1.0"
 
 android {
     namespace = "com.aibyjohannes.alfred"
@@ -43,8 +51,8 @@ android {
     defaultConfig {
         applicationId = "com.aibyjohannes.alfred"
         minSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = alfredVersionCode
+        versionName = alfredVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
@@ -81,6 +89,9 @@ android {
     buildFeatures {
         viewBinding = true
         buildConfig = true
+    }
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
     }
 }
 
@@ -142,10 +153,11 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
 }
 
-tasks.matching { it.name == "assembleRelease" || it.name == "bundleRelease" }.configureEach {
+tasks.matching { it.name in setOf("assembleRelease", "bundleRelease", "packageRelease") }.configureEach {
     doFirst {
         check(releaseSigningConfigured) {
-            "Release signing is not configured. Set the four ALFRED_RELEASE_* Gradle properties or environment variables documented in docs/release-distribution.md."
+            "Release signing is not configured. Missing: ${missingReleaseSettings.joinToString()}. " +
+                "Set the ALFRED_RELEASE_* Gradle properties or environment variables documented in docs/release-distribution.md."
         }
     }
 }
