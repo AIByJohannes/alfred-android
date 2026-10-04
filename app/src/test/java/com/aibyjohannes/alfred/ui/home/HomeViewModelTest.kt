@@ -43,7 +43,7 @@ class HomeViewModelTest {
     @Before
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
-        viewModel = HomeViewModel()
+        viewModel = HomeViewModel(testDispatcher)
 
         val defaultWorkspace = WorkspaceSummary("1", "Personal")
         coEvery { conversationStore.getOrCreateActiveWorkspace() } returns defaultWorkspace
@@ -54,6 +54,144 @@ class HomeViewModelTest {
     @After
     fun tearDown() {
         Dispatchers.resetMain()
+    }
+
+    private fun seedNavigation() {
+        every { apiKeyStore.hasApiKey() } returns true
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns ConversationSummary("first", "First", 1L)
+        coEvery { conversationStore.loadMessages("first") } returns listOf(
+            StoredChatMessage(1L, ChatMessage.ROLE_USER, "First chat")
+        )
+        coEvery { conversationStore.switchActiveConversation("first") } returns ConversationSummary("first", "First", 1L)
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+    }
+
+    @Test
+    fun `failed navigation retains messages and restores the previous selection`() = runTest {
+        seedNavigation()
+        testScheduler.advanceUntilIdle()
+        coEvery { conversationStore.switchActiveConversation("broken") } returns ConversationSummary("broken", "Broken", 2L)
+        coEvery { conversationStore.loadMessages("broken") } throws IllegalStateException("Cannot read chat")
+
+        viewModel.selectConversation("broken")
+        testScheduler.advanceUntilIdle()
+
+        assertEquals("first", viewModel.activeConversationId.value)
+        assertEquals("First chat", viewModel.messages.value!!.single().content)
+        assertEquals("Cannot read chat", viewModel.storageError.value)
+        assertEquals(false, viewModel.isConversationLoading.value)
+        coVerify { conversationStore.switchActiveConversation("first") }
+    }
+
+    @Test
+    fun `New Chat keeps old identity and blocks sending until the new chat is ready`() = runTest {
+        seedNavigation()
+        testScheduler.advanceUntilIdle()
+        val release = CompletableDeferred<Unit>()
+        coEvery { conversationStore.createConversation() } coAnswers {
+            release.await()
+            ConversationSummary("new", null, 2L)
+        }
+        coEvery { conversationStore.loadMessages("new") } returns emptyList()
+
+        viewModel.requestNewChat()
+        testScheduler.runCurrent()
+        assertEquals(true, viewModel.isConversationLoading.value)
+        assertEquals("first", viewModel.activeConversationId.value)
+        viewModel.sendMessage("Must not go to the old chat")
+        coVerify(exactly = 0) { conversationStore.appendMessage(any(), any(), any()) }
+        verify(exactly = 0) { repository.streamMessage(any(), any(), any(), any(), any()) }
+        release.complete(Unit)
+        testScheduler.advanceUntilIdle()
+
+        assertEquals("new", viewModel.activeConversationId.value)
+        assertTrue(viewModel.messages.value!!.isEmpty())
+        assertEquals(false, viewModel.isConversationLoading.value)
+    }
+
+    @Test
+    fun `failed New Chat preserves current messages and clears the navigation guard`() = runTest {
+        seedNavigation()
+        testScheduler.advanceUntilIdle()
+        coEvery { conversationStore.createConversation() } throws IllegalStateException("disk unavailable")
+
+        viewModel.requestNewChat()
+        testScheduler.advanceUntilIdle()
+
+        assertEquals("first", viewModel.activeConversationId.value)
+        assertEquals("First chat", viewModel.messages.value!!.single().content)
+        assertEquals(false, viewModel.isConversationLoading.value)
+        assertEquals("Couldn't create a new chat: disk unavailable", viewModel.storageError.value)
+        coVerify { conversationStore.switchActiveConversation("first") }
+    }
+
+    @Test
+    fun `overlapping switches are serialized and publish matching messages`() = runTest {
+        seedNavigation()
+        testScheduler.advanceUntilIdle()
+        val release = CompletableDeferred<Unit>()
+        coEvery { conversationStore.switchActiveConversation("second") } returns ConversationSummary("second", "Second", 2L)
+        coEvery { conversationStore.switchActiveConversation("third") } returns ConversationSummary("third", "Third", 3L)
+        coEvery { conversationStore.loadMessages("second") } coAnswers {
+            release.await()
+            listOf(StoredChatMessage(2L, ChatMessage.ROLE_USER, "Second chat"))
+        }
+        coEvery { conversationStore.loadMessages("third") } returns listOf(StoredChatMessage(3L, ChatMessage.ROLE_USER, "Third chat"))
+
+        viewModel.selectConversation("second")
+        viewModel.selectConversation("third")
+        testScheduler.runCurrent()
+        assertEquals("first", viewModel.activeConversationId.value)
+        coVerify(exactly = 0) { conversationStore.loadMessages("third") }
+        release.complete(Unit)
+        testScheduler.advanceUntilIdle()
+
+        assertEquals("third", viewModel.activeConversationId.value)
+        assertEquals("Third chat", viewModel.messages.value!!.single().content)
+        assertEquals(false, viewModel.isConversationLoading.value)
+    }
+
+    @Test
+    fun `background reconciliation does not keep foreground input busy`() = runTest {
+        val release = CompletableDeferred<Unit>()
+        coEvery { conversationStore.reconcileHistory() } coAnswers { release.await() }
+        seedNavigation()
+        testScheduler.runCurrent()
+
+        assertEquals("first", viewModel.activeConversationId.value)
+        assertEquals(false, viewModel.isConversationLoading.value)
+        assertEquals("First chat", viewModel.messages.value!!.single().content)
+        release.complete(Unit)
+        testScheduler.advanceUntilIdle()
+    }
+
+    @Test
+    fun `changing folders cancels old navigation and replaces history instead of reusing the old store`() = runTest {
+        every { conversationStore.storageIdentity } returns "first-root"
+        seedNavigation()
+        testScheduler.advanceUntilIdle()
+        val release = CompletableDeferred<Unit>()
+        coEvery { conversationStore.switchActiveConversation("slow") } returns ConversationSummary("slow", "Old", 2L)
+        coEvery { conversationStore.loadMessages("slow") } coAnswers { release.await(); emptyList() }
+        viewModel.selectConversation("slow")
+        testScheduler.runCurrent()
+
+        val replacement: ConversationStore = mockk(relaxed = true)
+        every { replacement.storageIdentity } returns "second-root"
+        coEvery { replacement.getOrCreateActiveWorkspace() } returns WorkspaceSummary("new-workspace", "New")
+        coEvery { replacement.listWorkspaces() } returns listOf(WorkspaceSummary("new-workspace", "New"))
+        coEvery { replacement.getOrCreateActiveConversation() } returns ConversationSummary("new-chat", "New", 3L)
+        coEvery { replacement.loadMessages("new-chat") } returns listOf(StoredChatMessage(3L, ChatMessage.ROLE_USER, "New folder"))
+        coEvery { replacement.observeConversations(any()) } returns flowOf(emptyList())
+        viewModel.initialize(apiKeyStore, repository, replacement)
+        testScheduler.advanceUntilIdle()
+        release.complete(Unit)
+        testScheduler.advanceUntilIdle()
+
+        assertEquals("new-workspace", viewModel.activeWorkspaceId.value)
+        assertEquals("new-chat", viewModel.activeConversationId.value)
+        assertEquals("New folder", viewModel.messages.value!!.single().content)
+        assertEquals(false, viewModel.isConversationLoading.value)
     }
 
     @Test
@@ -509,15 +647,20 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveWorkspace() } returnsMany listOf(workspace1, workspace2, workspace2)
         coEvery { conversationStore.listWorkspaces() } returnsMany listOf(
             listOf(workspace1, workspace2), // 1. initialize
-            listOf(workspace1, workspace2), // 2. pre-delete check
-            listOf(workspace2)              // 3. post-delete refresh
+            listOf(workspace1, workspace2), // 2. background reconciliation refresh
+            listOf(workspace1, workspace2), // 3. pre-delete check
+            listOf(workspace2)              // 4. post-delete refresh
         )
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversationInW2
         coEvery { conversationStore.loadMessages("3") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversationInW2)
 
         // Act
-        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        val deletedMemoryWorkspaces = mutableListOf<String>()
+        viewModel.initialize(
+            apiKeyStore, repository, conversationStore,
+            workspaceDeletionHandler = { deletedMemoryWorkspaces += it }
+        )
         testScheduler.advanceUntilIdle()
 
         viewModel.deleteWorkspace("1")
@@ -526,6 +669,7 @@ class HomeViewModelTest {
         // Assert
         coVerify(exactly = 1) { conversationStore.deleteWorkspace("1") }
         coVerify(atLeast = 1) { conversationStore.getOrCreateActiveWorkspace() }
+        assertEquals(listOf("1"), deletedMemoryWorkspaces)
         assert(viewModel.activeWorkspaceId.value == "2")
         assert(viewModel.activeConversationId.value == "3")
     }

@@ -298,20 +298,30 @@ class FileConversationStoreTest {
         .filter { it.isFile && it.name.startsWith("conversation-") && it.extension == "jsonl" }
         .toList()
 
-    private class FailingConversationIndex : ConversationIndex {
-        private val delegate = MemoryConversationIndex()
+    private class FailingConversationIndex(private val delegate: ConversationIndex = MemoryConversationIndex()) : ConversationIndex by delegate {
         private var failOnReplaceCall: Int? = null
         private var replaceCount = 0
         fun failAfter(replaces: Int) {
             failOnReplaceCall = replaceCount + replaces
         }
         override suspend fun replaceFrom(snapshot: ConversationIndexSnapshot) {
+            checkFailure()
+            delegate.replaceFrom(snapshot)
+        }
+        override suspend fun upsertConversation(conversation: IndexedConversation, state: String) {
+            checkFailure()
+            delegate.upsertConversation(conversation, state)
+        }
+        override suspend fun upsertWorkspace(workspace: IndexedWorkspace, state: String) {
+            checkFailure()
+            delegate.upsertWorkspace(workspace, state)
+        }
+        private fun checkFailure() {
             replaceCount++
             if (replaceCount == failOnReplaceCall) {
                 failOnReplaceCall = null
                 throw IllegalStateException("Injected Room failure")
             }
-            delegate.replaceFrom(snapshot)
         }
         override suspend fun activeWorkspaceId() = delegate.activeWorkspaceId()
         override suspend fun setActiveWorkspaceId(id: String?) = delegate.setActiveWorkspaceId(id)

@@ -131,6 +131,7 @@ class FileChatHistoryStorageTest {
     @Test
     fun `listChildren reports an existing directory that cannot be listed`() {
         val rootDir = mockk<File>()
+        every { rootDir.canonicalPath } returns "unlistable-root"
         every { rootDir.exists() } returns true
         every { rootDir.isDirectory } returns true
         every { rootDir.listFiles() } returns null

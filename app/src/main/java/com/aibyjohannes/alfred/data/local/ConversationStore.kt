@@ -47,6 +47,9 @@ data class ConversationMessageDraft(
 )
 
 interface ConversationStore {
+    val storageIdentity: String? get() = null
+    /** Reconcile the disposable index after the foreground chat is ready. */
+    suspend fun reconcileHistory() {}
     // Workspace Operations
     suspend fun listWorkspaces(): List<WorkspaceSummary>
     fun observeWorkspaces(): Flow<List<WorkspaceSummary>>

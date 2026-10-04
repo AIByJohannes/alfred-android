@@ -31,7 +31,8 @@ internal data class IndexedConversation(
     val createdAtEpochMs: Long,
     val updatedAtEpochMs: Long,
     val deleted: Boolean,
-    val messages: List<IndexedMessage>
+    val messages: List<IndexedMessage>,
+    val messagesLoaded: Boolean = true
 )
 
 internal data class IndexedMessage(
@@ -62,6 +63,13 @@ internal data class ConversationIndexSnapshot(
 
 internal interface ConversationIndex {
     suspend fun replaceFrom(snapshot: ConversationIndexSnapshot)
+    suspend fun readSnapshot(): ConversationIndexSnapshot
+    suspend fun cacheState(): String?
+    suspend fun setCacheState(state: String)
+    suspend fun clearSelections()
+    suspend fun upsertConversation(conversation: IndexedConversation, state: String)
+    suspend fun upsertWorkspace(workspace: IndexedWorkspace, state: String)
+    suspend fun searchableMessages(): List<IndexedMessage>
     suspend fun activeWorkspaceId(): String?
     suspend fun setActiveWorkspaceId(id: String?)
     suspend fun activeConversationId(workspaceId: String): String?
@@ -121,6 +129,12 @@ internal data class SelectionCacheEntity(
 
 @Dao
 internal interface ConversationIndexDao {
+    @Query("SELECT * FROM workspaces ORDER BY createdAtEpochMs") suspend fun workspaces(): List<WorkspaceCacheEntity>
+    @Query("SELECT * FROM conversations") suspend fun conversations(): List<ConversationCacheEntity>
+    @Query("DELETE FROM messages WHERE conversationId = :id") suspend fun clearConversationMessages(id: String)
+    @Query("DELETE FROM selections") suspend fun clearSelections()
+    @Query("SELECT messages.* FROM messages INNER JOIN conversations ON messages.conversationId = conversations.id WHERE conversations.deleted = 0 AND messages.searchable = 1")
+    suspend fun searchableMessages(): List<MessageCacheEntity>
     @Query("DELETE FROM messages") suspend fun clearMessages()
     @Query("DELETE FROM conversations") suspend fun clearConversations()
     @Query("DELETE FROM workspaces") suspend fun clearWorkspaces()
@@ -161,6 +175,35 @@ internal class RoomConversationIndex(
     private val database: ConversationIndexDatabase
 ) : ConversationIndex {
     private val dao = database.dao()
+
+    override suspend fun readSnapshot(): ConversationIndexSnapshot = database.withTransaction {
+        ConversationIndexSnapshot(
+            dao.workspaces().map { it.toIndexed() },
+            dao.conversations().map { it.toIndexed() }
+        )
+    }
+
+    override suspend fun cacheState(): String? = dao.selection(CACHE_STATE)
+    override suspend fun setCacheState(state: String) = dao.putSelection(SelectionCacheEntity(CACHE_STATE, state))
+    override suspend fun clearSelections() = dao.clearSelections()
+
+    override suspend fun upsertConversation(conversation: IndexedConversation, state: String) {
+        database.withTransaction {
+            dao.insertConversations(listOf(conversation.toEntity()))
+            dao.clearConversationMessages(conversation.id)
+            dao.insertMessages(conversation.messages.map { it.toEntity() })
+            setCacheState(state)
+        }
+    }
+
+    override suspend fun upsertWorkspace(workspace: IndexedWorkspace, state: String) {
+        database.withTransaction {
+            dao.insertWorkspaces(listOf(workspace.toEntity()))
+            setCacheState(state)
+        }
+    }
+
+    override suspend fun searchableMessages(): List<IndexedMessage> = dao.searchableMessages().map { it.toIndexed() }
 
     override suspend fun replaceFrom(snapshot: ConversationIndexSnapshot) {
         database.withTransaction {
@@ -222,6 +265,7 @@ internal class RoomConversationIndex(
 
     private companion object {
         const val ACTIVE_WORKSPACE = "active-workspace"
+        const val CACHE_STATE = "history-cache-state"
     }
 }
 
@@ -230,8 +274,32 @@ internal class MemoryConversationIndex : ConversationIndex {
     private val conversationFlows = mutableMapOf<String, MutableStateFlow<List<ConversationSummary>>>()
     private var activeWorkspace: String? = null
     private val activeConversations = mutableMapOf<String, String>()
+    private var snapshot = ConversationIndexSnapshot(emptyList(), emptyList())
+    private var state: String? = null
+
+    override suspend fun readSnapshot(): ConversationIndexSnapshot = snapshot.copy(
+        conversations = snapshot.conversations.map { it.copy(messages = emptyList(), messagesLoaded = false) }
+    )
+    override suspend fun cacheState(): String? = state
+    override suspend fun setCacheState(state: String) { this.state = state }
+    override suspend fun clearSelections() { activeWorkspace = null; activeConversations.clear() }
+    override suspend fun upsertConversation(conversation: IndexedConversation, state: String) {
+        publish(snapshot.copy(conversations = snapshot.conversations.filterNot { it.id == conversation.id } + conversation))
+        this.state = state
+    }
+    override suspend fun upsertWorkspace(workspace: IndexedWorkspace, state: String) {
+        publish(snapshot.copy(workspaces = snapshot.workspaces.filterNot { it.id == workspace.id } + workspace))
+        this.state = state
+    }
+    override suspend fun searchableMessages(): List<IndexedMessage> = snapshot.conversations.filterNot { it.deleted }
+        .flatMap { it.messages }.filter { it.searchable }
 
     override suspend fun replaceFrom(snapshot: ConversationIndexSnapshot) {
+        publish(snapshot)
+    }
+
+    private fun publish(snapshot: ConversationIndexSnapshot) {
+        this.snapshot = snapshot
         workspaceFlow.value = snapshot.workspaces.filterNot { it.deleted }.map { WorkspaceSummary(it.id, it.name) }
         snapshot.workspaces.forEach { workspace ->
             conversationFlows.getOrPut(workspace.id) { MutableStateFlow(emptyList()) }.value =
@@ -251,3 +319,10 @@ internal class MemoryConversationIndex : ConversationIndex {
     override fun observeConversations(workspaceId: String): Flow<List<ConversationSummary>> =
         conversationFlows.getOrPut(workspaceId) { MutableStateFlow(emptyList()) }
 }
+
+private fun IndexedWorkspace.toEntity() = WorkspaceCacheEntity(id, name, folderName, createdAtEpochMs, updatedAtEpochMs, deleted)
+private fun WorkspaceCacheEntity.toIndexed() = IndexedWorkspace(id, name, folderName, createdAtEpochMs, updatedAtEpochMs, deleted)
+private fun IndexedConversation.toEntity() = ConversationCacheEntity(id, workspaceId, filePath.joinToString("/"), title, createdAtEpochMs, updatedAtEpochMs, deleted)
+private fun ConversationCacheEntity.toIndexed() = IndexedConversation(id, workspaceId, path.split('/'), title, createdAtEpochMs, updatedAtEpochMs, deleted, emptyList(), messagesLoaded = false)
+private fun IndexedMessage.toEntity() = MessageCacheEntity(eventId, id, conversationId, ordinal, role, content, kind, turnId, toolCallId, toolName, toolArgumentsJson, isError, reasoningText, reasoningSummary, encryptedReasoning, includeInPrompt, searchable, createdAtEpochMs)
+private fun MessageCacheEntity.toIndexed() = IndexedMessage(eventId, messageId, conversationId, ordinal, role, content, kind, turnId, toolCallId, toolName, toolArgumentsJson, isError, reasoningText, reasoningSummary, encryptedReasoning, includeInPrompt, searchable, createdAtEpochMs)

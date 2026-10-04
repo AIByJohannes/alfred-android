@@ -12,6 +12,8 @@ import java.nio.file.StandardCopyOption
 import java.util.UUID
 
 interface ChatHistoryStorage {
+    /** Stable identity of the resolved history root, not its user-facing parent folder. */
+    val identity: String
     val supportsAtomicReplace: Boolean
     fun ensureReady()
     fun ensureDirectory(path: List<String>)
@@ -39,6 +41,7 @@ data class StorageEntry(
 class FileChatHistoryStorage(
     private val rootDir: File
 ) : ChatHistoryStorage {
+    override val identity: String = rootDir.canonicalPath
     override val supportsAtomicReplace: Boolean = true
     override fun ensureReady() {
         check(rootDir.isDirectory || rootDir.mkdirs()) {
@@ -166,6 +169,7 @@ class DocumentChatHistoryStorage private constructor(
     private val context: Context,
     private val rootDirectory: DocumentFile
 ) : ChatHistoryStorage {
+    override val identity: String = rootDirectory.uri.toString()
     override val supportsAtomicReplace: Boolean = false
     override fun ensureReady() {
         require(rootDirectory.exists() && rootDirectory.isDirectory) {

@@ -66,6 +66,7 @@ internal fun onboardingCompletionNavOptions(): NavOptions = navOptions {
 }
 
 class MainActivity : AppCompatActivity() {
+    private var historyInitializationJob: kotlinx.coroutines.Job? = null
 
     private lateinit var appBarConfiguration: AppBarConfiguration
     private lateinit var binding: ActivityMainBinding
@@ -207,68 +208,77 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initializeHomeViewModel() {
-        val storage = chatHistoryLocationStore.createStorage()
-        if (storage == null) {
-            requestChatHistoryFolder()
-            return
-        }
+        historyInitializationJob?.cancel()
+        historyInitializationJob = lifecycleScope.launch {
+            val storage = try {
+                withContext(Dispatchers.IO) { chatHistoryLocationStore.createStorage() }
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                showChatHistoryFolderRequiredDialog(error.message)
+                return@launch
+            }
+            if (storage == null) {
+                requestChatHistoryFolder()
+                return@launch
+            }
 
-        val apiKeyStore = ApiKeyStore(this)
-        val localGemmaModelStore = LocalGemmaModelStore(this)
-        val conversationStore = FileConversationStore(storage, this)
-        val memorySearchSource = FileMemorySearchSource(
-            rootDirectory = filesDir.resolve("workspace_memories"),
-            legacyMemoryFile = filesDir.resolve("memories.jsonl")
-        )
-        val localKnowledgeSearchClient = FileLocalKnowledgeSearchClient(
-            conversationStore = conversationStore,
-            memorySearchSource = memorySearchSource
-        )
-        val obsidianVaultStore = ObsidianVaultStore(this)
-        obsidianVaultStore.parentFolderUri?.takeIf { obsidianVaultStore.hasUsableFolder() }?.let { uri ->
-            lifecycleScope.launch(Dispatchers.IO) {
-                try {
-                    val db = NoteSearchIndexDatabase.get(applicationContext)
-                    val indexer = VaultSearchIndexer(applicationContext, db)
-                    indexer.syncIndex(uri)
-                } catch (e: Exception) {
-                    android.util.Log.e("AlfredSearch", "Failed to sync index on startup", e)
+            val apiKeyStore = ApiKeyStore(this@MainActivity)
+            val localGemmaModelStore = LocalGemmaModelStore(this@MainActivity)
+            val conversationStore = FileConversationStore(storage, this@MainActivity)
+            val memorySearchSource = FileMemorySearchSource(
+                rootDirectory = filesDir.resolve("workspace_memories"),
+                legacyMemoryFile = filesDir.resolve("memories.jsonl")
+            )
+            val localKnowledgeSearchClient = FileLocalKnowledgeSearchClient(
+                conversationStore = conversationStore,
+                memorySearchSource = memorySearchSource
+            )
+            val obsidianVaultStore = ObsidianVaultStore(this@MainActivity)
+            obsidianVaultStore.parentFolderUri?.takeIf { obsidianVaultStore.hasUsableFolder() }?.let { uri ->
+                lifecycleScope.launch(Dispatchers.IO) {
+                    try {
+                        val db = NoteSearchIndexDatabase.get(applicationContext)
+                        val indexer = VaultSearchIndexer(applicationContext, db)
+                        indexer.syncIndex(uri)
+                    } catch (e: Exception) {
+                        android.util.Log.e("AlfredSearch", "Failed to sync index on startup", e)
+                    }
                 }
             }
+            val repository = ChatRepository(
+                apiKeyStore = apiKeyStore,
+                localKnowledgeSearchClient = localKnowledgeSearchClient,
+                obsidianClientProvider = {
+                    obsidianVaultStore.parentFolderUri
+                        ?.takeIf { obsidianVaultStore.hasUsableFolder() }
+                        ?.let { DocumentObsidianClient(this@MainActivity, it) }
+                },
+                skillClient = StorageSkillClient(storage),
+                reminderClient = AndroidReminderClient(this@MainActivity),
+                generatedImageDirectory = filesDir.resolve("generated_images"),
+                localModelPathProvider = localGemmaModelStore::installedModelPath,
+                localChatEngineFactory = { modelPath, systemPrompt ->
+                    LocalGemmaChatEngine(
+                        modelPath = modelPath,
+                        cacheDirectory = cacheDir.resolve("litert-lm"),
+                        systemPrompt = systemPrompt
+                    )
+                }
+            )
+            val sysInfoProvider = SysInfoProvider(this@MainActivity)
+            homeViewModel.initialize(
+                apiKeyStore = apiKeyStore,
+                repository = repository,
+                conversationStore = conversationStore,
+                sysInfoProvider = sysInfoProvider,
+                chatRunPowerKeeper = AndroidChatRunPowerKeeper(this@MainActivity),
+                workspaceDeletionHandler = memorySearchSource::deleteWorkspace,
+                startWithNewConversation = true,
+                onChatActivity = {
+                    NotificationScheduler.recordChatActivity(this@MainActivity)
+                }
+            )
         }
-        val repository = ChatRepository(
-            apiKeyStore = apiKeyStore,
-            localKnowledgeSearchClient = localKnowledgeSearchClient,
-            obsidianClientProvider = {
-                obsidianVaultStore.parentFolderUri
-                    ?.takeIf { obsidianVaultStore.hasUsableFolder() }
-                    ?.let { DocumentObsidianClient(this, it) }
-            },
-            skillClient = StorageSkillClient(storage),
-            reminderClient = AndroidReminderClient(this),
-            generatedImageDirectory = filesDir.resolve("generated_images"),
-            localModelPathProvider = localGemmaModelStore::installedModelPath,
-            localChatEngineFactory = { modelPath, systemPrompt ->
-                LocalGemmaChatEngine(
-                    modelPath = modelPath,
-                    cacheDirectory = cacheDir.resolve("litert-lm"),
-                    systemPrompt = systemPrompt
-                )
-            }
-        )
-        val sysInfoProvider = SysInfoProvider(this)
-        homeViewModel.initialize(
-            apiKeyStore = apiKeyStore,
-            repository = repository,
-            conversationStore = conversationStore,
-            sysInfoProvider = sysInfoProvider,
-            chatRunPowerKeeper = AndroidChatRunPowerKeeper(this),
-            workspaceDeletionHandler = memorySearchSource::deleteWorkspace,
-            startWithNewConversation = true,
-            onChatActivity = {
-                NotificationScheduler.recordChatActivity(this)
-            }
-        )
     }
 
     private fun requestChatHistoryFolder() {

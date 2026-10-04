@@ -6,10 +6,12 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ObjectNode
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import java.io.File
 import java.util.Locale
 import java.util.UUID
@@ -17,14 +19,18 @@ import java.util.UUID
 class FileConversationStore internal constructor(
     private val storage: ChatHistoryStorage,
     private val objectMapper: ObjectMapper,
-    private val index: ConversationIndex
+    private val index: ConversationIndex,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : ConversationStore {
+    override val storageIdentity: String get() = storage.identity
     /**
      * The JSONL files remain authoritative, but re-folding every conversation on each UI request
      * makes opening a chat scale with the entire vault. All writes run under [withStoreLock] and
      * refresh this snapshot, so a warm read needs no disk work.
      */
     private var snapshotCache: ConversationIndexSnapshot? = null
+    private var snapshotState: String? = null
+    private val cachePrefix get() = "v2\n${storage.identity}\n"
 
     constructor(rootDir: File) : this(FileChatHistoryStorage(rootDir), ObjectMapper(), MemoryConversationIndex())
     constructor(storage: ChatHistoryStorage) : this(storage, ObjectMapper(), MemoryConversationIndex())
@@ -49,16 +55,8 @@ class FileConversationStore internal constructor(
 
     override suspend fun createWorkspace(name: String): WorkspaceSummary = withStoreLock {
         require(name.isNotBlank()) { "Workspace name must not be blank" }
-        val id = UUID.randomUUID().toString()
-        val folderName = "$id-${slugify(name)}"
-        storage.ensureDirectory(listOf(WORKSPACES_DIR, folderName))
-        val path = listOf(WORKSPACES_DIR, folderName, WORKSPACE_FILE)
-        storage.createFileExclusive(path, JSONL_MIME_TYPE)
-        appendEvent(path, workspaceEvent(WORKSPACE_CREATED, id, name))
-        val snapshot = refreshIndex()
-        check(snapshot.workspaces.any { it.id == id && !it.deleted }) { "Workspace was not recoverable after creation" }
-        index.setActiveWorkspaceId(id)
-        WorkspaceSummary(id, name)
+        val workspace = createWorkspaceInternal(name, loadSnapshot())
+        WorkspaceSummary(workspace.id, workspace.name)
     }
 
     override suspend fun switchActiveWorkspace(workspaceId: String): WorkspaceSummary = withStoreLock {
@@ -70,13 +68,15 @@ class FileConversationStore internal constructor(
 
     override suspend fun renameWorkspace(workspaceId: String, newName: String): Unit = withStoreLock {
         require(newName.isNotBlank()) { "Workspace name must not be blank" }
-        val workspace = loadSnapshot().activeWorkspaces().firstOrNull { it.id == workspaceId }
+        val snapshot = loadSnapshot()
+        val workspace = snapshot.activeWorkspaces().firstOrNull { it.id == workspaceId }
             ?: throw IllegalArgumentException("Workspace not found: $workspaceId")
+        beginFileChange()
         appendEvent(
             listOf(WORKSPACES_DIR, workspace.folderName, WORKSPACE_FILE),
             workspaceEvent(WORKSPACE_RENAMED, workspaceId, newName)
         )
-        refreshIndex()
+        refreshWorkspace(workspace.folderName, snapshot)
     }
 
     override suspend fun deleteWorkspace(workspaceId: String): Unit = withStoreLock {
@@ -84,12 +84,13 @@ class FileConversationStore internal constructor(
         if (snapshot.activeWorkspaces().size <= 1) return@withStoreLock
         val workspace = snapshot.activeWorkspaces().firstOrNull { it.id == workspaceId }
             ?: throw IllegalArgumentException("Workspace not found: $workspaceId")
+        beginFileChange()
         appendEvent(
             listOf(WORKSPACES_DIR, workspace.folderName, WORKSPACE_FILE),
             workspaceEvent(WORKSPACE_DELETED, workspaceId, workspace.name)
         )
         if (index.activeWorkspaceId() == workspaceId) index.setActiveWorkspaceId(null)
-        refreshIndex()
+        refreshWorkspace(workspace.folderName, snapshot)
     }
 
     override suspend fun getOrCreateActiveConversation(): ConversationSummary = withStoreLock {
@@ -132,11 +133,12 @@ class FileConversationStore internal constructor(
     }
 
     override suspend fun loadMessages(conversationId: String): List<StoredChatMessage> = withStoreLock {
-        loadSnapshot().conversations.firstOrNull { it.id == conversationId && !it.deleted }
-            ?.messages
-            ?.sortedBy { it.ordinal }
-            ?.map { it.toStoredMessage() }
-            .orEmpty()
+        val snapshot = loadSnapshot()
+        val conversation = snapshot.conversations.firstOrNull { it.id == conversationId && !it.deleted }
+            ?: return@withStoreLock emptyList()
+        val loaded = if (conversation.messagesLoaded) conversation else refreshConversation(conversation.filePath, snapshot)
+        check(!loaded.deleted) { "Conversation has been deleted: $conversationId" }
+        loaded.messages.sortedBy { it.ordinal }.map { it.toStoredMessage() }
     }
 
     override suspend fun appendMessage(conversationId: String, role: String, content: String) {
@@ -146,38 +148,44 @@ class FileConversationStore internal constructor(
     override suspend fun appendMessages(conversationId: String, messages: List<ConversationMessageDraft>): Unit =
         withStoreLock {
             if (messages.isEmpty()) return@withStoreLock
-            val conversation = loadSnapshot().conversations.firstOrNull { it.id == conversationId && !it.deleted }
+            val snapshot = loadSnapshot()
+            val conversation = snapshot.conversations.firstOrNull { it.id == conversationId && !it.deleted }
                 ?: throw IllegalArgumentException("Conversation not found: $conversationId")
+            beginFileChange(conversation.filePath)
             messages.forEach { draft -> appendEvent(conversation.filePath, messageEvent(conversationId, draft)) }
             if (conversation.title.isNullOrBlank()) {
                 messages.firstOrNull { it.role == ChatMessage.ROLE_USER }?.let { firstUser ->
                     appendEvent(conversation.filePath, conversationTitleEvent(conversationId, buildConversationTitle(firstUser.content)))
                 }
             }
-            refreshIndex()
+            refreshConversation(conversation.filePath, snapshot)
         }
 
     override suspend fun deleteConversation(conversationId: String): Unit = withStoreLock {
-        val conversation = loadSnapshot().conversations.firstOrNull { it.id == conversationId && !it.deleted }
+        val snapshot = loadSnapshot()
+        val conversation = snapshot.conversations.firstOrNull { it.id == conversationId && !it.deleted }
             ?: return@withStoreLock
+        beginFileChange(conversation.filePath)
         appendEvent(conversation.filePath, baseEvent(CONVERSATION_DELETED).apply {
             put("conversationId", conversationId)
         })
         if (index.activeConversationId(conversation.workspaceId) == conversationId) {
             index.setActiveConversationId(conversation.workspaceId, null)
         }
-        refreshIndex()
+        refreshConversation(conversation.filePath, snapshot)
     }
 
     override suspend fun restoreConversation(conversationId: String): Unit = withStoreLock {
         // Find the conversation where it is currently deleted
-        val conversation = loadSnapshot().conversations.firstOrNull { it.id == conversationId && it.deleted }
+        val snapshot = loadSnapshot()
+        val conversation = snapshot.conversations.firstOrNull { it.id == conversationId && it.deleted }
             ?: return@withStoreLock
+        beginFileChange(conversation.filePath)
         appendEvent(conversation.filePath, baseEvent(CONVERSATION_RESTORED).apply {
             put("conversationId", conversationId)
             put("timestampEpochMs", System.currentTimeMillis())
         })
-        refreshIndex()
+        refreshConversation(conversation.filePath, snapshot)
     }
 
     suspend fun searchSessionMessages(query: String, limit: Int): List<SessionSearchHit> {
@@ -188,18 +196,20 @@ class FileConversationStore internal constructor(
     suspend fun searchSessionMessages(workspaceId: String, query: String, limit: Int): List<SessionSearchHit> = withStoreLock {
         val terms = normalizeTerms(query)
         if (terms.isEmpty()) return@withStoreLock emptyList()
-        loadSnapshot().conversations.filter { !it.deleted && it.workspaceId == workspaceId }.flatMap { conversation ->
-            conversation.messages.filter { it.searchable }.mapNotNull { message ->
-                val score = score(message.content, terms)
-                if (score <= 0) null else SessionSearchHit(
-                    conversationId = conversation.id,
-                    messageId = message.id,
-                    title = conversation.title?.takeIf { it.isNotBlank() } ?: "Conversation ${conversation.id}",
-                    snippet = buildSnippet(message.content, terms),
-                    timestampEpochMs = message.createdAtEpochMs,
-                    score = score
-                )
-            }
+        val conversations = loadSnapshot().conversations
+            .filter { !it.deleted && it.workspaceId == workspaceId }
+            .associateBy { it.id }
+        index.searchableMessages().mapNotNull { message ->
+            val conversation = conversations[message.conversationId] ?: return@mapNotNull null
+            val score = score(message.content, terms)
+            if (score <= 0) null else SessionSearchHit(
+                conversationId = conversation.id,
+                messageId = message.id,
+                title = conversation.title?.takeIf { it.isNotBlank() } ?: "Conversation ${conversation.id}",
+                snippet = buildSnippet(message.content, terms),
+                timestampEpochMs = message.createdAtEpochMs,
+                score = score
+            )
         }.sortedWith(compareByDescending<SessionSearchHit> { it.score }.thenByDescending { it.timestampEpochMs })
             .take(limit)
     }
@@ -214,11 +224,11 @@ class FileConversationStore internal constructor(
             val id = UUID.randomUUID().toString()
             val path = listOf(WORKSPACES_DIR, workspace.folderName, "conversation-$id.jsonl")
             if (storage.readText(path) !is StorageReadResult.Missing) return@repeat
+            val snapshot = loadSnapshot()
+            beginFileChange(path)
             storage.createFileExclusive(path, JSONL_MIME_TYPE)
             appendEvent(path, conversationCreatedEvent(id, workspace.id, System.currentTimeMillis()))
-            val snapshot = refreshIndex()
-            val created = snapshot.conversations.firstOrNull { it.id == id && !it.deleted }
-                ?: throw IllegalStateException("Conversation was not recoverable after creation")
+            val created = refreshConversation(path, snapshot)
             index.setActiveConversationId(workspace.id, id)
             return created.toSummary()
         }
@@ -234,17 +244,33 @@ class FileConversationStore internal constructor(
 
     private suspend fun ensureWorkspace(snapshot: ConversationIndexSnapshot): ConversationIndexSnapshot {
         if (snapshot.activeWorkspaces().isNotEmpty()) return snapshot
+        createWorkspaceInternal("Personal", snapshot)
+        return checkNotNull(snapshotCache)
+    }
+
+    private suspend fun createWorkspaceInternal(name: String, snapshot: ConversationIndexSnapshot): IndexedWorkspace {
         val id = UUID.randomUUID().toString()
-        val folderName = "$id-personal"
+        val folderName = "$id-${slugify(name)}"
+        beginFileChange()
         storage.ensureDirectory(listOf(WORKSPACES_DIR, folderName))
         val path = listOf(WORKSPACES_DIR, folderName, WORKSPACE_FILE)
         storage.createFileExclusive(path, JSONL_MIME_TYPE)
-        appendEvent(path, workspaceEvent(WORKSPACE_CREATED, id, "Personal"))
-        return refreshIndex().also { index.setActiveWorkspaceId(id) }
+        appendEvent(path, workspaceEvent(WORKSPACE_CREATED, id, name))
+        return refreshWorkspace(folderName, snapshot).also { index.setActiveWorkspaceId(id) }
     }
 
     private suspend fun loadSnapshot(): ConversationIndexSnapshot {
-        snapshotCache?.let { return it }
+        val state = index.cacheState()
+        if (state != null && state.startsWith(cachePrefix) && state != cachePrefix + "dirty") {
+            snapshotCache?.takeIf { snapshotState == state }?.let { return it }
+            val cached = index.readSnapshot()
+            if (cached.workspaces.isNotEmpty()) {
+                return cached.also { snapshotCache = it; snapshotState = state }
+            }
+        }
+        snapshotCache = null
+        if (state != null && !state.startsWith(cachePrefix)) index.clearSelections()
+        beginFileChange()
         migrateLegacyFolders()
         val legacySelections = migrateLegacyStorage()
         val snapshot = refreshIndex()
@@ -293,12 +319,136 @@ class FileConversationStore internal constructor(
 
     private suspend fun refreshIndex(): ConversationIndexSnapshot {
         // Never serve an older snapshot when a file append succeeded but rebuilding the read model failed.
-        snapshotCache = null
+        beginFileChange()
         val snapshot = scanEventFiles()
         index.replaceFrom(snapshot)
+        val state = cachePrefix + UUID.randomUUID()
+        index.setCacheState(state)
         snapshotCache = snapshot
+        snapshotState = state
         return snapshot
     }
+
+    private suspend fun beginFileChange(path: List<String> = emptyList()) {
+        snapshotCache = null
+        snapshotState = null
+        // Persist before touching files: process death or a partial append must force recovery.
+        index.setCacheState(cachePrefix + "dirty")
+        val key = storage.identity to path
+        FILE_REVISIONS[key] = (FILE_REVISIONS[key] ?: 0L) + 1L
+    }
+
+    private suspend fun refreshConversation(
+        path: List<String>, snapshot: ConversationIndexSnapshot, retainMessages: Boolean = true
+    ): IndexedConversation = cacheConversation(readConversation(path), snapshot, retainMessages)
+
+    private fun readConversation(path: List<String>): IndexedConversation {
+        val raw = (storage.readText(path) as? StorageReadResult.Found)?.text
+            ?: throw IllegalStateException("Conversation file is unavailable: ${path.last()}")
+        return foldConversation(raw, path)
+            ?: throw IllegalStateException("Conversation file is invalid: ${path.last()}")
+    }
+
+    private suspend fun cacheConversation(
+        conversation: IndexedConversation, snapshot: ConversationIndexSnapshot, retainMessages: Boolean
+    ): IndexedConversation {
+        val previous = snapshot.conversations.firstOrNull { it.filePath == conversation.filePath }
+        check(previous == null || (previous.id == conversation.id && previous.workspaceId == conversation.workspaceId)) {
+            "Conversation file identity changed: ${conversation.filePath.last()}"
+        }
+        val state = cachePrefix + UUID.randomUUID()
+        snapshotCache = null
+        index.upsertConversation(conversation, state)
+        val cached = if (retainMessages) conversation else conversation.copy(messages = emptyList(), messagesLoaded = false)
+        snapshotCache = snapshot.copy(conversations = snapshot.conversations.filterNot { it.id == conversation.id } + cached)
+        snapshotState = state
+        return conversation
+    }
+
+    private suspend fun refreshWorkspace(folder: String, snapshot: ConversationIndexSnapshot): IndexedWorkspace {
+        val raw = (storage.readText(listOf(WORKSPACES_DIR, folder, WORKSPACE_FILE)) as? StorageReadResult.Found)?.text
+            ?: throw IllegalStateException("Workspace file is unavailable: $folder")
+        val workspace = foldWorkspace(raw, folder) ?: throw IllegalStateException("Workspace file is invalid: $folder")
+        val state = cachePrefix + UUID.randomUUID()
+        snapshotCache = null
+        index.upsertWorkspace(workspace, state)
+        snapshotCache = snapshot.copy(workspaces = snapshot.workspaces.filterNot { it.id == workspace.id } + workspace)
+        snapshotState = state
+        return workspace
+    }
+
+    override suspend fun reconcileHistory() {
+        val (initial, folders) = withStoreLock {
+            loadSnapshot() to storage.listChildren(listOf(WORKSPACES_DIR)).filter { it.isDirectory }.map { it.name }
+        }
+        val discoveredPaths = mutableSetOf<List<String>>()
+        for (folder in folders) {
+            val paths = withStoreLock {
+                // A folder change may have replaced this shared database while a batch was suspended.
+                if (index.cacheState()?.startsWith(cachePrefix) != true) return@withStoreLock null
+                refreshWorkspace(folder, loadSnapshot())
+                storage.listChildren(listOf(WORKSPACES_DIR, folder))
+                    .filter { !it.isDirectory && CONVERSATION_FILE_REGEX.matches(it.name) }
+                    .map { listOf(WORKSPACES_DIR, folder, it.name) }
+            } ?: return
+            discoveredPaths.addAll(paths)
+            for (path in paths) {
+                yield()
+                val revision = withStoreLock {
+                    if (!isCleanCache()) return@withStoreLock null
+                    fileRevision(path)
+                } ?: return
+                // Large file reads and JSON folding must not occupy the foreground writer lock.
+                val conversation = withContext(ioDispatcher) { readConversation(path) }
+                val continued = withStoreLock {
+                    if (!isCleanCache()) return@withStoreLock false
+                    // A save or rebuild completed during the read; its newer index already wins.
+                    if (fileRevision(path) != revision) return@withStoreLock true
+                    val snapshot = loadSnapshot()
+                    cacheConversation(conversation, snapshot, retainMessages = snapshot.conversations.any { it.filePath == path && it.messagesLoaded })
+                    true
+                }
+                if (!continued) return
+            }
+        }
+        // Prune only entries present when this pass began; a foreground-created chat may not
+        // have been in the directory listing. Missing files affect only the disposable cache.
+        for (missing in initial.conversations.filter { !it.deleted && it.filePath !in discoveredPaths }) {
+            yield()
+            withStoreLock {
+                if (index.cacheState()?.startsWith(cachePrefix) != true) return@withStoreLock
+                val snapshot = loadSnapshot()
+                if (storage.readText(missing.filePath) is StorageReadResult.Missing) {
+                    val state = cachePrefix + UUID.randomUUID()
+                    val deleted = missing.copy(deleted = true, messages = emptyList(), messagesLoaded = false)
+                    index.upsertConversation(deleted, state)
+                    snapshotCache = snapshot.copy(conversations = snapshot.conversations.filterNot { it.id == missing.id } + deleted)
+                    snapshotState = state
+                }
+            }
+        }
+        for (missing in initial.workspaces.filter { !it.deleted && it.folderName.isNotBlank() && it.folderName !in folders }) {
+            yield()
+            withStoreLock {
+                if (index.cacheState()?.startsWith(cachePrefix) != true) return@withStoreLock
+                val snapshot = loadSnapshot()
+                if (storage.readText(listOf(WORKSPACES_DIR, missing.folderName, WORKSPACE_FILE)) is StorageReadResult.Missing) {
+                    val state = cachePrefix + UUID.randomUUID()
+                    val deleted = missing.copy(deleted = true)
+                    index.upsertWorkspace(deleted, state)
+                    snapshotCache = snapshot.copy(workspaces = snapshot.workspaces.filterNot { it.id == missing.id } + deleted)
+                    snapshotState = state
+                }
+            }
+        }
+    }
+
+    private fun fileRevision(path: List<String>): Pair<Long, Long> =
+        (FILE_REVISIONS[storage.identity to emptyList()] ?: 0L) to (FILE_REVISIONS[storage.identity to path] ?: 0L)
+
+    private suspend fun isCleanCache(): Boolean = index.cacheState()?.let {
+        it.startsWith(cachePrefix) && it != cachePrefix + "dirty"
+    } == true
 
     /**
      * JSONL is authoritative. This scan folds every entity log and then replaces the Room read model.
@@ -586,7 +736,7 @@ class FileConversationStore internal constructor(
         storage.appendLine(path, objectMapper.writeValueAsString(event), JSONL_MIME_TYPE)
     }
 
-    private suspend fun <T> withStoreLock(block: suspend () -> T): T = withContext(Dispatchers.IO) {
+    private suspend fun <T> withStoreLock(block: suspend () -> T): T = withContext(ioDispatcher) {
         PROCESS_WRITER_MUTEX.withLock {
             storage.ensureReady()
             block()
@@ -675,6 +825,8 @@ class FileConversationStore internal constructor(
 
     companion object {
         private val PROCESS_WRITER_MUTEX = Mutex()
+        // Accessed only under PROCESS_WRITER_MUTEX, shared by foreground and notification stores.
+        private val FILE_REVISIONS = mutableMapOf<Pair<String, List<String>>, Long>()
         private const val SCHEMA_VERSION = 1
         private const val JSONL_MIME_TYPE = "application/x-ndjson"
         private const val WORKSPACES_DIR = "workspaces"
