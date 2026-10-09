@@ -2,10 +2,11 @@ package com.aibyjohannes.alfred.data.local
 
 import com.aibyjohannes.alfred.data.api.ChatMessage
 import com.fasterxml.jackson.databind.ObjectMapper
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -30,6 +31,29 @@ class FileConversationStoreTest {
         assertNotEquals(first.id, second.id)
         assertEquals(2, store.listConversations().size)
         assertEquals(2, conversationFiles(root).size)
+    }
+
+    @Test
+    fun `creation preserves existing file and publishes new visible row`() = runTest {
+        val root = temporaryFolder.newFolder()
+        val storage = FileChatHistoryStorage(root)
+        val index = MemoryConversationIndex()
+        val store = FileConversationStore(storage, ObjectMapper(), index)
+        val first = store.getOrCreateActiveConversation()
+        store.appendMessage(first.id, ChatMessage.ROLE_USER, "Existing history")
+        val firstFile = conversationFiles(root).single()
+        val originalBytes = firstFile.readBytes()
+        val workspaceId = store.listWorkspaces().single().id
+        val observed = async { store.observeConversations(workspaceId).first() }
+        testScheduler.runCurrent()
+
+        val second = store.createConversation()
+
+        assertNotEquals(first.id, second.id)
+        assertTrue(originalBytes.contentEquals(firstFile.readBytes()))
+        assertTrue(conversationFiles(root).single { it.name.contains(second.id) }.readText().contains("conversationCreated"))
+        assertTrue(observed.await().any { it.id == first.id })
+        assertTrue(store.observeConversations(store.listWorkspaces().single().id).first().any { it.id == second.id })
     }
 
     @Test
@@ -130,7 +154,7 @@ class FileConversationStoreTest {
         root.resolve("metadata.json").writeText(
             """{"workspaces":[{"id":1,"name":"Personal","folderName":"workspace-1-personal","createdAtEpochMs":100}],"conversations":[{"id":1,"workspaceId":1,"workspaceFolderName":"workspace-1-personal","fileName":"conversation-1.jsonl","createdAtEpochMs":100}]}"""
         )
-        val failingIndex = FailingConversationIndex().apply { failAfter(1) }
+        val failingIndex = FailingConversationIndex().apply { failNextReplace = true }
 
         val failure = runCatching {
             FileConversationStore(FileChatHistoryStorage(root), ObjectMapper(), failingIndex)
@@ -167,15 +191,15 @@ class FileConversationStoreTest {
         val index = FailingConversationIndex()
         val store = FileConversationStore(FileChatHistoryStorage(root), ObjectMapper(), index)
         val conversation = store.getOrCreateActiveConversation()
-        index.failAfter(1)
+        index.failNextUpsert = true
 
         val failure = runCatching {
             store.appendMessage(conversation.id, ChatMessage.ROLE_USER, "File wins")
         }
 
         assertTrue(failure.isFailure)
-        val recovered = FileConversationStore(root)
-        assertEquals("File wins", recovered.loadMessages(conversation.id).single().content)
+        assertEquals("File wins", store.loadMessages(conversation.id).single().content)
+        assertEquals(1, store.searchSessionMessages("File wins", 10).size)
     }
 
     @Test
@@ -294,41 +318,216 @@ class FileConversationStoreTest {
     }
 
 
+    @Test
+    fun `partial and post write failures recover durable drafts once on same warmed store`() = runTest {
+        for (postWrite in listOf(false, true)) {
+            val root = temporaryFolder.newFolder()
+            val storage = FaultStorage(FileChatHistoryStorage(root))
+            val store = FileConversationStore(storage, ObjectMapper(), MemoryConversationIndex())
+            val chat = store.getOrCreateActiveConversation()
+            store.loadMessages(chat.id)
+            storage.failBefore = if (postWrite) null else 2
+            storage.failAfter = postWrite
+            assertTrue(runCatching {
+                store.appendMessages(chat.id, listOf(
+                    ConversationMessageDraft("user", "durable first"),
+                    ConversationMessageDraft("assistant", "not written")
+                ))
+            }.isFailure)
+            assertEquals(listOf("durable first"), store.loadMessages(chat.id).map { it.content })
+            assertEquals(1, store.searchSessionMessages("durable", 10).size)
+            assertEquals(1, conversationFiles(root).single().readLines().count { it.contains("durable first") })
+        }
+    }
+
+    @Test
+    fun `creation upsert and selection failures recover durable observable chats`() = runTest {
+        for (selectionFailure in listOf(false, true)) {
+            val root = temporaryFolder.newFolder()
+            val index = FailingConversationIndex()
+            val store = FileConversationStore(FileChatHistoryStorage(root), ObjectMapper(), index)
+            val first = store.getOrCreateActiveConversation()
+            val flow = store.observeConversations(store.getOrCreateActiveWorkspace().id)
+            assertEquals(listOf(first.id), flow.first().map { it.id })
+            if (selectionFailure) index.failNextSelection = true else index.failNextUpsert = true
+            assertTrue(runCatching { store.createConversation() }.isFailure)
+            assertTrue(index.cacheState()!!.endsWith("\ndirty"))
+            val durableIds = conversationFiles(root).map {
+                ObjectMapper().readTree(it.readLines().first()).path("conversationId").asText()
+            }.toSet()
+            assertEquals(2, durableIds.size)
+            assertEquals(durableIds, store.listConversations().map { it.id }.toSet())
+            assertEquals(durableIds, flow.first().map { it.id }.toSet())
+            assertFalse(index.cacheState()!!.endsWith("\ndirty"))
+        }
+    }
+
+    @Test
+    fun `target append delete and restore preserve metadata without reading unrelated log`() = runTest {
+        val root = temporaryFolder.newFolder()
+        val storage = FaultStorage(FileChatHistoryStorage(root))
+        val store = FileConversationStore(storage, ObjectMapper(), MemoryConversationIndex())
+        val target = store.getOrCreateActiveConversation()
+        val unrelated = store.createConversation()
+        store.appendMessage(unrelated.id, "user", "unrelated history")
+        val file = conversationFiles(root).single { it.name.contains(unrelated.id) }
+        val bytes = file.readBytes()
+        val flow = store.observeConversations(store.getOrCreateActiveWorkspace().id)
+        store.loadMessages(target.id)
+        storage.poisoned = file.name
+        val drafts = listOf(
+            ConversationMessageDraft("user", "Target title", turnId = "turn"),
+            ConversationMessageDraft("assistant", "thinking", kind = "reasoning", turnId = "turn",
+                reasoningText = "full", reasoningSummary = "summary", encryptedReasoning = "encrypted",
+                includeInPrompt = false, searchable = false),
+            ConversationMessageDraft("assistant", "call", kind = "tool_call", turnId = "turn",
+                toolCallId = "call-id", toolName = "search", toolArgumentsJson = """{"q":"needle"}"""),
+            ConversationMessageDraft("tool", "result", kind = "tool_result", turnId = "turn",
+                toolCallId = "call-id", toolName = "search", isError = true)
+        )
+        store.appendMessages(target.id, drafts)
+        assertEquals(drafts, store.loadMessages(target.id).map { it.toDraft() })
+        assertEquals("Target title", store.listConversations().single { it.id == target.id }.title)
+        store.deleteConversation(target.id)
+        assertFalse(flow.first().any { it.id == target.id })
+        assertTrue(store.loadMessages(target.id).isEmpty())
+        store.restoreConversation(target.id)
+        assertTrue(flow.first().any { it.id == target.id })
+        assertEquals(drafts, store.loadMessages(target.id).map { it.toDraft() })
+        assertTrue(bytes.contentEquals(file.readBytes()))
+    }
+
+    @Test
+    fun `warmed siblings observe durable append create delete and post write failure`() = runTest {
+        val root = temporaryFolder.newFolder()
+        val first = FileConversationStore(root)
+        val chat = first.getOrCreateActiveConversation()
+        val storage = FaultStorage(FileChatHistoryStorage(root))
+        val sibling = FileConversationStore(storage, ObjectMapper(), MemoryConversationIndex())
+        sibling.loadMessages(chat.id)
+        first.loadMessages(chat.id)
+        sibling.appendMessage(chat.id, "user", "sibling append")
+        assertEquals(listOf("sibling append"), first.loadMessages(chat.id).map { it.content })
+        val created = sibling.createConversation()
+        assertTrue(first.listConversations().any { it.id == created.id })
+        sibling.deleteConversation(created.id)
+        assertFalse(first.listConversations().any { it.id == created.id })
+        storage.failAfter = true
+        assertTrue(runCatching { sibling.appendMessage(chat.id, "assistant", "failed durable append") }.isFailure)
+        assertEquals(listOf("sibling append", "failed durable append"), first.loadMessages(chat.id).map { it.content })
+        assertEquals(first.loadMessages(chat.id), sibling.loadMessages(chat.id))
+    }
+
+    @Test
+    fun `distinct root writes do not invalidate other warmed snapshot`() = runTest {
+        val root = temporaryFolder.newFolder()
+        val storage = FaultStorage(FileChatHistoryStorage(root))
+        val first = FileConversationStore(storage, ObjectMapper(), MemoryConversationIndex())
+        val chat = first.getOrCreateActiveConversation()
+        first.appendMessage(chat.id, "user", "independent")
+        first.loadMessages(chat.id)
+        storage.poisoned = conversationFiles(root).single().name
+        val other = FileConversationStore(temporaryFolder.newFolder())
+        other.appendMessage(other.getOrCreateActiveConversation().id, "user", "other root")
+        assertEquals("independent", first.loadMessages(chat.id).single().content)
+    }
+
+    @Test
+    fun `full replacement empties previously observed absent workspace`() = runTest {
+        val index = MemoryConversationIndex()
+        index.replaceFrom(ConversationIndexSnapshot(
+            listOf(IndexedWorkspace("old", "Old", "old", 1, 1, false)),
+            listOf(IndexedConversation("chat", "old", listOf("chat.jsonl"), null, 1, 1, false, emptyList()))
+        ))
+        val flow = index.observeConversations("old")
+        assertEquals(listOf("chat"), flow.first().map { it.id })
+        index.replaceFrom(ConversationIndexSnapshot(emptyList(), emptyList()))
+        assertTrue(flow.first().isEmpty())
+    }
+
+    private fun StoredChatMessage.toDraft() = ConversationMessageDraft(
+        role, content, kind, turnId, toolCallId, toolName, toolArgumentsJson, isError,
+        reasoningText, reasoningSummary, encryptedReasoning, includeInPrompt, searchable
+    )
+
+    private class FaultStorage(private val delegate: ChatHistoryStorage) : ChatHistoryStorage by delegate {
+        var failBefore: Int? = null
+        var failAfter = false
+        var poisoned: String? = null
+        override fun readText(path: List<String>): StorageReadResult {
+            check(poisoned == null || path.lastOrNull() != poisoned) { "Unrelated log read" }
+            return delegate.readText(path)
+        }
+        override fun appendLine(path: List<String>, line: String, mimeType: String) {
+            failBefore?.let {
+                if (it == 1) {
+                    failBefore = null
+                    error("Injected pre-write failure")
+                }
+                failBefore = it - 1
+            }
+            delegate.appendLine(path, line, mimeType)
+            if (failAfter) {
+                failAfter = false
+                error("Injected post-write failure")
+            }
+        }
+    }
+
+    @Test
+    fun `failed full rebuild can recover on same warmed store`() = runTest {
+        val root = temporaryFolder.newFolder()
+        val index = FailingConversationIndex()
+        val store = FileConversationStore(FileChatHistoryStorage(root), ObjectMapper(), index)
+        val chat = store.getOrCreateActiveConversation()
+        store.appendMessage(chat.id, "user", "before rebuild")
+        val file = conversationFiles(root).single()
+        val updatedLines = file.readLines().map { line ->
+            val event = ObjectMapper().readTree(line) as com.fasterxml.jackson.databind.node.ObjectNode
+            if (event.has("title")) event.put("title", "External title")
+            event.toString()
+        }
+        file.writeText(updatedLines.joinToString("\n", postfix = "\n"))
+        index.failNextReplace = true
+        assertTrue(runCatching { store.rebuildIndexFromFiles() }.isFailure)
+        assertEquals("External title", store.listConversations().single().title)
+        assertEquals("External title", store.observeConversations(store.getOrCreateActiveWorkspace().id).first().single().title)
+        assertEquals("before rebuild", store.loadMessages(chat.id).single().content)
+    }
+
     private fun conversationFiles(root: File): List<File> = root.walkTopDown()
         .filter { it.isFile && it.name.startsWith("conversation-") && it.extension == "jsonl" }
         .toList()
 
-    private class FailingConversationIndex(private val delegate: ConversationIndex = MemoryConversationIndex()) : ConversationIndex by delegate {
-        private var failOnReplaceCall: Int? = null
-        private var replaceCount = 0
-        fun failAfter(replaces: Int) {
-            failOnReplaceCall = replaceCount + replaces
+    private class FailingConversationIndex(
+        private val delegate: ConversationIndex = MemoryConversationIndex()
+    ) : ConversationIndex by delegate {
+        var failNextUpsert = false
+        var failNextReplace = false
+        var failNextSelection = false
+
+        override suspend fun upsertConversation(conversation: IndexedConversation) {
+            if (failNextUpsert) {
+                failNextUpsert = false
+                error("Injected upsert failure")
+            }
+            delegate.upsertConversation(conversation)
         }
+
         override suspend fun replaceFrom(snapshot: ConversationIndexSnapshot) {
-            checkFailure()
+            if (failNextReplace) {
+                failNextReplace = false
+                error("Injected replacement failure")
+            }
             delegate.replaceFrom(snapshot)
         }
-        override suspend fun upsertConversation(conversation: IndexedConversation, state: String) {
-            checkFailure()
-            delegate.upsertConversation(conversation, state)
-        }
-        override suspend fun upsertWorkspace(workspace: IndexedWorkspace, state: String) {
-            checkFailure()
-            delegate.upsertWorkspace(workspace, state)
-        }
-        private fun checkFailure() {
-            replaceCount++
-            if (replaceCount == failOnReplaceCall) {
-                failOnReplaceCall = null
-                throw IllegalStateException("Injected Room failure")
+
+        override suspend fun setActiveConversationId(workspaceId: String, id: String?) {
+            if (failNextSelection) {
+                failNextSelection = false
+                error("Injected selection failure")
             }
-        }
-        override suspend fun activeWorkspaceId() = delegate.activeWorkspaceId()
-        override suspend fun setActiveWorkspaceId(id: String?) = delegate.setActiveWorkspaceId(id)
-        override suspend fun activeConversationId(workspaceId: String) = delegate.activeConversationId(workspaceId)
-        override suspend fun setActiveConversationId(workspaceId: String, id: String?) =
             delegate.setActiveConversationId(workspaceId, id)
-        override fun observeWorkspaces(): Flow<List<WorkspaceSummary>> = flowOf(emptyList())
-        override fun observeConversations(workspaceId: String): Flow<List<ConversationSummary>> = flowOf(emptyList())
+        }
     }
 }

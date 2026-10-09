@@ -12,6 +12,9 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -55,17 +58,26 @@ class NewChatRegressionTest {
         Dispatchers.resetMain()
     }
 
-    private fun waitForViewModelLoad(
-        viewModel: HomeViewModel, 
+    private suspend fun waitForViewModelLoad(
+        viewModel: HomeViewModel,
         testScheduler: TestCoroutineScheduler,
         targetToChangeFrom: String?,
         expectedMessageCount: Int
-    ) {
-        var retries = 150
-        while ((viewModel.activeConversationId.value == targetToChangeFrom || viewModel.messages.value?.size != expectedMessageCount) && retries > 0) {
-            testScheduler.advanceUntilIdle()
-            Thread.sleep(20)
-            retries--
+    ) = withContext(Dispatchers.Default) {
+        // Real Room/IO work finishes outside the test scheduler. Yield that worker
+        // time while requiring the entire navigation/list commit, not a blank UI.
+        withTimeout(5_000) {
+            while (true) {
+                testScheduler.advanceUntilIdle()
+                if (viewModel.activeConversationId.value != targetToChangeFrom &&
+                    viewModel.messages.value?.size == expectedMessageCount &&
+                    viewModel.isConversationLoading.value == false &&
+                    viewModel.isConversationListLoading.value == false
+                ) {
+                    break
+                }
+                delay(10)
+            }
         }
     }
 
@@ -88,7 +100,7 @@ class NewChatRegressionTest {
         store.appendMessage(chatA.id, ChatMessage.ROLE_USER, "Hello from conversation A")
 
         // 2. Initialize the HomeViewModel with our real store
-        val viewModel = HomeViewModel()
+        val viewModel = HomeViewModel(testDispatcher)
         viewModel.initialize(apiKeyStore, repository, store)
 
         // Wait for the ViewModel to load conversation A (which has 1 message)

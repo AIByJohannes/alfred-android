@@ -34,6 +34,8 @@ import com.aibyjohannes.alfred.data.local.NoteSearchIndexDatabase
 import com.aibyjohannes.alfred.data.local.VaultSearchIndexer
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.aibyjohannes.alfred.ui.home.ConversationAdapter
@@ -66,7 +68,6 @@ internal fun onboardingCompletionNavOptions(): NavOptions = navOptions {
 }
 
 class MainActivity : AppCompatActivity() {
-    private var historyInitializationJob: kotlinx.coroutines.Job? = null
 
     private lateinit var appBarConfiguration: AppBarConfiguration
     private lateinit var binding: ActivityMainBinding
@@ -75,6 +76,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var workspaceAdapter: DrawerProjectsAdapter
     private lateinit var profilePreferencesStore: ProfilePreferencesStore
     private lateinit var chatHistoryLocationStore: ChatHistoryLocationStore
+    private var historyInitializationJob: Job? = null
     private val drawerConversationPlaceholderAnimators = mutableListOf<Animator>()
     private var drawerSwipeStartX = 0f
     private var drawerSwipeStartY = 0f
@@ -212,8 +214,9 @@ class MainActivity : AppCompatActivity() {
         historyInitializationJob = lifecycleScope.launch {
             val storage = try {
                 withContext(Dispatchers.IO) { chatHistoryLocationStore.createStorage() }
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Exception) {
-                if (error is kotlinx.coroutines.CancellationException) throw error
                 showChatHistoryFolderRequiredDialog(error.message)
                 return@launch
             }

@@ -41,7 +41,7 @@ data class StorageEntry(
 class FileChatHistoryStorage(
     private val rootDir: File
 ) : ChatHistoryStorage {
-    override val identity: String = rootDir.canonicalPath
+    override val identity: String by lazy { rootDir.canonicalPath }
     override val supportsAtomicReplace: Boolean = true
     override fun ensureReady() {
         check(rootDir.isDirectory || rootDir.mkdirs()) {
@@ -169,7 +169,12 @@ class DocumentChatHistoryStorage private constructor(
     private val context: Context,
     private val rootDirectory: DocumentFile
 ) : ChatHistoryStorage {
-    override val identity: String = rootDirectory.uri.toString()
+    override val identity: String by lazy {
+        DocumentsContract.buildDocumentUri(
+            requireNotNull(rootDirectory.uri.authority),
+            DocumentsContract.getDocumentId(rootDirectory.uri)
+        ).toString()
+    }
     override val supportsAtomicReplace: Boolean = false
     override fun ensureReady() {
         require(rootDirectory.exists() && rootDirectory.isDirectory) {

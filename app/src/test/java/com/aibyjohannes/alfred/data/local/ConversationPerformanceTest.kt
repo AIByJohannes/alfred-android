@@ -276,6 +276,46 @@ class ConversationPerformanceTest {
         assertEquals(listOf("before", "after"), index.searchableMessages().map { it.content })
     }
 
+    @Test
+    fun `an old background read cannot publish into a replacement root cache`() = runTest {
+        val storage = CountingStorage(FileChatHistoryStorage(temporaryFolder.newFolder()))
+        val index = CountingIndex()
+        val original = FileConversationStore(storage, ObjectMapper(), index)
+        val oldChat = original.createConversation()
+        original.appendMessage(oldChat.id, ChatMessage.ROLE_USER, "old root history")
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val intercepted = AtomicBoolean(false)
+        storage.onRead = { path ->
+            if (path.last() == "conversation-${oldChat.id}.jsonl" && intercepted.compareAndSet(false, true)) {
+                started.countDown()
+                check(release.await(10, TimeUnit.SECONDS)) { "Test did not release background read" }
+            }
+        }
+        val reopened = FileConversationStore(storage, ObjectMapper(), index)
+        val reconciliation = launch { reopened.reconcileHistory() }
+        val replacement = FileConversationStore(
+            FileChatHistoryStorage(temporaryFolder.newFolder()), ObjectMapper(), index
+        )
+        val replacementChat = try {
+            withContext(Dispatchers.IO) { assertTrue(started.await(5, TimeUnit.SECONDS)) }
+            withContext(Dispatchers.Default) {
+                withTimeout(2_000) {
+                    replacement.createConversation().also {
+                        replacement.appendMessage(it.id, ChatMessage.ROLE_USER, "replacement root history")
+                    }
+                }
+            }
+        } finally {
+            release.countDown()
+        }
+        reconciliation.join()
+
+        assertEquals(listOf(replacementChat.id), replacement.listConversations().map { it.id })
+        assertEquals(listOf(replacementChat.id), index.readSnapshot().conversations.map { it.id })
+        assertEquals(listOf("replacement root history"), index.searchableMessages().map { it.content })
+    }
+
     private class CountingStorage(private val delegate: ChatHistoryStorage) : ChatHistoryStorage by delegate {
         val reads: MutableList<List<String>> = Collections.synchronizedList(mutableListOf())
         var listings = 0
@@ -300,9 +340,9 @@ class ConversationPerformanceTest {
         var failNextUpdate = false
         var onUpdate: (suspend (IndexedConversation) -> Unit)? = null
         override suspend fun replaceFrom(snapshot: ConversationIndexSnapshot) { fullReplacements++; delegate.replaceFrom(snapshot) }
-        override suspend fun upsertConversation(conversation: IndexedConversation, state: String) {
+        override suspend fun upsertConversation(conversation: IndexedConversation) {
             if (failNextUpdate) { failNextUpdate = false; throw IllegalStateException("Injected index failure") }
-            delegate.upsertConversation(conversation, state)
+            delegate.upsertConversation(conversation)
             onUpdate?.invoke(conversation)
         }
     }

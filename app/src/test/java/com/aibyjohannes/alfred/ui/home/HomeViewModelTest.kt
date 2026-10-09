@@ -16,15 +16,19 @@ import com.aibyjohannes.alfred.data.local.WorkspaceSummary
 import io.mockk.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.*
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -45,6 +49,7 @@ class HomeViewModelTest {
         Dispatchers.setMain(testDispatcher)
         viewModel = HomeViewModel(testDispatcher)
 
+        every { conversationStore.storageIdentity } returns null
         val defaultWorkspace = WorkspaceSummary("1", "Personal")
         coEvery { conversationStore.getOrCreateActiveWorkspace() } returns defaultWorkspace
         coEvery { conversationStore.listWorkspaces() } returns listOf(defaultWorkspace)
@@ -56,7 +61,7 @@ class HomeViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun seedNavigation() {
+    private fun seedRemoteNavigation() {
         every { apiKeyStore.hasApiKey() } returns true
         coEvery { conversationStore.getOrCreateActiveConversation() } returns ConversationSummary("first", "First", 1L)
         coEvery { conversationStore.loadMessages("first") } returns listOf(
@@ -68,7 +73,7 @@ class HomeViewModelTest {
 
     @Test
     fun `failed navigation retains messages and restores the previous selection`() = runTest {
-        seedNavigation()
+        seedRemoteNavigation()
         testScheduler.advanceUntilIdle()
         coEvery { conversationStore.switchActiveConversation("broken") } returns ConversationSummary("broken", "Broken", 2L)
         coEvery { conversationStore.loadMessages("broken") } throws IllegalStateException("Cannot read chat")
@@ -85,7 +90,7 @@ class HomeViewModelTest {
 
     @Test
     fun `New Chat keeps old identity and blocks sending until the new chat is ready`() = runTest {
-        seedNavigation()
+        seedRemoteNavigation()
         testScheduler.advanceUntilIdle()
         val release = CompletableDeferred<Unit>()
         coEvery { conversationStore.createConversation() } coAnswers {
@@ -111,7 +116,7 @@ class HomeViewModelTest {
 
     @Test
     fun `failed New Chat preserves current messages and clears the navigation guard`() = runTest {
-        seedNavigation()
+        seedRemoteNavigation()
         testScheduler.advanceUntilIdle()
         coEvery { conversationStore.createConversation() } throws IllegalStateException("disk unavailable")
 
@@ -127,7 +132,7 @@ class HomeViewModelTest {
 
     @Test
     fun `overlapping switches are serialized and publish matching messages`() = runTest {
-        seedNavigation()
+        seedRemoteNavigation()
         testScheduler.advanceUntilIdle()
         val release = CompletableDeferred<Unit>()
         coEvery { conversationStore.switchActiveConversation("second") } returns ConversationSummary("second", "Second", 2L)
@@ -155,7 +160,7 @@ class HomeViewModelTest {
     fun `background reconciliation does not keep foreground input busy`() = runTest {
         val release = CompletableDeferred<Unit>()
         coEvery { conversationStore.reconcileHistory() } coAnswers { release.await() }
-        seedNavigation()
+        seedRemoteNavigation()
         testScheduler.runCurrent()
 
         assertEquals("first", viewModel.activeConversationId.value)
@@ -166,9 +171,88 @@ class HomeViewModelTest {
     }
 
     @Test
+    fun `replacement joins canceled reconciliation before adopting the new root`() = runTest {
+        seedNavigation()
+        val reconciliationStarted = CompletableDeferred<Unit>()
+        val cleanupStarted = CompletableDeferred<Unit>()
+        val releaseCleanup = CompletableDeferred<Unit>()
+        coEvery { conversationStore.reconcileHistory() } coAnswers {
+            reconciliationStarted.complete(Unit)
+            try {
+                kotlinx.coroutines.awaitCancellation()
+            } finally {
+                withContext(NonCancellable) {
+                    cleanupStarted.complete(Unit)
+                    releaseCleanup.await()
+                    throw IllegalStateException("obsolete reconciliation failure")
+                }
+            }
+        }
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.runCurrent()
+        assertTrue(reconciliationStarted.isCompleted)
+        assertFalse(viewModel.isConversationLoading.value == true)
+
+        val replacement: ConversationStore = mockk(relaxed = true)
+        seedNavigation(replacement, "replacement", "replacement-ws")
+        viewModel.initialize(apiKeyStore, repository, replacement)
+        testScheduler.runCurrent()
+        assertTrue(cleanupStarted.isCompleted)
+        assertEquals(true, viewModel.isConversationLoading.value)
+        assertEquals(null, viewModel.activeConversationId.value)
+        coVerify(exactly = 0) { replacement.getOrCreateActiveWorkspace() }
+        assertBlockedInput()
+
+        releaseCleanup.complete(Unit)
+        testScheduler.advanceUntilIdle()
+        assertEquals("replacement", viewModel.activeConversationId.value)
+        assertEquals("replacement-ws", viewModel.activeWorkspaceId.value)
+        assertEquals(null, viewModel.storageError.value)
+        assertFalse(viewModel.isConversationLoading.value == true)
+        coVerify { replacement.reconcileHistory() }
+    }
+
+    @Test
+    fun `message preparation runs on its dispatcher and commits only after completion`() = runTest {
+        val preparationScheduler = TestCoroutineScheduler()
+        viewModel = HomeViewModel(StandardTestDispatcher(preparationScheduler))
+        seedNavigation(history = listOf(
+            StoredChatMessage(1L, ChatMessage.ROLE_USER, "prompt"),
+            StoredChatMessage(2L, ChatMessage.ROLE_ASSISTANT, "thinking",
+                kind = ChatMessage.KIND_REASONING, turnId = "turn",
+                reasoningText = "private reasoning", includeInPrompt = false, searchable = false),
+            StoredChatMessage(3L, ChatMessage.ROLE_ASSISTANT, "answer", turnId = "turn")
+        ))
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.runCurrent()
+        assertEquals(true, viewModel.isConversationLoading.value)
+        assertEquals(null, viewModel.activeConversationId.value)
+        assertTrue(viewModel.messages.value.orEmpty().isEmpty())
+        assertBlockedInput()
+        var mainActionRan = false
+        launch(testDispatcher) { mainActionRan = true }
+        testScheduler.runCurrent()
+        assertTrue(mainActionRan)
+        assertEquals(true, viewModel.isConversationLoading.value)
+
+        preparationScheduler.advanceUntilIdle()
+        testScheduler.advanceUntilIdle()
+        assertEquals("old", viewModel.activeConversationId.value)
+        assertEquals(listOf("prompt", "answer"), viewModel.messages.value.orEmpty().map { it.content })
+        assertEquals("private reasoning", viewModel.messages.value.orEmpty().last().traceItems.single().content)
+        assertFalse(viewModel.isConversationLoading.value == true)
+        viewModel.sendMessage("ready")
+        testScheduler.advanceUntilIdle()
+        verify { repository.streamMessage("ready", match {
+            it.map { message -> message.content } == listOf("prompt", "thinking", "answer") &&
+                it[1].reasoningText == "private reasoning" && !it[1].includeInPrompt
+        }, any(), null, "old") }
+    }
+
+    @Test
     fun `changing folders cancels old navigation and replaces history instead of reusing the old store`() = runTest {
         every { conversationStore.storageIdentity } returns "first-root"
-        seedNavigation()
+        seedRemoteNavigation()
         testScheduler.advanceUntilIdle()
         val release = CompletableDeferred<Unit>()
         coEvery { conversationStore.switchActiveConversation("slow") } returns ConversationSummary("slow", "Old", 2L)
@@ -192,6 +276,438 @@ class HomeViewModelTest {
         assertEquals("new-chat", viewModel.activeConversationId.value)
         assertEquals("New folder", viewModel.messages.value!!.single().content)
         assertEquals(false, viewModel.isConversationLoading.value)
+    }
+
+    private fun seedNavigation(
+        store: ConversationStore = conversationStore,
+        id: String = "old",
+        workspaceId: String = "ws",
+        history: List<StoredChatMessage> = listOf(StoredChatMessage(1L, ChatMessage.ROLE_USER, "history"))
+    ) {
+        every { store.storageIdentity } returns null
+        val workspace = WorkspaceSummary(workspaceId, "Personal")
+        val conversation = ConversationSummary(id, id, 1L)
+        every { apiKeyStore.hasApiKey() } returns true
+        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flowOf()
+        coEvery { store.getOrCreateActiveWorkspace() } returns workspace
+        coEvery { store.listWorkspaces() } returns listOf(workspace)
+        coEvery { store.getOrCreateActiveConversation() } returns conversation
+        coEvery { store.listConversations() } returns listOf(conversation)
+        coEvery { store.loadMessages(id) } returns history
+        coEvery { store.observeConversations(workspaceId) } returns flowOf(listOf(conversation))
+        coEvery { store.switchActiveWorkspace(workspaceId) } returns workspace
+        coEvery { store.switchActiveConversation(id) } returns conversation
+    }
+
+    private fun assertBlockedInput() {
+        val before = viewModel.messages.value
+        viewModel.sendMessage("blocked")
+        viewModel.retryMessage(before.orEmpty().lastOrNull { it.isError }?.id ?: 99L)
+        viewModel.allowMoreLoops(7)
+        assertEquals(before, viewModel.messages.value)
+        assertFalse(viewModel.isLoading.value == true)
+        verify(exactly = 0) { repository.streamMessage(any(), any(), any(), any(), any()) }
+    }
+
+    private fun seedFailedRun() {
+        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns kotlinx.coroutines.flow.flow {
+            throw IllegalStateException("failed response")
+        }
+        viewModel.sendMessage("failed prompt")
+        testDispatcher.scheduler.runCurrent()
+        assertTrue(viewModel.messages.value.orEmpty().last().isError)
+        clearMocks(repository, answers = false)
+        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flowOf()
+    }
+
+    private class RecordingPowerKeeper : ChatRunPowerKeeper {
+        var acquireCalls = 0
+        var releaseCalls = 0
+        override fun acquire() { acquireCalls++ }
+        override fun release() { releaseCalls++ }
+    }
+
+    @Test
+    fun `pending selection blocks retry without removing failed messages or arming continuation`() = runTest {
+        seedNavigation(history = listOf(
+            StoredChatMessage(1L, ChatMessage.ROLE_USER, "failed prompt"),
+            StoredChatMessage(2L, ChatMessage.ROLE_ASSISTANT, "failed response", isError = true)
+        ))
+        val loading = CompletableDeferred<List<StoredChatMessage>>()
+        coEvery { conversationStore.switchActiveConversation("selected") } returns ConversationSummary("selected", "Selected", 2L)
+        coEvery { conversationStore.loadMessages("selected") } coAnswers { loading.await() }
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.runCurrent()
+        seedFailedRun()
+        viewModel.selectConversation("selected")
+        assertEquals(true, viewModel.isConversationLoading.value)
+        assertBlockedInput()
+        testScheduler.runCurrent()
+        assertBlockedInput()
+        loading.complete(emptyList())
+        testScheduler.advanceUntilIdle()
+        viewModel.sendMessage("after selection")
+        testScheduler.advanceUntilIdle()
+        verify { repository.streamMessage("after selection", emptyList(), any(), null, "selected") }
+    }
+
+    @Test
+    fun `new chat creation failure restores history and real persistent selection`() = runTest {
+        seedNavigation()
+        val creation = CompletableDeferred<ConversationSummary>()
+        coEvery { conversationStore.createConversation() } coAnswers { creation.await() }
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.runCurrent()
+        val before = viewModel.messages.value
+        viewModel.requestNewChat()
+        assertTrue(viewModel.messages.value.orEmpty().isEmpty())
+        testScheduler.runCurrent()
+        creation.completeExceptionally(IllegalStateException("creation failed"))
+        testScheduler.advanceUntilIdle()
+        assertEquals(before, viewModel.messages.value)
+        assertEquals("old", viewModel.activeConversationId.value)
+        assertFalse(viewModel.isConversationLoading.value == true)
+        assertTrue(viewModel.storageError.value.orEmpty().contains("creation failed"))
+        coVerify { conversationStore.switchActiveWorkspace("ws") }
+        coVerify { conversationStore.switchActiveConversation("old") }
+    }
+
+    @Test
+    fun `selections serialize message reads and commit matching prompt history`() = runTest {
+        seedNavigation()
+        val second = CompletableDeferred<List<StoredChatMessage>>()
+        val third = CompletableDeferred<List<StoredChatMessage>>()
+        coEvery { conversationStore.switchActiveConversation("second") } returns ConversationSummary("second", "Second", 2L)
+        coEvery { conversationStore.switchActiveConversation("third") } returns ConversationSummary("third", "Third", 3L)
+        coEvery { conversationStore.loadMessages("second") } coAnswers { second.await() }
+        coEvery { conversationStore.loadMessages("third") } coAnswers { third.await() }
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.runCurrent()
+        viewModel.selectConversation("second")
+        testScheduler.runCurrent()
+        assertEquals("old", viewModel.activeConversationId.value)
+        assertEquals("history", viewModel.messages.value.orEmpty().single().content)
+        viewModel.selectConversation("third")
+        testScheduler.runCurrent()
+        coVerify(exactly = 0) { conversationStore.switchActiveConversation("third") }
+        coVerify(exactly = 0) { conversationStore.loadMessages("third") }
+        second.complete(listOf(StoredChatMessage(2L, ChatMessage.ROLE_USER, "second history")))
+        testScheduler.runCurrent()
+        assertEquals(true, viewModel.isConversationLoading.value)
+        third.complete(listOf(StoredChatMessage(3L, ChatMessage.ROLE_USER, "third history")))
+        testScheduler.advanceUntilIdle()
+        assertEquals("third", viewModel.activeConversationId.value)
+        assertEquals("third history", viewModel.messages.value.orEmpty().single().content)
+        viewModel.sendMessage("next")
+        testScheduler.advanceUntilIdle()
+        verify { repository.streamMessage("next", match { it.single().content == "third history" }, any(), null, "third") }
+    }
+
+    @Test
+    fun `failed workspace load rolls persistent selections back without rereading old history`() = runTest {
+        seedNavigation()
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.runCurrent()
+        val before = viewModel.messages.value
+        val work = WorkspaceSummary("work", "Work")
+        coEvery { conversationStore.switchActiveWorkspace("work") } returns work
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns ConversationSummary("work-chat", "Work chat", 2L)
+        coEvery { conversationStore.listWorkspaces() } returns listOf(WorkspaceSummary("ws", "Personal"), work)
+        coEvery { conversationStore.loadMessages("work-chat") } throws IllegalStateException("work history unavailable")
+        coEvery { conversationStore.loadMessages("old") } throws IllegalStateException("old provider also unavailable")
+        viewModel.switchWorkspace("work")
+        testScheduler.advanceUntilIdle()
+        assertEquals("ws", viewModel.activeWorkspaceId.value)
+        assertEquals("old", viewModel.activeConversationId.value)
+        assertEquals(before, viewModel.messages.value)
+        assertEquals(listOf(UiWorkspace("ws", "Personal")), viewModel.workspaces.value)
+        assertFalse(viewModel.isConversationLoading.value == true)
+        assertTrue(viewModel.storageError.value.orEmpty().contains("work history unavailable"))
+        coVerifyOrder {
+            conversationStore.switchActiveWorkspace("work")
+            conversationStore.loadMessages("work-chat")
+            conversationStore.switchActiveWorkspace("ws")
+            conversationStore.switchActiveConversation("old")
+        }
+        coVerify(exactly = 1) { conversationStore.loadMessages("old") }
+        viewModel.sendMessage("still personal")
+        testScheduler.advanceUntilIdle()
+        verify { repository.streamMessage("still personal", match { it.single().content == "history" }, any(), null, "old") }
+    }
+
+    @Test
+    fun `failed selection restores exact visible traces and persisted prompt context`() = runTest {
+        seedNavigation(history = listOf(
+            StoredChatMessage(1L, ChatMessage.ROLE_USER, "history"),
+            StoredChatMessage(2L, ChatMessage.ROLE_ASSISTANT, "thinking", kind = ChatMessage.KIND_REASONING,
+                turnId = "turn", reasoningText = "private reasoning", includeInPrompt = false, searchable = false),
+            StoredChatMessage(3L, ChatMessage.ROLE_ASSISTANT, "answer", turnId = "turn")
+        ))
+        coEvery { conversationStore.switchActiveConversation("broken") } returns ConversationSummary("broken", "Broken", 2L)
+        coEvery { conversationStore.loadMessages("broken") } throws IllegalStateException("message read failed")
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.runCurrent()
+        val before = viewModel.messages.value
+        assertTrue(before.orEmpty().last().traceItems.isNotEmpty())
+        viewModel.selectConversation("broken")
+        testScheduler.advanceUntilIdle()
+        assertEquals("old", viewModel.activeConversationId.value)
+        assertEquals("ws", viewModel.activeWorkspaceId.value)
+        assertEquals(before, viewModel.messages.value)
+        assertFalse(viewModel.isConversationLoading.value == true)
+        assertTrue(viewModel.storageError.value.orEmpty().contains("message read failed"))
+        coVerifyOrder {
+            conversationStore.switchActiveConversation("broken")
+            conversationStore.loadMessages("broken")
+            conversationStore.switchActiveWorkspace("ws")
+            conversationStore.switchActiveConversation("old")
+        }
+        viewModel.sendMessage("next")
+        testScheduler.advanceUntilIdle()
+        verify { repository.streamMessage("next", match {
+            it.map { message -> message.content } == listOf("history", "thinking", "answer") &&
+                it[1].reasoningText == "private reasoning" && !it[1].includeInPrompt
+        }, any(), null, "old") }
+    }
+
+    @Test
+    fun `new chat load failure restores immediately cleared history and previous selection`() = runTest {
+        seedNavigation()
+        val failure = CompletableDeferred<List<StoredChatMessage>>()
+        coEvery { conversationStore.createConversation() } returns ConversationSummary("new", null, 2L)
+        coEvery { conversationStore.loadMessages("new") } coAnswers { failure.await() }
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.runCurrent()
+        val before = viewModel.messages.value
+        viewModel.requestNewChat()
+        assertTrue(viewModel.messages.value.orEmpty().isEmpty())
+        testScheduler.runCurrent()
+        failure.completeExceptionally(IllegalStateException("new chat unavailable"))
+        testScheduler.advanceUntilIdle()
+        assertEquals(before, viewModel.messages.value)
+        assertEquals("old", viewModel.activeConversationId.value)
+        coVerify { conversationStore.switchActiveWorkspace("ws") }
+        coVerify { conversationStore.switchActiveConversation("old") }
+        assertFalse(viewModel.isConversationLoading.value == true)
+        assertTrue(viewModel.storageError.value.orEmpty().contains("new chat unavailable"))
+        viewModel.sendMessage("recovered")
+        testScheduler.advanceUntilIdle()
+        verify { repository.streamMessage("recovered", match { it.single().content == "history" }, any(), null, "old") }
+    }
+
+    @Test
+    fun `rollback failure blocks send retry and continuation until successful reload`() = runTest {
+        seedNavigation(history = listOf(
+            StoredChatMessage(1L, ChatMessage.ROLE_USER, "history"),
+            StoredChatMessage(2L, ChatMessage.ROLE_ASSISTANT, "failed", isError = true)
+        ))
+        coEvery { conversationStore.switchActiveConversation("broken") } returns ConversationSummary("broken", "Broken", 2L)
+        coEvery { conversationStore.loadMessages("broken") } throws IllegalStateException("read failed")
+        coEvery { conversationStore.switchActiveConversation("old") } throws IllegalStateException("rollback failed")
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.runCurrent()
+        seedFailedRun()
+        viewModel.selectConversation("broken")
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.storageError.value.orEmpty().contains("read failed"))
+        assertTrue(viewModel.storageError.value.orEmpty().contains("rollback failed"))
+        assertBlockedInput()
+        testScheduler.runCurrent()
+        assertBlockedInput()
+        viewModel.retryChatHistoryLoad()
+        testScheduler.advanceUntilIdle()
+        assertEquals(null, viewModel.storageError.value)
+        viewModel.sendMessage("recovered")
+        testScheduler.advanceUntilIdle()
+        verify { repository.streamMessage("recovered", any(), any(), null, "old") }
+    }
+
+    @Test
+    fun `replacement root cancels old reads and old completion cannot clear new barrier`() = runTest {
+        seedNavigation()
+        every { conversationStore.storageIdentity } returns "/old/root"
+        val oldMessages = CompletableDeferred<List<StoredChatMessage>>()
+        coEvery { conversationStore.switchActiveConversation("slow") } returns ConversationSummary("slow", "Slow", 2L)
+        coEvery { conversationStore.loadMessages("slow") } coAnswers { oldMessages.await() }
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.runCurrent()
+        viewModel.selectConversation("slow")
+        testScheduler.runCurrent()
+
+        val replacement: ConversationStore = mockk(relaxed = true)
+        val replacementRepository: ChatRepository = mockk(relaxed = true)
+        val newMessages = CompletableDeferred<List<StoredChatMessage>>()
+        val newFlow = MutableSharedFlow<List<ConversationSummary>>()
+        seedNavigation(replacement, "replacement", "replacement-ws")
+        every { replacement.storageIdentity } returns "/replacement/root"
+        coEvery { replacement.loadMessages("replacement") } coAnswers { newMessages.await() }
+        coEvery { replacement.observeConversations("replacement-ws") } returns newFlow
+        every { replacementRepository.streamMessage(any(), any(), any(), any(), any()) } returns flowOf()
+        viewModel.initialize(apiKeyStore, replacementRepository, replacement)
+        assertEquals(true, viewModel.isConversationLoading.value)
+        viewModel.selectConversation("must-not-overtake")
+        viewModel.retryChatHistoryLoad()
+        testScheduler.runCurrent()
+        oldMessages.complete(listOf(StoredChatMessage(2L, ChatMessage.ROLE_USER, "stale")))
+        testScheduler.runCurrent()
+        assertEquals(true, viewModel.isConversationLoading.value)
+        assertFalse(viewModel.messages.value.orEmpty().any { it.content == "stale" })
+        coVerify(exactly = 0) { replacement.switchActiveConversation("must-not-overtake") }
+        coVerify(exactly = 1) { replacement.loadMessages("replacement") }
+        newMessages.complete(listOf(StoredChatMessage(3L, ChatMessage.ROLE_USER, "new root history")))
+        testScheduler.runCurrent()
+        newFlow.emit(listOf(ConversationSummary("replacement", "New root", 3L)))
+        testScheduler.runCurrent()
+        assertEquals("replacement", viewModel.activeConversationId.value)
+        assertEquals("replacement-ws", viewModel.activeWorkspaceId.value)
+        assertEquals("replacement", viewModel.conversations.value.orEmpty().single().id)
+        assertEquals(null, viewModel.storageError.value)
+        assertFalse(viewModel.isConversationLoading.value == true)
+        viewModel.sendMessage("new root send")
+        testScheduler.advanceUntilIdle()
+        verify { replacementRepository.streamMessage("new root send", match { it.single().content == "new root history" }, any(), null, "replacement") }
+        verify(exactly = 0) { repository.streamMessage(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `same store reinitialization preserves chat without a fresh creation`() = runTest {
+        seedNavigation()
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.runCurrent()
+        val before = viewModel.messages.value
+        viewModel.initialize(apiKeyStore, repository, conversationStore, startWithNewConversation = true)
+        testScheduler.advanceUntilIdle()
+        assertEquals("old", viewModel.activeConversationId.value)
+        assertEquals(before, viewModel.messages.value)
+        coVerify(exactly = 0) { conversationStore.createConversation() }
+        coVerify(exactly = 1) { conversationStore.getOrCreateActiveConversation() }
+    }
+
+    @Test
+    fun `equal resolved roots preserve committed chat across distinct store instances`() = runTest {
+        seedNavigation()
+        every { conversationStore.storageIdentity } returns "/resolved/root"
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.runCurrent()
+        val before = viewModel.messages.value
+        val sameRoot: ConversationStore = mockk(relaxed = true)
+        every { sameRoot.storageIdentity } returns "/resolved/root"
+        viewModel.initialize(apiKeyStore, repository, sameRoot, startWithNewConversation = true)
+        testScheduler.advanceUntilIdle()
+        assertEquals("old", viewModel.activeConversationId.value)
+        assertEquals(before, viewModel.messages.value)
+        coVerify(exactly = 0) { sameRoot.createConversation() }
+        coVerify(exactly = 0) { sameRoot.getOrCreateActiveConversation() }
+        viewModel.sendMessage("still committed")
+        testScheduler.advanceUntilIdle()
+        verify { repository.streamMessage("still committed", match { it.single().content == "history" }, any(), null, "old") }
+    }
+
+    @Test
+    fun `failed replacement retries only new root without allocating another chat`() = runTest {
+        seedNavigation()
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.runCurrent()
+        val replacement: ConversationStore = mockk(relaxed = true)
+        seedNavigation(replacement, "replacement", "replacement-ws")
+        coEvery { replacement.createConversation() } returns ConversationSummary("replacement", null, 2L)
+        coEvery { replacement.loadMessages("replacement") } throws IllegalStateException("replacement unavailable")
+        viewModel.initialize(apiKeyStore, repository, replacement, startWithNewConversation = true)
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.storageError.value.orEmpty().contains("replacement unavailable"))
+        assertBlockedInput()
+        coEvery { replacement.loadMessages("replacement") } returns listOf(StoredChatMessage(3L, ChatMessage.ROLE_USER, "recovered root"))
+        viewModel.retryChatHistoryLoad()
+        testScheduler.advanceUntilIdle()
+        assertEquals("replacement", viewModel.activeConversationId.value)
+        assertEquals("recovered root", viewModel.messages.value.orEmpty().single().content)
+        assertEquals(null, viewModel.storageError.value)
+        coVerify(exactly = 1) { replacement.createConversation() }
+        coVerify(exactly = 1) { conversationStore.loadMessages("old") }
+    }
+
+    @Test
+    fun `replacement releases the acquired old power keeper before becoming ready`() = runTest {
+        seedNavigation()
+        val oldKeeper = RecordingPowerKeeper()
+        val newKeeper = RecordingPowerKeeper()
+        val streamStarted = CompletableDeferred<Unit>()
+        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns kotlinx.coroutines.flow.flow {
+            streamStarted.complete(Unit)
+            kotlinx.coroutines.awaitCancellation()
+        }
+        viewModel.initialize(apiKeyStore, repository, conversationStore, chatRunPowerKeeper = oldKeeper)
+        testScheduler.runCurrent()
+        viewModel.sendMessage("running")
+        testScheduler.runCurrent()
+        assertTrue(streamStarted.isCompleted)
+        assertEquals(1, oldKeeper.acquireCalls)
+        val replacement: ConversationStore = mockk(relaxed = true)
+        seedNavigation(replacement, "replacement", "replacement-ws")
+        viewModel.initialize(apiKeyStore, repository, replacement, chatRunPowerKeeper = newKeeper)
+        testScheduler.advanceUntilIdle()
+        assertEquals(1, oldKeeper.releaseCalls)
+        assertEquals(0, newKeeper.releaseCalls)
+        assertEquals("replacement", viewModel.activeConversationId.value)
+        assertFalse(viewModel.isConversationLoading.value == true)
+        viewModel.sendMessage("after replacement")
+        testScheduler.advanceUntilIdle()
+        assertEquals(1, newKeeper.acquireCalls)
+        assertEquals(1, newKeeper.releaseCalls)
+        assertEquals(1, oldKeeper.releaseCalls)
+    }
+
+    @Test
+    fun `active deletion survivor failure never makes deleted chat sendable`() = runTest {
+        seedNavigation()
+        val survivor = ConversationSummary("survivor", "Survivor", 2L)
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.runCurrent()
+        coEvery { conversationStore.listConversations() } returns listOf(survivor)
+        coEvery { conversationStore.getOrCreateActiveConversation() } returns survivor
+        coEvery { conversationStore.switchActiveConversation("survivor") } returns survivor
+        coEvery { conversationStore.loadMessages("survivor") } throws IllegalStateException("survivor unavailable")
+        viewModel.deleteConversation("old")
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.deletingConversationIds.value.orEmpty().isEmpty())
+        assertTrue(viewModel.storageError.value.orEmpty().contains("survivor unavailable"))
+        coVerify(exactly = 0) { conversationStore.switchActiveConversation("old") }
+        assertBlockedInput()
+        coEvery { conversationStore.loadMessages("survivor") } returns listOf(StoredChatMessage(3L, ChatMessage.ROLE_USER, "survivor history"))
+        viewModel.retryChatHistoryLoad()
+        testScheduler.advanceUntilIdle()
+        assertEquals("survivor", viewModel.activeConversationId.value)
+        assertEquals(null, viewModel.storageError.value)
+        viewModel.sendMessage("safe")
+        testScheduler.advanceUntilIdle()
+        verify { repository.streamMessage("safe", match { it.single().content == "survivor history" }, any(), null, "survivor") }
+    }
+
+    @Test
+    fun `root replacement cancels deletion progress without reporting cancellation as storage error`() = runTest {
+        seedNavigation()
+        val deleteStarted = CompletableDeferred<Unit>()
+        val deletion = CompletableDeferred<Unit>()
+        coEvery { conversationStore.deleteConversation("old") } coAnswers {
+            deleteStarted.complete(Unit)
+            deletion.await()
+        }
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.runCurrent()
+        viewModel.deleteConversation("old")
+        testScheduler.runCurrent()
+        assertTrue(deleteStarted.isCompleted)
+        assertTrue("old" in viewModel.deletingConversationIds.value.orEmpty())
+        val replacement: ConversationStore = mockk(relaxed = true)
+        seedNavigation(replacement, "replacement", "replacement-ws")
+        viewModel.initialize(apiKeyStore, repository, replacement)
+        testScheduler.advanceUntilIdle()
+        deletion.complete(Unit)
+        testScheduler.advanceUntilIdle()
+        assertTrue(viewModel.deletingConversationIds.value.orEmpty().isEmpty())
+        assertEquals(null, viewModel.storageError.value)
+        assertEquals("replacement", viewModel.activeConversationId.value)
+        assertFalse(viewModel.isConversationLoading.value == true)
     }
 
     @Test
@@ -223,6 +739,71 @@ class HomeViewModelTest {
         assert(viewModel.messages.value.orEmpty().single().content == "Still here")
     }
 
+
+    @Test
+    fun `new chat clears synchronously and blocks input through creation and message loading`() = runTest {
+        seedNavigation()
+        val creation = CompletableDeferred<ConversationSummary>()
+        val loading = CompletableDeferred<List<StoredChatMessage>>()
+        coEvery { conversationStore.createConversation() } coAnswers { creation.await() }
+        coEvery { conversationStore.loadMessages("new") } coAnswers { loading.await() }
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.runCurrent()
+
+        viewModel.requestNewChat()
+        assertEquals(emptyList<UiChatMessage>(), viewModel.messages.value)
+        assertEquals(true, viewModel.isConversationLoading.value)
+        assertBlockedInput()
+        viewModel.requestNewChat()
+        testScheduler.runCurrent()
+        assertBlockedInput()
+        creation.complete(ConversationSummary("new", null, 2L))
+        testScheduler.runCurrent()
+        assertEquals(true, viewModel.isConversationLoading.value)
+        assertBlockedInput()
+        loading.complete(emptyList())
+        testScheduler.advanceUntilIdle()
+
+        coVerify(exactly = 1) { conversationStore.createConversation() }
+        assertEquals("new", viewModel.activeConversationId.value)
+        assertFalse(viewModel.isConversationLoading.value == true)
+        viewModel.sendMessage("ready")
+        testScheduler.advanceUntilIdle()
+        verify { repository.streamMessage("ready", emptyList(), any(), null, "new") }
+    }
+
+    @Test
+    fun `new chat and subsequent selection are FIFO with one continuous loading barrier`() = runTest {
+        seedNavigation()
+        val creation = CompletableDeferred<ConversationSummary>()
+        val selectedMessages = CompletableDeferred<List<StoredChatMessage>>()
+        coEvery { conversationStore.createConversation() } coAnswers { creation.await() }
+        coEvery { conversationStore.loadMessages("new") } returns emptyList()
+        coEvery { conversationStore.switchActiveConversation("selected") } returns ConversationSummary("selected", "Selected", 3L)
+        coEvery { conversationStore.loadMessages("selected") } coAnswers { selectedMessages.await() }
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.runCurrent()
+
+        viewModel.requestNewChat()
+        testScheduler.runCurrent()
+        viewModel.selectConversation("selected")
+        testScheduler.runCurrent()
+        coVerify(exactly = 0) { conversationStore.switchActiveConversation("selected") }
+        creation.complete(ConversationSummary("new", null, 2L))
+        testScheduler.runCurrent()
+        assertEquals(true, viewModel.isConversationLoading.value)
+        coVerifyOrder {
+            conversationStore.createConversation()
+            conversationStore.loadMessages("new")
+            conversationStore.switchActiveConversation("selected")
+            conversationStore.loadMessages("selected")
+        }
+        selectedMessages.complete(listOf(StoredChatMessage(3L, ChatMessage.ROLE_USER, "selected history")))
+        testScheduler.advanceUntilIdle()
+        assertEquals("selected", viewModel.activeConversationId.value)
+        assertEquals("selected history", viewModel.messages.value.orEmpty().single().content)
+        assertFalse(viewModel.isConversationLoading.value == true)
+    }
     @Test
     fun `conversation list loading remains true until the active workspace emits`() = runTest {
         val workspace = WorkspaceSummary("1", "Personal")
@@ -644,13 +1225,14 @@ class HomeViewModelTest {
         val workspace2 = WorkspaceSummary("2", "Work")
         val conversationInW2 = ConversationSummary("3", "Work Chat", System.currentTimeMillis())
 
-        coEvery { conversationStore.getOrCreateActiveWorkspace() } returnsMany listOf(workspace1, workspace2, workspace2)
-        coEvery { conversationStore.listWorkspaces() } returnsMany listOf(
-            listOf(workspace1, workspace2), // 1. initialize
-            listOf(workspace1, workspace2), // 2. background reconciliation refresh
-            listOf(workspace1, workspace2), // 3. pre-delete check
-            listOf(workspace2)              // 4. post-delete refresh
-        )
+        var deleted = false
+        coEvery { conversationStore.getOrCreateActiveWorkspace() } coAnswers {
+            if (deleted) workspace2 else workspace1
+        }
+        coEvery { conversationStore.listWorkspaces() } coAnswers {
+            if (deleted) listOf(workspace2) else listOf(workspace1, workspace2)
+        }
+        coEvery { conversationStore.deleteWorkspace("1") } coAnswers { deleted = true }
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversationInW2
         coEvery { conversationStore.loadMessages("3") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversationInW2)

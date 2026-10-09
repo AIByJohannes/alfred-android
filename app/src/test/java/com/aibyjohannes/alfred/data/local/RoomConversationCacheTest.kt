@@ -108,6 +108,76 @@ class RoomConversationCacheTest {
         } finally { database.close() }
     }
 
+    @Test
+    fun `creation selection failure keeps Room dirty until durable chat recovery`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val database = Room.inMemoryDatabaseBuilder(context, ConversationIndexDatabase::class.java).build()
+        try {
+            val roomIndex = RoomConversationIndex(database)
+            var failSelection = false
+            val index = object : ConversationIndex by roomIndex {
+                override suspend fun setActiveConversationId(workspaceId: String, id: String?) {
+                    if (failSelection) {
+                        failSelection = false
+                        error("Injected selection failure")
+                    }
+                    roomIndex.setActiveConversationId(workspaceId, id)
+                }
+            }
+            val storage = FileChatHistoryStorage(temporaryFolder.newFolder())
+            val store = FileConversationStore(storage, ObjectMapper(), index)
+            val first = store.createConversation()
+            val workspace = store.getOrCreateActiveWorkspace()
+            failSelection = true
+            assertTrue(runCatching { store.createConversation() }.isFailure)
+            assertTrue(roomIndex.cacheState()!!.endsWith("\ndirty"))
+            assertEquals(first.id, roomIndex.activeConversationId(workspace.id))
+
+            val recovered = store.listConversations()
+            assertEquals(2, recovered.size)
+            assertEquals(recovered.map { it.id }.toSet(),
+                roomIndex.observeConversations(workspace.id).first().map { it.id }.toSet())
+            assertFalse(roomIndex.cacheState()!!.endsWith("\ndirty"))
+            assertEquals(recovered.map { it.id }.toSet(),
+                FileConversationStore(storage, ObjectMapper(), RoomConversationIndex(database))
+                    .listConversations().map { it.id }.toSet())
+        } finally { database.close() }
+    }
+
+    @Test
+    fun `replacement root rebuild failure retains dirty marker and clears old workspace flow on recovery`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val database = Room.inMemoryDatabaseBuilder(context, ConversationIndexDatabase::class.java).build()
+        try {
+            val roomIndex = RoomConversationIndex(database)
+            val original = FileConversationStore(
+                FileChatHistoryStorage(temporaryFolder.newFolder()), ObjectMapper(), roomIndex
+            )
+            val oldChat = original.createConversation()
+            val oldWorkspace = original.getOrCreateActiveWorkspace()
+            val oldFlow = roomIndex.observeConversations(oldWorkspace.id)
+            assertEquals(listOf(oldChat.id), oldFlow.first().map { it.id })
+            val replacementStorage = FileChatHistoryStorage(temporaryFolder.newFolder())
+            val newChat = FileConversationStore(replacementStorage).createConversation()
+            var failReplacement = true
+            val failingIndex = object : ConversationIndex by roomIndex {
+                override suspend fun replaceFrom(snapshot: ConversationIndexSnapshot) {
+                    if (failReplacement) {
+                        failReplacement = false
+                        error("Injected replacement failure")
+                    }
+                    roomIndex.replaceFrom(snapshot)
+                }
+            }
+            val replacement = FileConversationStore(replacementStorage, ObjectMapper(), failingIndex)
+            assertTrue(runCatching { replacement.listConversations() }.isFailure)
+            assertEquals("v2\n${replacementStorage.identity}\ndirty", roomIndex.cacheState())
+            assertEquals(listOf(newChat.id), replacement.listConversations().map { it.id })
+            assertTrue(oldFlow.first().isEmpty())
+            assertFalse(roomIndex.cacheState()!!.endsWith("\ndirty"))
+        } finally { database.close() }
+    }
+
     private class ReadCountingStorage(private val delegate: ChatHistoryStorage) : ChatHistoryStorage by delegate {
         val reads = mutableListOf<List<String>>()
         override fun readText(path: List<String>): StorageReadResult { reads += path; return delegate.readText(path) }

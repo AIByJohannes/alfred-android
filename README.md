@@ -21,10 +21,15 @@ On first launch, Alfred asks the user to choose a parent folder for chat history
 
 The storage layout is:
 
-- `Alfred/metadata.json` stores workspaces, conversation summaries, active workspace, active conversation per workspace, and ID counters.
-- `Alfred/workspace-<id>-<initial-slug>/conversation-<id>.jsonl` stores one chat per JSONL file.
+- `Alfred/workspaces/<uuid>-<initial-slug>/workspace.jsonl` stores workspace creation, renaming and deletion events.
+- `Alfred/workspaces/<uuid>-<initial-slug>/conversation-<uuid>.jsonl` stores each chat's creation, messages, title and delete/restore events.
+- A local Room database is a disposable read-model cache; JSONL files remain authoritative. Root-bound summaries survive reopen, while individual chat messages load on demand. Legacy metadata and workspace folders migrate when opened.
 
-Workspace folder names are stable after creation. Renaming a workspace updates `metadata.json` only and does not rename the folder.
+Workspace folder names are stable after creation. Renaming appends an event without renaming the folder. Turn saves fold and index only the affected conversation, including tool and reasoning metadata. Dirty-cache markers force authoritative recovery after interrupted writes; clean state is published only after indexing and required selections succeed. Writes through another store in the same process invalidate warm snapshots for the same resolved root. Background reconciliation refreshes externally edited history after initialization without holding the foreground writer lock during conversation reads; an explicit index rebuild also remains available.
+
+New Chat immediately clears visible history and blocks input until the real conversation is persisted and loaded. It preserves previous chat files and reuses an already empty committed chat. Navigation is serialized so selected IDs, visible messages and prompt history commit together; failed reversible navigation restores the previous context.
+
+Selecting a replacement history root cancels old work before adopting its storage and repository. Re-selecting the same resolved root preserves the active chat. Provider setup runs off the UI thread; unavailable folders use the existing folder-selection recovery dialog.
 
 ## Agent Skills
 

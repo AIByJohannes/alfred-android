@@ -13,6 +13,9 @@ import com.aibyjohannes.alfred.data.local.ConversationMessageDraft
 import com.aibyjohannes.alfred.data.local.ConversationStore
 import com.aibyjohannes.alfred.data.local.ConversationSummary
 import com.aibyjohannes.alfred.data.local.LocalGemmaModelStore
+import com.aibyjohannes.alfred.data.local.WorkspaceSummary
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -88,7 +91,6 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
     private var workspaceDeletionHandler: suspend (String) -> Unit = {}
     private var chatRunPowerKeeper: ChatRunPowerKeeper = NoOpChatRunPowerKeeper
     private var nextTurnMaxPasses: Int? = null
-    private val newChatMutex = Mutex()
     private val navigationMutex = Mutex()
     private val navigationJobs = mutableSetOf<Job>()
     private var reconciliationJob: Job? = null
@@ -148,6 +150,26 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
     private var conversationListLoadGeneration = 0L
     private var chatJob: Job? = null
     private var pendingConversationOperations = 0
+    private var conversationReady = false
+    private var historyGeneration = 0L
+    private var replacingHistory = false
+
+    private data class NavigationState(
+        val conversationId: String?,
+        val workspaceId: String?,
+        val messages: List<UiChatMessage>,
+        val history: List<ChatMessage>,
+        val nextMessageId: Long,
+        val workspaces: List<UiWorkspace>,
+        val ready: Boolean
+    )
+
+    private data class LoadedConversation(
+        val id: String,
+        val messages: List<UiChatMessage>,
+        val history: List<ChatMessage>,
+        val nextMessageId: Long
+    )
 
     fun initialize(
         apiKeyStore: ApiKeyStore,
@@ -159,8 +181,14 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
         workspaceDeletionHandler: suspend (String) -> Unit = {},
         startWithNewConversation: Boolean = false
     ) {
-        if (this.apiKeyStore != null && this.repository != null && this.conversationStore != null &&
-            this.conversationStore?.storageIdentity == conversationStore.storageIdentity) {
+        val previousStore = this.conversationStore
+        val previousIdentity = previousStore?.storageIdentity
+        val nextIdentity = conversationStore.storageIdentity
+        val sameRoot = previousStore != null && (
+            (previousIdentity != null && nextIdentity != null && previousIdentity == nextIdentity) ||
+                (previousIdentity == null && nextIdentity == null && previousStore === conversationStore)
+            )
+        if (this.apiKeyStore != null && this.repository != null && sameRoot) {
             this.sysInfoProvider = sysInfoProvider
             this.onChatActivity = onChatActivity
             this.chatRunPowerKeeper = chatRunPowerKeeper
@@ -168,23 +196,31 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
             checkApiKey()
             return
         }
-        if (this.conversationStore != null) {
-            navigationJobs.toList().forEach { it.cancel() }
-            reconciliationJob?.cancel()
-            conversationsJob?.cancel()
-            chatJob?.cancel()
-            _isLoading.value = false
-            currentConversationId = null
-            conversationHistory.clear()
-            nextMessageId = 1L
-            _messages.value = emptyList()
-            _activeConversationId.value = null
-            _activeWorkspaceId.value = null
-            _workspaces.value = emptyList()
-            _conversations.value = emptyList()
-            _deletingConversationIds.value = emptySet()
-            _isConversationListLoading.value = true
-        }
+        val generation = ++historyGeneration
+        replacingHistory = true
+        conversationReady = false
+        val obsoleteJobs = navigationJobs.toList() +
+            listOfNotNull(reconciliationJob, conversationsJob, chatJob)
+        navigationJobs.clear()
+        obsoleteJobs.forEach { it.cancel() }
+        conversationsJob = null
+        chatJob = null
+        reconciliationJob = null
+        conversationListLoadGeneration++
+        pendingConversationOperations = 0
+        currentConversationId = null
+        conversationHistory.clear()
+        nextMessageId = 1L
+        nextTurnMaxPasses = null
+        _activeConversationId.value = null
+        _activeWorkspaceId.value = null
+        _messages.value = emptyList()
+        _conversations.value = emptyList()
+        _workspaces.value = emptyList()
+        _deletingConversationIds.value = emptySet()
+        _storageError.value = null
+        _isLoading.value = false
+        _isConversationListLoading.value = true
         this.apiKeyStore = apiKeyStore
         this.repository = repository
         this.conversationStore = conversationStore
@@ -193,7 +229,33 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
         this.chatRunPowerKeeper = chatRunPowerKeeper
         this.workspaceDeletionHandler = workspaceDeletionHandler
         checkApiKey()
-        loadWorkspacesAndActiveConversation(startWithNewConversation)
+        pendingConversationOperations++
+        _isConversationLoading.value = true
+        val adoption = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                obsoleteJobs.forEach { it.join() }
+                navigationMutex.withLock {
+                    currentCoroutineContext().ensureActive()
+                    if (generation != historyGeneration) return@withLock
+                    stageActiveContext(
+                        conversationStore,
+                        startWithNewConversation = startWithNewConversation
+                    )
+                    launchHistoryReconciliation(conversationStore, generation)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (generation == historyGeneration) {
+                    conversationReady = false
+                    reportNavigationError(null, error)
+                }
+            } finally {
+                if (generation == historyGeneration) replacingHistory = false
+            }
+        }
+        trackNavigationJob(adoption, generation)
+        adoption.start()
     }
 
     fun checkApiKey() {
@@ -242,6 +304,7 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
     }
 
     fun retryMessage(failedMessageId: Long) {
+        if (!canSendMessage()) return
         val currentList = _messages.value.orEmpty().toMutableList()
         val index = currentList.indexOfFirst { it.id == failedMessageId }
         if (index < 0) return
@@ -274,12 +337,15 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
 
     fun sendMessage(userInput: String, requestInput: String = userInput) {
         if (userInput.isBlank()) return
-        if (_isConversationLoading.value == true) return
-        if (_isLoading.value == true) return
+        if (!canSendMessage()) return
 
         val repo = repository ?: return
         val store = conversationStore ?: return
         val conversationId = currentConversationId ?: return
+        val generation = historyGeneration
+        val runPowerKeeper = chatRunPowerKeeper
+        val activityCallback = onChatActivity
+        val promptHistory = conversationHistory.toList()
 
         val maxPasses = nextTurnMaxPasses
         nextTurnMaxPasses = null
@@ -307,9 +373,10 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
         )
 
         _isLoading.value = true
-        chatRunPowerKeeper.acquire()
+        runPowerKeeper.acquire()
 
         val sysInfo = sysInfoProvider?.buildSysInfo()
+        var powerReleased = false
 
         chatJob = viewModelScope.launch {
             val userHistoryMessage = ChatMessage(role = ChatMessage.ROLE_USER, content = userInput)
@@ -319,13 +386,16 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
             var lastFlushAtMs = 0L
 
             try {
+                currentCoroutineContext().ensureActive()
                 repo.streamMessage(
                     requestInput,
-                    conversationHistory.toList(),
+                    promptHistory,
                     sysInfo,
                     maxPasses,
                     sessionId = conversationId
                 ).collect { event ->
+                    currentCoroutineContext().ensureActive()
+                    if (generation != historyGeneration) return@collect
                     when (event) {
                         is ChatStreamEvent.PassStarted -> {
                             passAssistantContent.clear()
@@ -517,7 +587,9 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
                                     )
                                 }
                             )
-                            onChatActivity?.invoke()
+                            currentCoroutineContext().ensureActive()
+                            if (generation != historyGeneration) return@collect
+                            activityCallback?.invoke()
 
                             updateUiMessage(
                                 messageId = assistantMessageId,
@@ -534,6 +606,8 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
+                currentCoroutineContext().ensureActive()
+                if (generation != historyGeneration) return@launch
                 val errorMessage = error.message ?: "An error occurred"
                 val replaced = updateUiMessage(
                     messageId = assistantMessageId,
@@ -558,9 +632,25 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
             }
 
             finally {
-                _isLoading.value = false
-                chatRunPowerKeeper.release()
-                chatJob = null
+                runPowerKeeper.release()
+                powerReleased = true
+                if (generation == historyGeneration) {
+                    _isLoading.value = false
+                    chatJob = null
+                }
+            }
+        }
+        // A reserved run can be canceled before its coroutine enters the try/finally.
+        chatJob?.invokeOnCompletion {
+            viewModelScope.launch(Dispatchers.Main.immediate) {
+                if (!powerReleased) {
+                    runPowerKeeper.release()
+                    powerReleased = true
+                }
+                if (generation == historyGeneration) {
+                    _isLoading.value = false
+                    chatJob = null
+                }
             }
         }
     }
@@ -596,13 +686,14 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
     }
 
     fun allowMoreLoops(count: Int) {
+        if (!canSendMessage()) return
         nextTurnMaxPasses = count
         sendMessage("continue")
     }
 
-    private fun observeConversationsForActiveWorkspace(workspaceId: String) {
+    private fun observeConversationsForActiveWorkspace(store: ConversationStore, workspaceId: String) {
         conversationsJob?.cancel()
-        val store = conversationStore ?: return
+        val history = historyGeneration
         val generation = ++conversationListLoadGeneration
         _isConversationListLoading.value = true
         _conversations.value = emptyList()
@@ -616,231 +707,318 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
                             updatedAtEpochMs = summary.updatedAtEpochMs
                         )
                     }
-                    if (generation == conversationListLoadGeneration) {
-                        _conversations.postValue(uiList)
-                        _isConversationListLoading.postValue(false)
+                    if (history == historyGeneration && generation == conversationListLoadGeneration) {
+                        _conversations.value = uiList
+                        _isConversationListLoading.value = false
                     }
                 }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                if (generation == conversationListLoadGeneration) {
-                    _isConversationListLoading.postValue(false)
-                    _storageError.postValue(
+                if (history == historyGeneration && generation == conversationListLoadGeneration) {
+                    _isConversationListLoading.value = false
+                    _storageError.value =
                         error.message ?: "Chat history is temporarily unavailable"
-                    )
                 }
             }
         }
     }
 
+    private fun canSendMessage(): Boolean =
+        conversationReady && !replacingHistory &&
+            _isConversationLoading.value != true && _isLoading.value != true
+
     fun deleteConversation(conversationId: String) {
-        val store = conversationStore ?: return
-        if (_isLoading.value == true || conversationId in _deletingConversationIds.value.orEmpty()) return
-        _deletingConversationIds.value = _deletingConversationIds.value.orEmpty() + conversationId
-        launchNavigation(errorPrefix = "Couldn't delete the conversation") {
-            try {
-                store.deleteConversation(conversationId)
-                if (currentConversationId == conversationId) {
+        if (conversationId in _deletingConversationIds.value.orEmpty()) return
+        val generation = historyGeneration
+        val job = launchNavigation(
+            errorPrefix = "Couldn't delete the conversation",
+            beforeStart = {
+                _deletingConversationIds.value = _deletingConversationIds.value.orEmpty() + conversationId
+            }
+        ) { store ->
+            val deletingActive = currentConversationId == conversationId
+            store.deleteConversation(conversationId)
+            currentCoroutineContext().ensureActive()
+            if (generation != historyGeneration) return@launchNavigation
+            if (deletingActive) {
+                // The old context is no longer sendable, even if loading its survivor fails.
+                conversationReady = false
+                try {
                     val remaining = store.listConversations()
-                    if (remaining.isNotEmpty()) {
-                        val nextConversation = remaining.maxByOrNull { it.updatedAtEpochMs }!!
-                        val switched = store.switchActiveConversation(nextConversation.id)
-                        loadConversation(switched)
-                    } else {
-                        loadConversation(store.createConversation())
+                    val survivor = remaining.maxByOrNull { it.updatedAtEpochMs }?.let {
+                        store.switchActiveConversation(it.id)
+                    } ?: store.createConversation()
+                    stageActiveContext(store, conversation = survivor)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    currentCoroutineContext().ensureActive()
+                    if (generation == historyGeneration) {
+                        reportNavigationError("Couldn't delete the conversation", error)
                     }
                 }
-            } finally {
-                _deletingConversationIds.value = _deletingConversationIds.value.orEmpty() - conversationId
+            }
+        } ?: return
+        job.invokeOnCompletion {
+            viewModelScope.launch(Dispatchers.Main.immediate) {
+                if (generation == historyGeneration) {
+                    _deletingConversationIds.value = _deletingConversationIds.value.orEmpty() - conversationId
+                }
             }
         }
     }
 
     fun requestNewChat() {
-        val store = conversationStore ?: return
-        if (_isLoading.value == true || _isConversationLoading.value == true) return
-        launchNavigation(errorPrefix = "Couldn't create a new chat") {
-            newChatMutex.withLock {
-                if (_isLoading.value == true) return@withLock
-                val currentId = currentConversationId
-                if (currentId != null && store.loadMessages(currentId).isEmpty()) {
-                    // Already in an empty persisted conversation, keep using it.
-                    return@withLock
-                }
-                loadConversation(store.createConversation())
-            }
+        if (!canSendMessage() || pendingConversationOperations > 0) return
+        if (currentConversationId == null) return
+        if (conversationHistory.isEmpty() && _messages.value.orEmpty().isEmpty()) return
+        val previous = captureNavigationState()
+        launchNavigation(
+            errorPrefix = "Couldn't create a new chat",
+            previousState = previous,
+            beforeStart = { _messages.value = emptyList() }
+        ) { store ->
+            stageActiveContext(store, conversation = store.createConversation())
         }
     }
 
     fun selectConversation(conversationId: String) {
-        val store = conversationStore ?: return
-        launchNavigation {
-            try {
-                val selectedConversation = store.switchActiveConversation(conversationId)
-                loadConversation(selectedConversation)
+        launchNavigation { store ->
+            val selected = try {
+                store.switchActiveConversation(conversationId)
             } catch (_: IllegalArgumentException) {
-                val activeConversation = store.getOrCreateActiveConversation()
-                loadConversation(activeConversation)
+                store.getOrCreateActiveConversation()
             }
+            stageActiveContext(store, conversation = selected)
         }
     }
 
     fun createWorkspace(name: String) {
-        val store = conversationStore ?: return
-        launchNavigation {
-            val newWs = store.createWorkspace(name)
-            val activeConversation = store.getOrCreateActiveConversation()
-            loadConversation(activeConversation)
-            _activeWorkspaceId.value = newWs.id
-            refreshWorkspacesList()
-            observeConversationsForActiveWorkspace(newWs.id)
+        launchNavigation { store ->
+            val workspace = store.createWorkspace(name)
+            stageActiveContext(store, workspace = workspace)
         }
     }
 
     fun switchWorkspace(workspaceId: String) {
-        val store = conversationStore ?: return
-        launchNavigation {
-            val switchedWs = store.switchActiveWorkspace(workspaceId)
-            val activeConversation = store.getOrCreateActiveConversation()
-            loadConversation(activeConversation)
-            _activeWorkspaceId.value = switchedWs.id
-            refreshWorkspacesList()
-            observeConversationsForActiveWorkspace(switchedWs.id)
+        launchNavigation { store ->
+            val workspace = store.switchActiveWorkspace(workspaceId)
+            stageActiveContext(store, workspace = workspace)
         }
     }
 
     fun renameWorkspace(workspaceId: String, newName: String) {
-        val store = conversationStore ?: return
-        launchNavigation {
+        val generation = historyGeneration
+        launchNavigation { store ->
             store.renameWorkspace(workspaceId, newName)
-            refreshWorkspacesList()
-            val activeWs = store.getOrCreateActiveWorkspace()
-            _activeWorkspaceId.value = activeWs.id
+            val workspace = store.getOrCreateActiveWorkspace()
+            val list = store.listWorkspaces().map { UiWorkspace(it.id, it.name) }
+            currentCoroutineContext().ensureActive()
+            if (generation == historyGeneration) {
+                _activeWorkspaceId.value = workspace.id
+                _workspaces.value = list
+            }
         }
     }
 
     fun deleteWorkspace(workspaceId: String) {
-        val store = conversationStore ?: return
-        launchNavigation {
-            val currentList = store.listWorkspaces()
-            if (currentList.size <= 1) return@launchNavigation
-            
+        val deletionHandler = workspaceDeletionHandler
+        val generation = historyGeneration
+        launchNavigation(errorPrefix = "Couldn't delete the workspace") { store ->
+            if (store.listWorkspaces().size <= 1) return@launchNavigation
+            val deletingActive = _activeWorkspaceId.value == workspaceId
             store.deleteWorkspace(workspaceId)
-            workspaceDeletionHandler(workspaceId)
-            
-            val activeWs = store.getOrCreateActiveWorkspace()
-            _activeWorkspaceId.value = activeWs.id
-            refreshWorkspacesList()
-
-            val activeConversation = store.getOrCreateActiveConversation()
-            loadConversation(activeConversation)
-            observeConversationsForActiveWorkspace(activeWs.id)
+            currentCoroutineContext().ensureActive()
+            if (generation != historyGeneration) return@launchNavigation
+            if (deletingActive) conversationReady = false
+            var cleanupError: Exception? = null
+            try {
+                deletionHandler(workspaceId)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                cleanupError = error
+            }
+            // Deletion has committed. Never roll selections back into deleted storage.
+            try {
+                if (deletingActive) {
+                    stageActiveContext(store)
+                } else {
+                    val list = store.listWorkspaces().map { UiWorkspace(it.id, it.name) }
+                    currentCoroutineContext().ensureActive()
+                    if (generation == historyGeneration) _workspaces.value = list
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (generation == historyGeneration) {
+                    reportNavigationError("Couldn't delete the workspace", error, cleanupError)
+                }
+                return@launchNavigation
+            }
+            if (generation == historyGeneration && cleanupError != null) {
+                reportNavigationError("Couldn't delete the workspace", cleanupError)
+            }
         }
-    }
-
-    private suspend fun refreshWorkspacesList() {
-        val store = conversationStore ?: return
-        val list = store.listWorkspaces().map { UiWorkspace(it.id, it.name) }
-        _workspaces.postValue(list)
     }
 
     private fun loadWorkspacesAndActiveConversation(startWithNewConversation: Boolean = false) {
-        val store = conversationStore ?: return
-        launchNavigation {
-            val activeWs = store.getOrCreateActiveWorkspace()
+        launchNavigation { store ->
+            stageActiveContext(store, startWithNewConversation = startWithNewConversation)
+            launchHistoryReconciliation(store, historyGeneration)
+        }
+    }
 
-            val wsList = store.listWorkspaces().map { UiWorkspace(it.id, it.name) }
-            _workspaces.value = wsList
-
-            val activeConversation = if (startWithNewConversation) {
-                store.createConversation()
-            } else {
-                store.getOrCreateActiveConversation()
-            }
-            loadConversation(activeConversation)
-            _activeWorkspaceId.value = activeWs.id
-            observeConversationsForActiveWorkspace(activeWs.id)
-            _storageError.value = null
-            reconciliationJob?.cancel()
-            reconciliationJob = viewModelScope.launch {
-                try {
-                    store.reconcileHistory()
-                    refreshWorkspacesList()
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Exception) {
-                    _storageError.value = error.message ?: "Chat history is temporarily unavailable"
+    private fun launchHistoryReconciliation(store: ConversationStore, generation: Long) {
+        reconciliationJob?.cancel()
+        reconciliationJob = viewModelScope.launch {
+            try {
+                store.reconcileHistory()
+                // Serialize the workspace refresh with navigation so a suspended read cannot
+                // overwrite a newer foreground operation's committed workspace list.
+                navigationMutex.withLock {
+                    currentCoroutineContext().ensureActive()
+                    if (generation != historyGeneration) return@withLock
+                    val list = store.listWorkspaces().map { UiWorkspace(it.id, it.name) }
+                    currentCoroutineContext().ensureActive()
+                    if (generation == historyGeneration) _workspaces.value = list
                 }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                currentCoroutineContext().ensureActive()
+                if (generation == historyGeneration) reportNavigationError(null, error)
             }
         }
     }
 
-    private fun loadOrCreateActiveConversation() {
-        val store = conversationStore ?: return
-        launchNavigation {
-            val activeWs = store.getOrCreateActiveWorkspace()
-            val activeConversation = store.getOrCreateActiveConversation()
-            loadConversation(activeConversation)
-            observeConversationsForActiveWorkspace(activeWs.id)
+    private fun captureNavigationState() = NavigationState(
+        conversationId = currentConversationId,
+        workspaceId = _activeWorkspaceId.value,
+        messages = _messages.value.orEmpty().toList(),
+        history = conversationHistory.toList(),
+        nextMessageId = nextMessageId,
+        workspaces = _workspaces.value.orEmpty().toList(),
+        ready = conversationReady
+    )
+
+    private fun restoreNavigationState(state: NavigationState) {
+        currentConversationId = state.conversationId
+        _activeConversationId.value = state.conversationId
+        _activeWorkspaceId.value = state.workspaceId
+        conversationHistory.clear()
+        conversationHistory.addAll(state.history)
+        nextMessageId = state.nextMessageId
+        _messages.value = state.messages
+        _workspaces.value = state.workspaces
+        conversationReady = state.ready
+    }
+
+    private fun reportNavigationError(prefix: String?, error: Exception, detail: Exception? = null) {
+        val message = error.message ?: error.javaClass.simpleName
+        _storageError.value = buildString {
+            if (prefix != null) append("$prefix: ")
+            append(message)
+            if (detail != null) append("; ${detail.message ?: detail.javaClass.simpleName}")
         }
     }
 
-    private fun launchNavigation(errorPrefix: String? = null, block: suspend () -> Unit) {
-        if (_isLoading.value == true) return
-        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
-            withConversationLoading {
-                val previousWorkspace = _activeWorkspaceId.value
-                val previousConversation = currentConversationId
-                val previousMessages = _messages.value.orEmpty()
-                val previousHistory = conversationHistory.toList()
-                val previousWorkspaces = _workspaces.value.orEmpty()
-                val previousNextMessageId = nextMessageId
-                try {
-                    block()
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Exception) {
-                    currentConversationId = previousConversation
-                    conversationHistory.clear()
-                    conversationHistory.addAll(previousHistory)
-                    nextMessageId = previousNextMessageId
-                    _messages.value = previousMessages
-                    _activeConversationId.value = previousConversation
-                    _activeWorkspaceId.value = previousWorkspace
-                    _workspaces.value = previousWorkspaces
-                    try {
-                        if (previousWorkspace != null) conversationStore?.switchActiveWorkspace(previousWorkspace)
-                        if (previousConversation != null) conversationStore?.switchActiveConversation(previousConversation)
-                    } catch (rollback: CancellationException) {
-                        throw rollback
-                    } catch (_: Exception) {
-                        // The original failure remains the useful error when the folder is unavailable.
-                    }
-                    if (previousWorkspace != null) observeConversationsForActiveWorkspace(previousWorkspace)
-                    val detail = error.message ?: "Chat history is temporarily unavailable"
-                    _storageError.value = errorPrefix?.let { "$it: $detail" } ?: detail
-                }
-            }
-        }
-        navigationJobs += job
-        job.invokeOnCompletion { navigationJobs -= job }
-        job.start()
-    }
-
-    private suspend fun <T> withConversationLoading(block: suspend () -> T): T {
-        pendingConversationOperations += 1
+    private fun launchNavigation(
+        errorPrefix: String? = null,
+        previousState: NavigationState? = null,
+        beforeStart: (() -> Unit)? = null,
+        block: suspend (ConversationStore) -> Unit
+    ): Job? {
+        val store = conversationStore ?: return null
+        if (_isLoading.value == true || replacingHistory) return null
+        val generation = historyGeneration
+        pendingConversationOperations++
         _isConversationLoading.value = true
-        return try {
-            navigationMutex.withLock { block() }
-        } finally {
-            pendingConversationOperations -= 1
-            _isConversationLoading.value = pendingConversationOperations > 0
+        beforeStart?.invoke()
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            navigationMutex.withLock {
+                if (generation != historyGeneration) return@withLock
+                currentCoroutineContext().ensureActive()
+                val previous = previousState ?: captureNavigationState()
+                try {
+                    block(store)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    currentCoroutineContext().ensureActive()
+                    if (generation != historyGeneration) return@withLock
+                    var rollbackError: Exception? = null
+                    try {
+                        previous.workspaceId?.let { store.switchActiveWorkspace(it) }
+                        previous.conversationId?.let { store.switchActiveConversation(it) }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (rollback: Exception) {
+                        rollbackError = rollback
+                    }
+                    currentCoroutineContext().ensureActive()
+                    if (generation == historyGeneration) {
+                        restoreNavigationState(previous)
+                        if (rollbackError != null) conversationReady = false
+                        reportNavigationError(errorPrefix, error, rollbackError)
+                    }
+                }
+            }
+        }
+        trackNavigationJob(job, generation)
+        job.start()
+        return job
+    }
+
+    private fun trackNavigationJob(job: Job, generation: Long) {
+        navigationJobs.add(job)
+        job.invokeOnCompletion {
+            viewModelScope.launch(Dispatchers.Main.immediate) {
+                navigationJobs.remove(job)
+                if (generation == historyGeneration) {
+                    pendingConversationOperations--
+                    _isConversationLoading.value = pendingConversationOperations > 0
+                }
+            }
         }
     }
 
-    private suspend fun loadConversation(conversation: ConversationSummary) {
-        val store = conversationStore ?: return
+    private suspend fun stageActiveContext(
+        store: ConversationStore,
+        workspace: WorkspaceSummary? = null,
+        conversation: ConversationSummary? = null,
+        startWithNewConversation: Boolean = false
+    ) {
+        val generation = historyGeneration
+        currentCoroutineContext().ensureActive()
+        val activeWorkspace = workspace ?: store.getOrCreateActiveWorkspace()
+        val workspaces = store.listWorkspaces().map { UiWorkspace(it.id, it.name) }
+        val activeConversation = conversation ?: if (startWithNewConversation) {
+            store.createConversation()
+        } else {
+            store.getOrCreateActiveConversation()
+        }
+        val loaded = prepareConversation(store, activeConversation)
+        currentCoroutineContext().ensureActive()
+        if (generation != historyGeneration) return
+        currentConversationId = loaded.id
+        _activeConversationId.value = loaded.id
+        _activeWorkspaceId.value = activeWorkspace.id
+        conversationHistory.clear()
+        conversationHistory.addAll(loaded.history)
+        nextMessageId = loaded.nextMessageId
+        _messages.value = loaded.messages
+        _workspaces.value = workspaces
+        conversationReady = true
+        _storageError.value = null
+        observeConversationsForActiveWorkspace(store, activeWorkspace.id)
+    }
+
+    private suspend fun prepareConversation(
+        store: ConversationStore,
+        conversation: ConversationSummary
+    ): LoadedConversation {
         val storedMessages = store.loadMessages(conversation.id)
         val (uiMessages, promptHistory) = withContext(messagePreparationDispatcher) {
             val pendingTraceByTurn = mutableMapOf<String, MutableList<UiTraceItem>>()
@@ -876,12 +1054,12 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
             }
             uiMessages to promptHistory
         }
-        currentConversationId = conversation.id
-        conversationHistory.clear()
-        conversationHistory.addAll(promptHistory)
-        nextMessageId = (uiMessages.maxOfOrNull { it.id } ?: 0L) + 1L
-        _messages.value = uiMessages
-        _activeConversationId.value = conversation.id
+        return LoadedConversation(
+            id = conversation.id,
+            messages = uiMessages,
+            history = promptHistory,
+            nextMessageId = (storedMessages.maxOfOrNull { it.id } ?: 0L) + 1L
+        )
     }
 
     private fun nextId(): Long = nextMessageId++
