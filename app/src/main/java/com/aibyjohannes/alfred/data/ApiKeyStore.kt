@@ -382,14 +382,19 @@ class ApiKeyStore internal constructor(
         private const val KEY_TOOLS_ENABLED = "tools_enabled"
         private const val KEY_PREFER_LOCAL_VOICE = "prefer_local_voice"
         private const val KEY_LOCAL_VOICE_FALLBACK = "local_voice_fallback"
-        private const val DEFAULT_MODEL_VAL = "openai/gpt-5.6-luna"
+        private const val DEFAULT_MODEL_VAL = "openai/gpt-6-luna"
         private const val DEFAULT_SEARCH_TOOL_VAL = "perplexity"
         private val CHAT_MODEL_MIGRATIONS = mapOf(
-            "together/Prism-ML/Ternary-Bonsai-27B" to DEFAULT_MODEL_VAL,
-            "google/gemma-4-31b-it:free" to "google/gemma-4-31b-it",
-            "google/gemma-4-26b-a4b-it:free" to "google/gemma-4-26b-a4b-it",
-            "qwen/qwen3-next-80b-a3b-instruct:free" to "qwen/qwen3-next-80b-a3b-instruct",
-            "openrouter/free" to "google/gemma-4-26b-a4b-it"
+            "openai/gpt-5.6-luna" to DEFAULT_MODEL_VAL,
+            "deepseek/deepseek-v4-flash" to "deepseek/deepseek-v4.1-flash",
+            "google/gemma-4-31b-it" to DEFAULT_MODEL_VAL,
+            "google/gemma-4-26b-a4b-it" to DEFAULT_MODEL_VAL,
+            "qwen/qwen3-next-80b-a3b-instruct" to DEFAULT_MODEL_VAL,
+            "google/gemma-4-31b-it:free" to DEFAULT_MODEL_VAL,
+            "google/gemma-4-26b-a4b-it:free" to DEFAULT_MODEL_VAL,
+            "qwen/qwen3-next-80b-a3b-instruct:free" to DEFAULT_MODEL_VAL,
+            "openrouter/free" to DEFAULT_MODEL_VAL,
+            "together/Prism-ML/Ternary-Bonsai-27B" to DEFAULT_MODEL_VAL
         )
         private const val KEY_STT_MODEL = "selected_stt_model"
         private const val DEFAULT_STT_MODEL_VAL = "openai/whisper-1"

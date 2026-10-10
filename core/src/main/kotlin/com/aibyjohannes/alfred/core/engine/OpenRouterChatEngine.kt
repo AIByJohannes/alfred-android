@@ -1591,8 +1591,8 @@ class OpenRouterChatEngine(
     }
 
     companion object {
-        const val DEFAULT_MODEL = "openai/gpt-5.6-luna"
-        const val FALLBACK_MODEL = "google/gemma-4-26b-a4b-it"
+        const val DEFAULT_MODEL = "openai/gpt-6-luna"
+        const val FALLBACK_MODEL = "deepseek/deepseek-v4.1-flash"
         const val WEB_SEARCH_FUNCTION_NAME = "WebSearchTool"
         const val LOCAL_KNOWLEDGE_SEARCH_FUNCTION_NAME = "SearchLocalKnowledgeTool"
         const val TICKTICK_FUNCTION_NAME = "TickTickTool"

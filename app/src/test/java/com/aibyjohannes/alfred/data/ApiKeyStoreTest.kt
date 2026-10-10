@@ -85,7 +85,7 @@ class ApiKeyStoreTest {
 
     @Test
     fun `chat model defaults and custom selection round trip`() {
-        assertEquals("openai/gpt-5.6-luna", apiKeyStore.loadModel())
+        assertEquals("openai/gpt-6-luna", apiKeyStore.loadModel())
 
         apiKeyStore.saveModel("  custom-model  ")
 
@@ -113,11 +113,19 @@ class ApiKeyStoreTest {
     @Test
     fun `retired and legacy chat model selections migrate to maintained models`() {
         mapOf(
-            "together/Prism-ML/Ternary-Bonsai-27B" to "openai/gpt-5.6-luna",
-            "google/gemma-4-31b-it:free" to "google/gemma-4-31b-it",
-            "google/gemma-4-26b-a4b-it:free" to "google/gemma-4-26b-a4b-it",
-            "qwen/qwen3-next-80b-a3b-instruct:free" to "qwen/qwen3-next-80b-a3b-instruct",
-            "openrouter/free" to "google/gemma-4-26b-a4b-it"
+            "openai/gpt-5.6-luna" to "openai/gpt-6-luna",
+            "deepseek/deepseek-v4-flash" to "deepseek/deepseek-v4.1-flash",
+            "google/gemma-4-31b-it" to "openai/gpt-6-luna",
+            "google/gemma-4-26b-a4b-it" to "openai/gpt-6-luna",
+            "qwen/qwen3-next-80b-a3b-instruct" to "openai/gpt-6-luna",
+            "google/gemma-4-31b-it:free" to "openai/gpt-6-luna",
+            "google/gemma-4-26b-a4b-it:free" to "openai/gpt-6-luna",
+            "qwen/qwen3-next-80b-a3b-instruct:free" to "openai/gpt-6-luna",
+            "openrouter/free" to "openai/gpt-6-luna",
+            "together/Prism-ML/Ternary-Bonsai-27B" to "openai/gpt-6-luna",
+            "  deepseek/deepseek-v4-flash  " to "deepseek/deepseek-v4.1-flash",
+            "  openai/gpt-6-luna  " to "openai/gpt-6-luna",
+            "  deepseek/deepseek-v4.1-flash  " to "deepseek/deepseek-v4.1-flash"
         ).forEach { (legacy, current) ->
             apiKeyStore.saveModel(legacy)
 
@@ -196,7 +204,7 @@ class ApiKeyStoreTest {
         val store = ApiKeyStore(throwingPrefs, fallbackApiKey = "fallback-key")
 
         assertNull(store.loadOpenRouterKey())
-        assertEquals("openai/gpt-5.6-luna", store.loadModel())
+        assertEquals("openai/gpt-6-luna", store.loadModel())
         assertEquals("openai/whisper-1", store.loadSttModel())
         assertEquals("hexgrad/kokoro-82m", store.loadTtsModel())
         assertEquals("af_alloy", store.loadTtsVoice())

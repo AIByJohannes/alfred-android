@@ -15,6 +15,12 @@ This key will be bundled directly into your debug builds.
 For building and installing a debug APK directly on a wirelessly connected
 Android phone, see [Wireless APK Deployment](docs/developer-setup-notes.md#4-wireless-apk-deployment).
 
+## Chat Models
+
+The shipped remote chat choices are GPT-6 Luna (`openai/gpt-6-luna`, default) and DeepSeek V4.1 Flash (`deepseek/deepseek-v4.1-flash`). GPT requests include DeepSeek as the fallback; selecting DeepSeek directly does not add a fallback.
+
+Saved GPT-5.6 Luna selections migrate to GPT-6 Luna, and DeepSeek V4 Flash selections migrate to V4.1 Flash. Retired Gemma, Qwen, free-router, and Ternary Bonsai choices migrate to GPT-6 Luna. Custom API model IDs remain supported.
+
 ## Chat History Storage
 
 On first launch, Alfred asks the user to choose a parent folder for chat history. The app creates a fixed `Alfred/` subfolder inside that location and stores chat data there so users can inspect or back up their histories directly.
