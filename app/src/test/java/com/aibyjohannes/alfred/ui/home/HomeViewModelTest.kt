@@ -299,6 +299,27 @@ class HomeViewModelTest {
         coEvery { store.switchActiveConversation(id) } returns conversation
     }
 
+    @Test
+    fun `restored tool traces retain complete original payloads`() = runTest {
+        val arguments = """{"nested":{"query":"${"a".repeat(2_100)}"},"sentinel":"call-end-å🚀"}"""
+        val result = """{"nested":{"answer":"${"b".repeat(2_200)}"},"sentinel":"result-end-ö🚀"}"""
+        seedNavigation(history = listOf(
+            StoredChatMessage(1L, ChatMessage.ROLE_ASSISTANT, arguments,
+                kind = ChatMessage.KIND_TOOL_CALL, turnId = "turn", toolCallId = "call",
+                toolName = "WebSearchTool", toolArgumentsJson = arguments, searchable = false),
+            StoredChatMessage(2L, ChatMessage.ROLE_TOOL, result,
+                kind = ChatMessage.KIND_TOOL_RESULT, turnId = "turn", toolCallId = "call",
+                toolName = "WebSearchTool", searchable = false),
+            StoredChatMessage(3L, ChatMessage.ROLE_ASSISTANT, "Done", turnId = "turn")
+        ))
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+
+        val traces = viewModel.messages.value!!.single().traceItems
+        assertEquals(arguments, traces.single { it.kind == UiTraceKind.TOOL_CALL }.content)
+        assertEquals(result, traces.single { it.kind == UiTraceKind.TOOL_RESULT }.content)
+    }
+
     private fun assertBlockedInput() {
         val before = viewModel.messages.value
         viewModel.sendMessage("blocked")
@@ -1292,6 +1313,8 @@ class HomeViewModelTest {
     @Test
     fun `sendMessage renders compact reasoning and tool traces`() = runTest {
         val conversation = ConversationSummary("1", null, System.currentTimeMillis())
+        val arguments = """{"query":"Kotlin release","nested":{"value":"${"a".repeat(2_100)}"},"sentinel":"call-end-å🚀"}"""
+        val result = """{"nested":{"answer":"${"b".repeat(2_200)}"},"sentinel":"result-end-ö🚀"}"""
 
         every { apiKeyStore.hasApiKey() } returns true
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
@@ -1309,19 +1332,19 @@ class HomeViewModelTest {
                 passIndex = 0,
                 id = "call-1",
                 name = "WebSearchTool",
-                argumentsChunk = """{"query":"Kotlin release"}"""
+                argumentsChunk = arguments
             ),
             ChatStreamEvent.ToolCallRequested(
                 passIndex = 0,
                 toolCallId = "call-1",
                 name = "WebSearchTool",
-                argumentsJson = """{"query":"Kotlin release"}"""
+                argumentsJson = arguments
             ),
             ChatStreamEvent.ToolResultAvailable(
                 passIndex = 0,
                 toolCallId = "call-1",
                 name = "WebSearchTool",
-                resultPreview = "Kotlin 2.2 is available.",
+                result = result,
                 isError = false
             ),
             ChatStreamEvent.PassStarted(1),
@@ -1340,16 +1363,16 @@ class HomeViewModelTest {
                         ),
                         CoreChatMessage(
                             role = ChatMessage.ROLE_ASSISTANT,
-                            content = """{"query":"Kotlin release"}""",
+                            content = arguments,
                             kind = CoreChatMessageKind.TOOL_CALL,
                             toolCallId = "call-1",
                             toolName = "WebSearchTool",
-                            toolArgumentsJson = """{"query":"Kotlin release"}""",
+                            toolArgumentsJson = arguments,
                             searchable = false
                         ),
                         CoreChatMessage(
                             role = ChatMessage.ROLE_TOOL,
-                            content = "Kotlin 2.2 is available.",
+                            content = result,
                             kind = CoreChatMessageKind.TOOL_RESULT,
                             toolCallId = "call-1",
                             toolName = "WebSearchTool",
@@ -1373,8 +1396,8 @@ class HomeViewModelTest {
         val assistant = viewModel.messages.value.orEmpty().last()
         assert(assistant.content == "Kotlin 2.2 is available.")
         assert(assistant.traceItems.any { it.kind == UiTraceKind.REASONING && it.content.contains("Need current data") })
-        assert(assistant.traceItems.any { it.kind == UiTraceKind.TOOL_CALL && it.content.contains("Kotlin release") })
-        assert(assistant.traceItems.any { it.kind == UiTraceKind.TOOL_RESULT && it.content.contains("Kotlin 2.2") })
+        assertEquals(arguments, assistant.traceItems.single { it.kind == UiTraceKind.TOOL_CALL }.content)
+        assertEquals(result, assistant.traceItems.single { it.kind == UiTraceKind.TOOL_RESULT }.content)
         coVerify(exactly = 1) {
             conversationStore.appendMessages(
                 eq("1"),
@@ -1407,7 +1430,7 @@ class HomeViewModelTest {
                 passIndex = 0,
                 toolCallId = "call-1",
                 name = "WebSearchTool",
-                resultPreview = "Sunny",
+                result = "Sunny",
                 isError = false
             ),
             ChatStreamEvent.PassStarted(1),

@@ -38,7 +38,7 @@ sealed interface ChatStreamEvent {
         val passIndex: Int,
         val toolCallId: String?,
         val name: String,
-        val resultPreview: String,
+        val result: String,
         val isError: Boolean
     ) : ChatStreamEvent
 

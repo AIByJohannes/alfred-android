@@ -527,7 +527,7 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
                                     id = "result-${event.toolCallId ?: "${event.passIndex}-${event.name}"}",
                                     kind = UiTraceKind.TOOL_RESULT,
                                     title = "Result from ${event.name}",
-                                    content = event.resultPreview,
+                                    content = event.result,
                                     isError = event.isError
                                 ),
                                 appendContent = false
@@ -1179,7 +1179,7 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
                 id = id.toString(),
                 kind = UiTraceKind.TOOL_RESULT,
                 title = toolName?.let { "Result from $it" } ?: "Tool result",
-                content = content.take(400),
+                content = content,
                 isError = isError
             )
             else -> UiTraceItem(

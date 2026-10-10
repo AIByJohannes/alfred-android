@@ -37,6 +37,8 @@ New Chat immediately clears visible history and blocks input until the real conv
 
 Selecting a replacement history root cancels old work before adopting its storage and repository. Re-selecting the same resolved root preserves the active chat. Provider setup runs off the UI thread; unavailable folders use the existing folder-selection recovery dialog.
 
+Tool-call and tool-result traces retain their original payloads during streaming and after reopening a saved conversation. “Copy full payload” copies that exact raw text whether the trace is collapsed or expanded; the 1,200-character collapsed display is only a visual preview. Existing history needs no migration, but payloads already cropped in the stored record cannot be reconstructed.
+
 ## Agent Skills
 
 Alfred discovers documentation skills from the same user-selected storage location. Add each skill under `Alfred/skills/<skill-id>/SKILL.md`:

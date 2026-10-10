@@ -80,29 +80,31 @@ class ChatAdapterTest {
         val parent = FrameLayout(context)
         val adapter = ChatAdapter(loadYouTubeThumbnail = { _, _ -> })
         val holder = adapter.onCreateViewHolder(parent, 0)
-        val raw = """{"nested":{"value":"${"x".repeat(1_500)}"}}"""
-        holder.bind(
-            UiChatMessage(
-                id = 3,
-                content = "Done",
-                isUser = false,
-                traceItems = listOf(UiTraceItem("call", UiTraceKind.TOOL_CALL, "Tool · lookup", raw))
-            )
-        )
-
-        val traceContainer = holder.itemView.findViewById<LinearLayout>(R.id.trace_container)
-        val body = traceContainer.getChildAt(1) as TextView
-        val actions = traceContainer.getChildAt(2) as LinearLayout
-        val expand = actions.getChildAt(0) as Button
-        val copy = actions.getChildAt(1) as Button
-
-        assertEquals(Typeface.MONOSPACE, body.typeface)
-        assertTrue(body.text.endsWith("…"))
-        expand.performClick()
-        assertTrue(body.text.length > 1_500)
-        copy.performClick()
-
         val clipboard = context.getSystemService(Activity.CLIPBOARD_SERVICE) as ClipboardManager
-        assertEquals(raw, clipboard.primaryClip?.getItemAt(0)?.text.toString())
+        for (kind in listOf(UiTraceKind.TOOL_CALL, UiTraceKind.TOOL_RESULT)) {
+            val raw = """{"nested":{"value":"${"x".repeat(2_100)}"},"sentinel":"${kind.name}-end-å🚀"}"""
+            holder.bind(
+                UiChatMessage(
+                    id = 3,
+                    content = "Done",
+                    isUser = false,
+                    traceItems = listOf(UiTraceItem(kind.name, kind, "Tool · lookup", raw))
+                )
+            )
+            val traceContainer = holder.itemView.findViewById<LinearLayout>(R.id.trace_container)
+            val body = traceContainer.getChildAt(1) as TextView
+            val actions = traceContainer.getChildAt(2) as LinearLayout
+            val expand = actions.getChildAt(0) as Button
+            val copy = actions.getChildAt(1) as Button
+
+            assertEquals(Typeface.MONOSPACE, body.typeface)
+            assertTrue(body.text.endsWith("…"))
+            copy.performClick()
+            assertEquals(raw, clipboard.primaryClip?.getItemAt(0)?.text.toString())
+            expand.performClick()
+            assertTrue(body.text.contains("${kind.name}-end-å🚀"))
+            copy.performClick()
+            assertEquals(raw, clipboard.primaryClip?.getItemAt(0)?.text.toString())
+        }
     }
 }

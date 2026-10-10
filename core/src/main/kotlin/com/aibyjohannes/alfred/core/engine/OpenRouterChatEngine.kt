@@ -281,7 +281,7 @@ class OpenRouterChatEngine(
                                 passIndex = passIndex,
                                 toolCallId = toolCall.id,
                                 name = toolCall.name,
-                                resultPreview = result.take(400),
+                                result = result,
                                 isError = isError
                             )
                         )

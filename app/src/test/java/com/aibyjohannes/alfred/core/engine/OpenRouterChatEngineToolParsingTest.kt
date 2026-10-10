@@ -250,6 +250,33 @@ class OpenRouterChatEngineToolParsingTest {
     }
 
     @Test
+    fun `streamed and persisted tool results retain the full original payload`() = runTest {
+        val raw = """{"nested":{"answer":"${"x".repeat(2_200)}"},"sentinel":"engine-end-å🚀"}"""
+        val client = mockk<OpenRouterLLMClient>(relaxed = true)
+        val engine = spyk(OpenRouterChatEngine(
+            apiKey = "test",
+            webSearchClient = object : WebSearchClient {
+                override suspend fun search(query: String): Result<String> = Result.success(raw)
+            }
+        )) {
+            every { createOpenRouterClient() } returns client
+        }
+        coEvery { client.executeStreaming(any(), any(), any()) } returnsMany listOf(
+            flowOf(StreamFrame.ToolCallComplete(
+                id = "call", name = "WebSearchTool", content = """{"query":"offline"}""", index = 0
+            )),
+            flowOf(StreamFrame.TextDelta(text = "Done"))
+        )
+
+        val events = engine.streamMessage("Search", emptyList()).toList()
+
+        assertEquals(raw, events.filterIsInstance<ChatStreamEvent.ToolResultAvailable>().single().result)
+        val completed = events.filterIsInstance<ChatStreamEvent.Completed>().single().result
+        assertEquals(raw, completed.intermediateMessages.single { it.kind == CoreChatMessageKind.TOOL_RESULT }.content)
+        coVerify(exactly = 2) { client.executeStreaming(any(), any(), any()) }
+    }
+
+    @Test
     fun `streamSingleCompletion deduplicates multiple ReasoningComplete frames`() = runTest {
         val client = mockk<OpenRouterLLMClient>(relaxed = true)
         val engine = spyk(buildEngine()) {
