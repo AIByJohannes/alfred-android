@@ -39,6 +39,8 @@ Selecting a replacement history root cancels old work before adopting its storag
 
 Tool-call and tool-result traces retain their original payloads during streaming and after reopening a saved conversation. “Copy full payload” copies that exact raw text whether the trace is collapsed or expanded; the 1,200-character collapsed display is only a visual preview. Existing history needs no migration, but payloads already cropped in the stored record cannot be reconstructed.
 
+Remote tool-enabled chats can ask one structured clarification at a time through `ask_user`. Alfred suspends that same run and shows an inline panel above the composer. The user selects one offered choice or enters custom text, then submits explicitly. Cancel question records that no answer was supplied and lets Alfred continue; Stop cancels the run. Rotation and leaving Home retain the live question and draft in memory, but process death ends the run. Completed questions and exact structured answers remain in the ordinary tool trace. Local Gemma remains text-only.
+
 ## Agent Skills
 
 Alfred discovers documentation skills from the same user-selected storage location. Add each skill under `Alfred/skills/<skill-id>/SKILL.md`:

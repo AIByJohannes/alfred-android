@@ -36,6 +36,7 @@ import com.aibyjohannes.alfred.core.skills.SkillClient
 import com.aibyjohannes.alfred.core.skills.SkillSummary
 import com.aibyjohannes.alfred.core.ticktick.TickTickClient
 import com.fasterxml.jackson.databind.ObjectMapper
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
@@ -66,7 +67,8 @@ class OpenRouterChatEngine(
     private val efficiencyModeEnabled: Boolean = false,
     private val privacyModeEnabled: Boolean = false,
     private val toolsEnabled: Boolean = true,
-    sessionId: String? = null
+    sessionId: String? = null,
+    private val askUserHandler: AskUserHandler? = null
 ) : ChatEngine {
     private val objectMapper = ObjectMapper()
     private val openRouterSessionId = sessionId?.takeIf { it.isNotBlank() }?.let(::hashedSessionId)
@@ -111,6 +113,8 @@ class OpenRouterChatEngine(
             }
             completed?.let { Result.success(it) }
                 ?: Result.failure(Exception("No final response from AI"))
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -228,6 +232,7 @@ class OpenRouterChatEngine(
 
                         val result = executeToolCall(toolCall.name, toolCall.argumentsJson)
                         val isError = result.startsWith("Web search failed", ignoreCase = true) ||
+                            result.startsWith("Ask user failed", ignoreCase = true) ||
                             result.startsWith("Local knowledge search failed", ignoreCase = true) ||
                             result.startsWith("Unknown tool", ignoreCase = true) ||
                             result.startsWith("TickTick failed", ignoreCase = true) ||
@@ -436,6 +441,21 @@ class OpenRouterChatEngine(
                 )
             )
         )
+
+        if (askUserHandler != null) {
+            alfredTools.add(
+                ToolDescriptor(
+                    name = ASK_USER_TOOL,
+                    description = "Ask one question and suspend for the user's response: one offered option or custom text. Cancellation means no answer was supplied.",
+                    requiredParameters = listOf(
+                        ToolParameterDescriptor("question", "The single question to ask", ToolParameterType.String)
+                    ),
+                    optionalParameters = listOf(
+                        ToolParameterDescriptor("options", "Optional single-choice labels; custom text is always allowed", ToolParameterType.List(ToolParameterType.String))
+                    )
+                )
+            )
+        }
 
         if (imageGenerator != null) {
             alfredTools.add(
@@ -753,6 +773,9 @@ class OpenRouterChatEngine(
 
         return prompt("alfred-openrouter-chat", params) {
             system(prompt)
+            if (toolsEnabled && askUserHandler != null) {
+                system("Use ask_user when a user decision is needed before continuing. Ask one question at a time and wait for the response. Never invent an answer. A cancelled result means the user supplied no answer; continue only where that missing decision is not required.")
+            }
             if (skills.isNotEmpty()) {
                 system(formatSkillsCatalog(skills))
             }
@@ -806,6 +829,8 @@ class OpenRouterChatEngine(
                 result = streamSingleCompletion(client, model, prompt, tools, passIndex, onEvent),
                 reasoningEnabled = reasoningEnabled
             )
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Exception) {
             if (!reasoningEnabled) {
                 throw error
@@ -968,6 +993,48 @@ class OpenRouterChatEngine(
     internal suspend fun executeToolCall(functionName: String, rawArguments: String): String {
         val arguments = normalizeToolArguments(rawArguments)
         return when (functionName) {
+            ASK_USER_TOOL -> {
+                try {
+                    require(toolsEnabled) { "tools are disabled." }
+                    val handler = requireNotNull(askUserHandler) { "interaction is unavailable." }
+                    val node = objectMapper.readTree(arguments)
+                    require(node != null && node.isObject) { "arguments must be an object." }
+                    val questionNode = node.get("question")
+                    require(questionNode != null && questionNode.isTextual) { "'question' must be a string." }
+                    val question = questionNode.textValue().trim()
+                    require(question.isNotEmpty()) { "'question' must not be blank." }
+                    val optionsNode = node.get("options")
+                    val options = if (optionsNode == null) emptyList() else {
+                        require(optionsNode.isArray) { "'options' must be an array of strings." }
+                        optionsNode.map { option ->
+                            require(option.isTextual) { "each option must be a string." }
+                            option.textValue().trim().also {
+                                require(it.isNotEmpty()) { "options must not be blank." }
+                            }
+                        }.also {
+                            require(it.distinct().size == it.size) { "options must be unique after trimming." }
+                        }
+                    }
+                    val result = when (val answer = handler.askUser(AskUserRequest(question, options))) {
+                        is AskUserAnswer.Option -> {
+                            require(answer.value in options) { "selected option was not offered." }
+                            mapOf("status" to "answered", "selected_option" to answer.value)
+                        }
+                        is AskUserAnswer.Text -> {
+                            val text = answer.value.trim()
+                            require(text.isNotEmpty()) { "custom text must not be blank." }
+                            mapOf("status" to "answered", "text" to text)
+                        }
+                        AskUserAnswer.Cancelled -> mapOf("status" to "cancelled")
+                    }
+                    objectMapper.writeValueAsString(result)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    "Ask user failed: ${error.message ?: "interaction failed."}"
+                }
+            }
+
             WEB_SEARCH_FUNCTION_NAME -> {
                 val query = extractWebSearchQuery(arguments)
                 if (query.isNullOrBlank()) {
@@ -1591,6 +1658,7 @@ class OpenRouterChatEngine(
     }
 
     companion object {
+        const val ASK_USER_TOOL = "ask_user"
         const val DEFAULT_MODEL = "openai/gpt-6-luna"
         const val FALLBACK_MODEL = "deepseek/deepseek-v4.1-flash"
         const val WEB_SEARCH_FUNCTION_NAME = "WebSearchTool"

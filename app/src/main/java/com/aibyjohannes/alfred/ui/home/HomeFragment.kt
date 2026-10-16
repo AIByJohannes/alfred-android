@@ -24,6 +24,8 @@ import android.net.Uri
 import android.provider.Settings
 import android.widget.EditText
 import android.widget.Toast
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import com.google.android.material.snackbar.Snackbar
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -51,6 +53,8 @@ class HomeFragment : Fragment() {
     private lateinit var chatAdapter: ChatAdapter
     private var typingJob: Job? = null
     private var lastMessageCount = 0
+    private var renderedQuestionId: Long? = null
+    private var renderingQuestion = false
 
     // Dictation (btn_mic) state
     private var isRecording = false
@@ -118,6 +122,9 @@ class HomeFragment : Fragment() {
         setupObservers()
         setupBackgroundAnimation()
 
+        binding.root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            updateUserQuestionScrollHeight()
+        }
         if (homeViewModel.messages.value.orEmpty().isEmpty()) {
             animateGreetingText()
         } else {
@@ -244,23 +251,40 @@ class HomeFragment : Fragment() {
         }
 
         binding.messageInput.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                val hasText = !s.isNullOrBlank()
-                binding.btnMic.isVisible = !hasText
-                if (hasText) {
-                    binding.sendButton.setImageResource(R.drawable.ic_arrow_up)
-                } else {
-                    binding.sendButton.setImageResource(R.drawable.ic_waveform)
-                }
+                binding.btnMic.isVisible = s.isNullOrBlank()
+                updateLoadingUi()
             }
-            override fun afterTextChanged(s: Editable?) {}
+            override fun afterTextChanged(s: Editable?) = Unit
         })
 
         binding.btnMic.setOnClickListener { toggleRecording() }
         binding.btnAdd.setOnClickListener { showImageGenerationDialog() }
         binding.btnAllowMoreLoops.setOnClickListener {
             homeViewModel.allowMoreLoops(5)
+        }
+        binding.userQuestionOptions.setOnCheckedChangeListener { group, checkedId ->
+            if (renderingQuestion || checkedId == View.NO_ID) return@setOnCheckedChangeListener
+            val question = homeViewModel.pendingUserQuestion.value ?: return@setOnCheckedChangeListener
+            val choice = group.findViewById<RadioButton>(checkedId)?.text?.toString() ?: return@setOnCheckedChangeListener
+            homeViewModel.selectUserQuestionOption(question.id, choice)
+        }
+        binding.userQuestionCustomAnswer.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) {
+                if (renderingQuestion) return
+                homeViewModel.pendingUserQuestion.value?.let {
+                    homeViewModel.updateUserQuestionText(it.id, s?.toString().orEmpty())
+                }
+            }
+        })
+        binding.userQuestionSubmit.setOnClickListener {
+            homeViewModel.pendingUserQuestion.value?.let { homeViewModel.submitUserQuestion(it.id) }
+        }
+        binding.userQuestionCancel.setOnClickListener {
+            homeViewModel.pendingUserQuestion.value?.let { homeViewModel.cancelUserQuestion(it.id) }
         }
     }
 
@@ -450,13 +474,9 @@ class HomeFragment : Fragment() {
             VoiceModeState.IDLE -> {
                 animator.cancel()
                 binding.voiceModeLabel.visibility = View.GONE
-                binding.sendButton.setImageResource(R.drawable.ic_waveform)
-                binding.btnMic.isEnabled = true
-                binding.messageInput.isEnabled = true
-                // Resume normal orb animation
                 if (isOrbAtTop) {
                     backgroundAnimator?.cancel()
-                    animateOrbToTop()  // re-apply the top position without voice override
+                    animateOrbToTop()
                 } else {
                     startIdleAnimation()
                 }
@@ -466,29 +486,21 @@ class HomeFragment : Fragment() {
                 animator.playListening()
                 binding.voiceModeLabel.text = getString(R.string.voice_mode_listening)
                 binding.voiceModeLabel.visibility = View.VISIBLE
-                binding.sendButton.setImageResource(R.drawable.ic_stop)
-                binding.btnMic.isEnabled = false
-                binding.messageInput.isEnabled = false
             }
             VoiceModeState.THINKING -> {
                 backgroundAnimator?.cancel()
                 animator.playThinking()
                 binding.voiceModeLabel.text = getString(R.string.voice_mode_thinking)
                 binding.voiceModeLabel.visibility = View.VISIBLE
-                binding.sendButton.setImageResource(R.drawable.ic_waveform)
-                binding.btnMic.isEnabled = false
-                binding.messageInput.isEnabled = false
             }
             VoiceModeState.SPEAKING -> {
                 backgroundAnimator?.cancel()
                 animator.playSpeaking()
                 binding.voiceModeLabel.text = getString(R.string.voice_mode_speaking)
                 binding.voiceModeLabel.visibility = View.VISIBLE
-                binding.sendButton.setImageResource(R.drawable.ic_waveform)
-                binding.btnMic.isEnabled = false
-                binding.messageInput.isEnabled = false
             }
         }
+        updateLoadingUi()
     }
 
     // ─── Chat Observers ───────────────────────────────────────────────────────
@@ -528,8 +540,8 @@ class HomeFragment : Fragment() {
                 lastMsg.content.contains("Agent loop limit reached. I executed ")
             binding.loopLimitContinuationLayout.visibility = if (isLoopLimitReached) View.VISIBLE else View.GONE
 
-            // When a streaming message completes and voice mode is active, synthesize TTS
-            if (isInVoiceMode && homeViewModel.voiceModeState.value == VoiceModeState.THINKING) {
+            if (isInVoiceMode && homeViewModel.pendingUserQuestion.value == null &&
+                homeViewModel.voiceModeState.value == VoiceModeState.THINKING) {
                 val latestAssistant = messages.lastOrNull { !it.isUser && !it.isStreaming && !it.isError }
                 if (latestAssistant != null && latestAssistant.content.isNotBlank()) {
                     val alreadyPending = pendingVoiceText == latestAssistant.content
@@ -584,6 +596,78 @@ class HomeFragment : Fragment() {
                 homeViewModel.consumeSharedText()
             }
         }
+        homeViewModel.pendingUserQuestion.observe(viewLifecycleOwner) { question ->
+            renderUserQuestion(question)
+            updateLoadingUi()
+        }
+    }
+
+    private fun renderUserQuestion(question: UiUserQuestion?) {
+        if (question == null) {
+            renderedQuestionId = null
+            binding.userQuestionPanel.visibility = View.GONE
+            updateLoadingUi()
+            return
+        }
+        binding.userQuestionPanel.visibility = View.VISIBLE
+        binding.userQuestionStatus.setText(R.string.user_question_waiting)
+        renderingQuestion = true
+        if (renderedQuestionId != question.id) {
+            renderedQuestionId = question.id
+            binding.userQuestionText.text = question.request.question
+            binding.userQuestionOptions.removeAllViews()
+            question.request.options.forEach { option ->
+                binding.userQuestionOptions.addView(
+                    RadioButton(requireContext()).apply {
+                        id = View.generateViewId()
+                        text = option
+                        setTextColor(ContextCompat.getColor(requireContext(), R.color.text_primary))
+                        isFocusable = true
+                    }
+                )
+            }
+        }
+        binding.userQuestionOptions.visibility =
+            if (question.request.options.isEmpty()) View.GONE else View.VISIBLE
+        val selected = question.selectedOption?.let { option ->
+            (0 until binding.userQuestionOptions.childCount)
+                .map { binding.userQuestionOptions.getChildAt(it) as RadioButton }
+                .firstOrNull { it.text.toString() == option }
+        }
+        if (selected == null) {
+            if (binding.userQuestionOptions.checkedRadioButtonId != View.NO_ID) {
+                binding.userQuestionOptions.clearCheck()
+            }
+        } else if (!selected.isChecked) {
+            binding.userQuestionOptions.check(selected.id)
+        }
+        val custom = binding.userQuestionCustomAnswer
+        if (custom.text?.toString() != question.customText) {
+            custom.setText(question.customText)
+            custom.setSelection(question.customText.length)
+        }
+        binding.userQuestionSubmit.isEnabled =
+            question.selectedOption != null || question.customText.trim().isNotEmpty()
+        renderingQuestion = false
+        updateUserQuestionScrollHeight()
+    }
+
+    private fun updateUserQuestionScrollHeight() {
+        val currentBinding = _binding ?: return
+        val scroll = currentBinding.userQuestionScroll
+        val width = scroll.width.takeIf { it > 0 } ?: return
+        scroll.measure(
+            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+        val cap = (currentBinding.root.height * 0.4f).toInt()
+        val targetHeight = minOf(scroll.measuredHeight, cap)
+        if (targetHeight <= 0) return
+        val params = scroll.layoutParams
+        if (params.height != targetHeight) {
+            params.height = targetHeight
+            scroll.layoutParams = params
+        }
     }
 
     private fun showImageGenerationDialog() {
@@ -607,30 +691,30 @@ class HomeFragment : Fragment() {
 
     private fun updateLoadingUi() {
         val isBusy = isStreamingResponse || isConversationLoading
-        // Streaming text and the disabled input already communicate progress.
-        // Avoid a second, blocking spinner while a conversation is restored.
+        val questionWaiting = homeViewModel.pendingUserQuestion.value != null
+        val voiceBusy = isInVoiceMode && homeViewModel.voiceModeState.value != VoiceModeState.IDLE
         stopConversationLoadingAnimation()
         binding.conversationLoadingOverlay.isVisible = false
-        binding.inputLayout.alpha = if (isBusy) 0.5f else 1f
-        binding.messageInput.isEnabled = !isBusy
-        binding.btnAdd.isEnabled = !isBusy
-        binding.btnMic.isEnabled = !isBusy
+        binding.inputLayout.alpha = if (isBusy || voiceBusy) 0.5f else 1f
+        binding.messageInput.isEnabled = !isBusy && !voiceBusy
+        binding.btnAdd.isEnabled = !isBusy && !voiceBusy
+        binding.btnMic.isEnabled = !isBusy && !voiceBusy
+        binding.loadingIndicator.isVisible = false
 
-        if (!isInVoiceMode) {
-            binding.loadingIndicator.isVisible = false
-            binding.sendButton.isEnabled = !isConversationLoading
-            if (isStreamingResponse) {
-                binding.sendButton.setImageResource(R.drawable.ic_stop)
-            } else {
-                val hasText = !binding.messageInput.text.isNullOrBlank()
-                binding.sendButton.setImageResource(
-                    if (hasText) R.drawable.ic_arrow_up else R.drawable.ic_waveform
-                )
-            }
+        val stopAvailable = isStreamingResponse || (isInVoiceMode && questionWaiting)
+        binding.sendButton.isEnabled = !isConversationLoading
+        if (stopAvailable) {
+            binding.sendButton.setImageResource(R.drawable.ic_stop)
+            binding.sendButton.contentDescription = getString(R.string.stop_generation)
         } else {
-            // In voice mode the streaming indicator is not shown; TTS handles the transition.
-            binding.loadingIndicator.isVisible = false
-            binding.sendButton.isEnabled = !isConversationLoading
+            binding.sendButton.setImageResource(
+                if (!isInVoiceMode && !binding.messageInput.text.isNullOrBlank()) {
+                    R.drawable.ic_arrow_up
+                } else {
+                    R.drawable.ic_waveform
+                }
+            )
+            binding.sendButton.contentDescription = getString(R.string.send)
         }
     }
 
@@ -770,6 +854,7 @@ class HomeFragment : Fragment() {
     }
 
     override fun onDestroyView() {
+        renderedQuestionId = null
         stopConversationLoadingAnimation()
         stopMediaPlayer()
         voiceOrAnimator?.cancel()
@@ -840,6 +925,7 @@ class HomeFragment : Fragment() {
 
             binding.btnMic.isEnabled = true
             binding.messageInput.isEnabled = true
+            updateLoadingUi()
 
             result.fold(
                 onSuccess = { text ->

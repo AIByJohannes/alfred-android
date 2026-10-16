@@ -4,6 +4,9 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aibyjohannes.alfred.core.engine.AskUserAnswer
+import com.aibyjohannes.alfred.core.engine.AskUserHandler
+import com.aibyjohannes.alfred.core.engine.AskUserRequest
 import com.aibyjohannes.alfred.core.model.ChatStreamEvent
 import com.aibyjohannes.alfred.data.ApiKeyStore
 import com.aibyjohannes.alfred.data.ChatRepository
@@ -77,6 +80,13 @@ data class UiWorkspace(
     val name: String
 )
 
+data class UiUserQuestion(
+    val id: Long,
+    val request: AskUserRequest,
+    val selectedOption: String? = null,
+    val customText: String = ""
+)
+
 class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatcher = Dispatchers.Default) : ViewModel() {
     companion object {
         private const val STREAM_FLUSH_INTERVAL_MS = 60L
@@ -95,6 +105,9 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
     private val navigationJobs = mutableSetOf<Job>()
     private var reconciliationJob: Job? = null
 
+    private var nextUserQuestionId = 1L
+    private var pendingQuestionDeferred: kotlinx.coroutines.CompletableDeferred<AskUserAnswer>? = null
+    private var pendingQuestionId: Long? = null
     private val _messages = MutableLiveData<List<UiChatMessage>>(emptyList())
     val messages: LiveData<List<UiChatMessage>> = _messages
 
@@ -115,6 +128,9 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
     val activeWorkspaceId: LiveData<String?> = _activeWorkspaceId
 
     private val _isLoading = MutableLiveData(false)
+
+    private val _pendingUserQuestion = MutableLiveData<UiUserQuestion?>(null)
+    val pendingUserQuestion: LiveData<UiUserQuestion?> = _pendingUserQuestion
     val isLoading: LiveData<Boolean> = _isLoading
 
     private val _isConversationLoading = MutableLiveData(false)
@@ -197,6 +213,10 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
             return
         }
         val generation = ++historyGeneration
+        pendingQuestionDeferred?.cancel()
+        pendingQuestionDeferred = null
+        pendingQuestionId = null
+        _pendingUserQuestion.value = null
         replacingHistory = true
         conversationReady = false
         val obsoleteJobs = navigationJobs.toList() +
@@ -305,13 +325,13 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
 
     fun retryMessage(failedMessageId: Long) {
         if (!canSendMessage()) return
+
         val currentList = _messages.value.orEmpty().toMutableList()
         val index = currentList.indexOfFirst { it.id == failedMessageId }
         if (index < 0) return
         val failedMsg = currentList[index]
         if (!failedMsg.isError) return
 
-        // Find the user message associated with this failed run (normally the one before it)
         var userMsgContent = ""
         var userMsgIndex = -1
         for (i in index - 1 downTo 0) {
@@ -321,18 +341,52 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
                 break
             }
         }
-
         if (userMsgContent.isBlank()) return
-
-        // Remove the failed assistant message and the user message from the UI list to avoid duplication
         if (userMsgIndex >= 0) {
-            currentList.removeAt(index) // Remove failed assistant message
-            currentList.removeAt(userMsgIndex) // Remove user message
+            currentList.removeAt(index)
+            currentList.removeAt(userMsgIndex)
             _messages.value = currentList
         }
-
-        // Resend the message
         sendMessage(userMsgContent)
+    }
+
+    fun selectUserQuestionOption(id: Long, value: String) {
+        val question = currentQuestion(id) ?: return
+        if (value !in question.request.options) return
+        _pendingUserQuestion.value = question.copy(selectedOption = value, customText = "")
+    }
+
+    fun updateUserQuestionText(id: Long, value: String) {
+        val question = currentQuestion(id) ?: return
+        _pendingUserQuestion.value = question.copy(
+            selectedOption = if (value.isEmpty()) question.selectedOption else null,
+            customText = value
+        )
+    }
+
+    fun submitUserQuestion(id: Long) {
+        val question = currentQuestion(id) ?: return
+        val answer = question.selectedOption?.let(AskUserAnswer::Option)
+            ?: question.customText.trim().takeIf(String::isNotEmpty)?.let(AskUserAnswer::Text)
+            ?: return
+        resolveUserQuestion(id, answer)
+    }
+
+    fun cancelUserQuestion(id: Long) {
+        resolveUserQuestion(id, AskUserAnswer.Cancelled)
+    }
+
+    private fun currentQuestion(id: Long): UiUserQuestion? =
+        _pendingUserQuestion.value?.takeIf {
+            it.id == id && pendingQuestionId == id && pendingQuestionDeferred?.isActive == true
+        }
+
+    private fun resolveUserQuestion(id: Long, answer: AskUserAnswer) {
+        val deferred = pendingQuestionDeferred ?: return
+        if (currentQuestion(id) == null || !deferred.complete(answer)) return
+        pendingQuestionDeferred = null
+        pendingQuestionId = null
+        _pendingUserQuestion.value = null
     }
 
     fun sendMessage(userInput: String, requestInput: String = userInput) {
@@ -378,6 +432,51 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
         val sysInfo = sysInfoProvider?.buildSysInfo()
         var powerReleased = false
 
+        fun releasePower() {
+            if (!powerReleased) {
+                runPowerKeeper.release()
+                powerReleased = true
+            }
+        }
+
+        val askUserHandler = AskUserHandler { request ->
+            val interaction = withContext(Dispatchers.Main.immediate) {
+                currentCoroutineContext().ensureActive()
+                if (generation != historyGeneration || currentConversationId != conversationId) {
+                    throw CancellationException("Chat run is no longer active")
+                }
+                val deferred = kotlinx.coroutines.CompletableDeferred<AskUserAnswer>()
+                val id = nextUserQuestionId++
+                pendingQuestionDeferred = deferred
+                pendingQuestionId = id
+                _pendingUserQuestion.value = UiUserQuestion(id, request)
+                releasePower()
+                id to deferred
+            }
+            try {
+                val answer = interaction.second.await()
+                withContext(Dispatchers.Main.immediate) {
+                    currentCoroutineContext().ensureActive()
+                    if (generation != historyGeneration || currentConversationId != conversationId) {
+                        throw CancellationException("Chat run is no longer active")
+                    }
+                    runPowerKeeper.acquire()
+                    powerReleased = false
+                }
+                answer
+            } finally {
+                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main.immediate) {
+                    if (pendingQuestionDeferred === interaction.second) {
+                        pendingQuestionDeferred = null
+                        if (pendingQuestionId == interaction.first) pendingQuestionId = null
+                        if (_pendingUserQuestion.value?.id == interaction.first) {
+                            _pendingUserQuestion.value = null
+                        }
+                    }
+                }
+            }
+        }
+
         chatJob = viewModelScope.launch {
             val userHistoryMessage = ChatMessage(role = ChatMessage.ROLE_USER, content = userInput)
             val passAssistantContent = StringBuilder()
@@ -392,7 +491,8 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
                     promptHistory,
                     sysInfo,
                     maxPasses,
-                    sessionId = conversationId
+                    sessionId = conversationId,
+                    askUserHandler = askUserHandler
                 ).collect { event ->
                     currentCoroutineContext().ensureActive()
                     if (generation != historyGeneration) return@collect
@@ -632,21 +732,19 @@ class HomeViewModel(private val messagePreparationDispatcher: CoroutineDispatche
             }
 
             finally {
-                runPowerKeeper.release()
-                powerReleased = true
-                if (generation == historyGeneration) {
-                    _isLoading.value = false
-                    chatJob = null
+                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main.immediate) {
+                    releasePower()
+                    if (generation == historyGeneration) {
+                        _isLoading.value = false
+                        chatJob = null
+                    }
                 }
             }
         }
         // A reserved run can be canceled before its coroutine enters the try/finally.
         chatJob?.invokeOnCompletion {
             viewModelScope.launch(Dispatchers.Main.immediate) {
-                if (!powerReleased) {
-                    runPowerKeeper.release()
-                    powerReleased = true
-                }
+                releasePower()
                 if (generation == historyGeneration) {
                     _isLoading.value = false
                     chatJob = null

@@ -26,6 +26,7 @@
     <string name="message_hint">Type a message…</string>
     <string name="message_hint_compact">Ask anything</string>
     <string name="send">Send</string>
+    <string name="stop_generation">Stop generation</string>
     <string name="voice_typing">Voice typing</string>
     <string name="api_key_warning">API key not configured. Go to Settings to add your OpenRouter API key.</string>
     <string name="chats">Chats</string>
@@ -222,4 +223,9 @@
     <string name="onboarding_notifications_status_denied">Access Optional</string>
     <string name="onboarding_get_started">Get Started</string>
     <string name="retry">Retry</string>
+    <string name="user_question_submit">Submit answer</string>
+    <string name="user_question_cancel">Cancel question</string>
+    <string name="user_question_custom_answer_hint">Or type your own answer</string>
+    <string name="user_question_waiting">Waiting for your answer</string>
+    <string name="user_question_text_answer_hint">Type your answer</string>
 </resources>

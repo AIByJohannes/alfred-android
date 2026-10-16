@@ -1,6 +1,7 @@
 package com.aibyjohannes.alfred.data
 
 import com.aibyjohannes.alfred.core.SystemPrompts
+import com.aibyjohannes.alfred.core.engine.AskUserHandler
 import com.aibyjohannes.alfred.core.engine.ChatEngine
 import com.aibyjohannes.alfred.core.engine.OpenRouterChatEngine
 import com.aibyjohannes.alfred.core.model.ChatStreamEvent
@@ -36,7 +37,8 @@ internal data class ChatEngineRequest(
     val apiKey: String,
     val model: String,
     val sysInfo: String?,
-    val maxPasses: Int
+    val maxPasses: Int,
+    val askUserHandler: AskUserHandler? = null
 )
 
 internal class ChatRepositoryDependencies(
@@ -140,11 +142,12 @@ class ChatRepository private constructor(
         conversationHistory: List<ChatMessage>,
         sysInfo: String? = null,
         maxPasses: Int? = null,
-        sessionId: String? = null
+        sessionId: String? = null,
+        askUserHandler: AskUserHandler? = null
     ): Flow<ChatStreamEvent> {
         val apiKey = loadChatApiKey()
             ?: throw missingChatConfigurationError()
-        return createEngine(apiKey, sysInfo, maxPasses, sessionId).streamMessage(
+        return createEngine(apiKey, sysInfo, maxPasses, sessionId, askUserHandler).streamMessage(
             userMessage = userMessage,
             conversationHistory = conversationHistory.toCoreMessages()
         )
@@ -177,7 +180,8 @@ class ChatRepository private constructor(
         apiKey: String,
         sysInfo: String? = null,
         maxPasses: Int? = null,
-        sessionId: String? = null
+        sessionId: String? = null,
+        askUserHandler: AskUserHandler? = null
     ): ChatEngine {
         val model = apiKeyStore.loadModel()
         val resolvedMaxPasses = maxPasses ?: 10
@@ -190,7 +194,7 @@ class ChatRepository private constructor(
             ) ?: throw IllegalStateException("Local Gemma 3n inference is unavailable in this build.")
         }
         dependencies.chatEngineFactory?.let { factory ->
-            return factory(ChatEngineRequest(apiKey, model, sysInfo, resolvedMaxPasses))
+            return factory(ChatEngineRequest(apiKey, model, sysInfo, resolvedMaxPasses, askUserHandler))
         }
         val tickTickProvider = object : TickTickCredentialsProvider {
             override fun getCredentials(): TickTickCredentials? {
@@ -250,7 +254,8 @@ class ChatRepository private constructor(
             efficiencyModeEnabled = apiKeyStore.isEfficiencyModeEnabled(),
             privacyModeEnabled = apiKeyStore.isPrivacyModeEnabled(),
             toolsEnabled = apiKeyStore.areToolsEnabled(),
-            sessionId = sessionId
+            sessionId = sessionId,
+            askUserHandler = askUserHandler
         )
     }
 

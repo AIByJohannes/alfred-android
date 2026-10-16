@@ -1,6 +1,9 @@
 package com.aibyjohannes.alfred.ui.home
 
 import androidx.arch.core.executor.testing.InstantTaskExecutorRule
+import com.aibyjohannes.alfred.core.engine.AskUserAnswer
+import com.aibyjohannes.alfred.core.engine.AskUserHandler
+import com.aibyjohannes.alfred.core.engine.AskUserRequest
 import com.aibyjohannes.alfred.core.model.ChatStreamEvent
 import com.aibyjohannes.alfred.core.model.ChatTurnResult
 import com.aibyjohannes.alfred.core.model.CoreChatMessage
@@ -105,7 +108,7 @@ class HomeViewModelTest {
         assertEquals("first", viewModel.activeConversationId.value)
         viewModel.sendMessage("Must not go to the old chat")
         coVerify(exactly = 0) { conversationStore.appendMessage(any(), any(), any()) }
-        verify(exactly = 0) { repository.streamMessage(any(), any(), any(), any(), any()) }
+        verify(exactly = 0) { repository.streamMessage(any(), any(), any(), any(), any(), any()) }
         release.complete(Unit)
         testScheduler.advanceUntilIdle()
 
@@ -246,7 +249,7 @@ class HomeViewModelTest {
         verify { repository.streamMessage("ready", match {
             it.map { message -> message.content } == listOf("prompt", "thinking", "answer") &&
                 it[1].reasoningText == "private reasoning" && !it[1].includeInPrompt
-        }, any(), null, "old") }
+        }, any(), null, "old", any()) }
     }
 
     @Test
@@ -288,7 +291,7 @@ class HomeViewModelTest {
         val workspace = WorkspaceSummary(workspaceId, "Personal")
         val conversation = ConversationSummary(id, id, 1L)
         every { apiKeyStore.hasApiKey() } returns true
-        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flowOf()
+        every { repository.streamMessage(any(), any(), any(), any(), any(), any()) } returns flowOf()
         coEvery { store.getOrCreateActiveWorkspace() } returns workspace
         coEvery { store.listWorkspaces() } returns listOf(workspace)
         coEvery { store.getOrCreateActiveConversation() } returns conversation
@@ -327,18 +330,18 @@ class HomeViewModelTest {
         viewModel.allowMoreLoops(7)
         assertEquals(before, viewModel.messages.value)
         assertFalse(viewModel.isLoading.value == true)
-        verify(exactly = 0) { repository.streamMessage(any(), any(), any(), any(), any()) }
+        verify(exactly = 0) { repository.streamMessage(any(), any(), any(), any(), any(), any()) }
     }
 
     private fun seedFailedRun() {
-        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns kotlinx.coroutines.flow.flow {
+        every { repository.streamMessage(any(), any(), any(), any(), any(), any()) } returns kotlinx.coroutines.flow.flow {
             throw IllegalStateException("failed response")
         }
         viewModel.sendMessage("failed prompt")
         testDispatcher.scheduler.runCurrent()
         assertTrue(viewModel.messages.value.orEmpty().last().isError)
         clearMocks(repository, answers = false)
-        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flowOf()
+        every { repository.streamMessage(any(), any(), any(), any(), any(), any()) } returns flowOf()
     }
 
     private class RecordingPowerKeeper : ChatRunPowerKeeper {
@@ -346,6 +349,250 @@ class HomeViewModelTest {
         var releaseCalls = 0
         override fun acquire() { acquireCalls++ }
         override fun release() { releaseCalls++ }
+    }
+
+    private class QuestionRun {
+        val entered = CompletableDeferred<Unit>()
+        val cancelled = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        val answers = mutableListOf<AskUserAnswer>()
+    }
+
+    private fun installQuestionRun(
+        questions: List<AskUserRequest> = listOf(AskUserRequest("Which project?", listOf("Personal", "Work")))
+    ): QuestionRun {
+        val run = QuestionRun()
+        every { repository.streamMessage(any(), any(), any(), any(), any(), any()) } answers {
+            val handler = lastArg<AskUserHandler>()
+            kotlinx.coroutines.flow.flow {
+                emit(ChatStreamEvent.PassStarted(0))
+                run.entered.complete(Unit)
+                try {
+                    questions.forEach { request -> run.answers += handler.askUser(request) }
+                    run.finish.await()
+                    emit(ChatStreamEvent.Completed(ChatTurnResult(
+                        content = "Done.",
+                        toolCalls = emptyList(),
+                        intermediateMessages = listOf(
+                            CoreChatMessage(role = ChatMessage.ROLE_ASSISTANT, content = "Done.")
+                        )
+                    )))
+                } finally {
+                    run.cancelled.complete(Unit)
+                }
+            }
+        }
+        return run
+    }
+
+    @Test
+    fun `question keeps run busy blocks navigation and persists only after completion`() = runTest {
+        seedNavigation()
+        val keeper = RecordingPowerKeeper()
+        val run = installQuestionRun()
+        viewModel.initialize(apiKeyStore, repository, conversationStore, chatRunPowerKeeper = keeper)
+        testScheduler.advanceUntilIdle()
+        viewModel.sendMessage("Clarify this")
+        testScheduler.runCurrent()
+
+        assertTrue(run.entered.isCompleted)
+        val question = viewModel.pendingUserQuestion.value!!
+        assertEquals("Which project?", question.request.question)
+        assertEquals(true, viewModel.isLoading.value)
+        assertEquals(1, keeper.acquireCalls)
+        assertEquals(1, keeper.releaseCalls)
+        val messages = viewModel.messages.value
+        viewModel.sendMessage("Must not start another run")
+        viewModel.selectConversation("other")
+        viewModel.requestNewChat()
+        testScheduler.runCurrent()
+        assertEquals(messages, viewModel.messages.value)
+        assertEquals("old", viewModel.activeConversationId.value)
+        verify(exactly = 1) { repository.streamMessage(any(), any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { conversationStore.switchActiveConversation("other") }
+        coVerify(exactly = 0) { conversationStore.createConversation() }
+        coVerify(exactly = 0) { conversationStore.appendMessages(any(), any()) }
+        coVerify(exactly = 0) { conversationStore.appendMessage(any(), any(), any()) }
+
+        viewModel.selectUserQuestionOption(question.id, "Work")
+        assertEquals("Work", viewModel.pendingUserQuestion.value!!.selectedOption)
+        assertTrue(run.answers.isEmpty())
+        viewModel.submitUserQuestion(question.id)
+        assertEquals(null, viewModel.pendingUserQuestion.value)
+        testScheduler.runCurrent()
+        assertEquals(listOf(AskUserAnswer.Option("Work")), run.answers)
+        assertEquals(true, viewModel.isLoading.value)
+        assertEquals(2, keeper.acquireCalls)
+        assertEquals(1, keeper.releaseCalls)
+        coVerify(exactly = 0) { conversationStore.appendMessages(any(), any()) }
+
+        run.finish.complete(Unit)
+        testScheduler.advanceUntilIdle()
+        assertEquals(false, viewModel.isLoading.value)
+        assertEquals(2, keeper.releaseCalls)
+        coVerify(exactly = 1) { conversationStore.appendMessages("old", match { it.size == 2 }) }
+    }
+
+    @Test
+    fun `draft selection blanks and stale submissions cannot answer the next question`() = runTest {
+        seedNavigation()
+        val request = AskUserRequest("Choose", listOf("Personal", "Work"))
+        val run = installQuestionRun(listOf(request, request, AskUserRequest("Anything else?")))
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+        viewModel.sendMessage("Ask three")
+        testScheduler.runCurrent()
+        val first = viewModel.pendingUserQuestion.value!!.id
+        viewModel.selectUserQuestionOption(first, "Unknown")
+        viewModel.updateUserQuestionText(first, " \n ")
+        viewModel.submitUserQuestion(first)
+        assertTrue(run.answers.isEmpty())
+        assertEquals(first, viewModel.pendingUserQuestion.value!!.id)
+        viewModel.selectUserQuestionOption(first, "Personal")
+        assertEquals("", viewModel.pendingUserQuestion.value!!.customText)
+        val text = "  My \"home\"\nlist — å🚀  "
+        viewModel.updateUserQuestionText(first, text)
+        assertEquals(null, viewModel.pendingUserQuestion.value!!.selectedOption)
+        assertEquals(text, viewModel.pendingUserQuestion.value!!.customText)
+        viewModel.submitUserQuestion(first)
+        viewModel.submitUserQuestion(first)
+        testScheduler.runCurrent()
+        assertEquals(listOf(AskUserAnswer.Text(text.trim())), run.answers)
+
+        val second = viewModel.pendingUserQuestion.value!!.id
+        assertTrue(second > first)
+        viewModel.selectUserQuestionOption(first, "Work")
+        viewModel.updateUserQuestionText(first, "stale")
+        viewModel.cancelUserQuestion(first)
+        viewModel.submitUserQuestion(first)
+        assertEquals(second, viewModel.pendingUserQuestion.value!!.id)
+        assertEquals("", viewModel.pendingUserQuestion.value!!.customText)
+        viewModel.updateUserQuestionText(second, "discard me")
+        viewModel.selectUserQuestionOption(second, "Work")
+        assertEquals("", viewModel.pendingUserQuestion.value!!.customText)
+        viewModel.submitUserQuestion(second)
+        testScheduler.runCurrent()
+        val third = viewModel.pendingUserQuestion.value!!
+        assertTrue(third.request.options.isEmpty())
+        viewModel.cancelUserQuestion(third.id)
+        testScheduler.runCurrent()
+        assertEquals(listOf(AskUserAnswer.Text(text.trim()), AskUserAnswer.Option("Work"),
+            AskUserAnswer.Cancelled), run.answers)
+        assertEquals(null, viewModel.pendingUserQuestion.value)
+        assertEquals(true, viewModel.isLoading.value)
+        run.finish.complete(Unit)
+        testScheduler.advanceUntilIdle()
+        assertEquals(false, viewModel.isLoading.value)
+    }
+
+    @Test
+    fun `same resolved root retains pending question and draft across reinitialization`() = runTest {
+        seedNavigation()
+        every { conversationStore.storageIdentity } returns "/same/root"
+        val run = installQuestionRun()
+        viewModel.initialize(apiKeyStore, repository, conversationStore)
+        testScheduler.advanceUntilIdle()
+        viewModel.sendMessage("Keep the question")
+        testScheduler.runCurrent()
+        val id = viewModel.pendingUserQuestion.value!!.id
+        viewModel.updateUserQuestionText(id, "unfinished\nanswer")
+        val retained = viewModel.pendingUserQuestion.value
+        val sameRoot: ConversationStore = mockk(relaxed = true)
+        every { sameRoot.storageIdentity } returns "/same/root"
+        viewModel.initialize(apiKeyStore, repository, sameRoot)
+        testScheduler.runCurrent()
+        assertEquals(retained, viewModel.pendingUserQuestion.value)
+        assertEquals(true, viewModel.isLoading.value)
+        assertTrue(run.answers.isEmpty())
+        coVerify(exactly = 0) { sameRoot.loadMessages(any()) }
+        viewModel.submitUserQuestion(id)
+        testScheduler.runCurrent()
+        assertEquals(listOf(AskUserAnswer.Text("unfinished\nanswer")), run.answers)
+        run.finish.complete(Unit)
+        testScheduler.advanceUntilIdle()
+    }
+
+    @Test
+    fun `Stop cancels waiting without reacquiring power and stale actions cannot answer later run`() = runTest {
+        seedNavigation()
+        val keeper = RecordingPowerKeeper()
+        val stopped = installQuestionRun()
+        viewModel.initialize(apiKeyStore, repository, conversationStore, chatRunPowerKeeper = keeper)
+        testScheduler.advanceUntilIdle()
+        viewModel.sendMessage("Stop this question")
+        testScheduler.runCurrent()
+        val obsoleteId = viewModel.pendingUserQuestion.value!!.id
+        viewModel.stopGeneration()
+        testScheduler.advanceUntilIdle()
+        assertTrue(stopped.cancelled.isCompleted)
+        assertTrue(stopped.answers.isEmpty())
+        assertEquals(null, viewModel.pendingUserQuestion.value)
+        assertEquals(1, keeper.acquireCalls)
+        assertEquals(1, keeper.releaseCalls)
+        coVerify(exactly = 0) { conversationStore.appendMessages(any(), any()) }
+
+        val later = installQuestionRun()
+        viewModel.sendMessage("A later question")
+        testScheduler.runCurrent()
+        val currentId = viewModel.pendingUserQuestion.value!!.id
+        assertTrue(currentId > obsoleteId)
+        viewModel.cancelUserQuestion(obsoleteId)
+        viewModel.updateUserQuestionText(obsoleteId, "obsolete")
+        viewModel.submitUserQuestion(obsoleteId)
+        assertEquals(currentId, viewModel.pendingUserQuestion.value!!.id)
+        assertTrue(later.answers.isEmpty())
+        viewModel.cancelUserQuestion(currentId)
+        testScheduler.runCurrent()
+        assertEquals(listOf(AskUserAnswer.Cancelled), later.answers)
+        later.finish.complete(Unit)
+        testScheduler.advanceUntilIdle()
+        assertEquals(3, keeper.acquireCalls)
+        assertEquals(3, keeper.releaseCalls)
+    }
+
+    @Test
+    fun `root replacement clears only old waiter and never reacquires its power lease`() = runTest {
+        seedNavigation()
+        every { conversationStore.storageIdentity } returns "/old/root"
+        val oldKeeper = RecordingPowerKeeper()
+        val obsolete = installQuestionRun()
+        viewModel.initialize(apiKeyStore, repository, conversationStore, chatRunPowerKeeper = oldKeeper)
+        testScheduler.advanceUntilIdle()
+        viewModel.sendMessage("Old root question")
+        testScheduler.runCurrent()
+        val oldId = viewModel.pendingUserQuestion.value!!.id
+
+        val replacement: ConversationStore = mockk(relaxed = true)
+        seedNavigation(replacement, "replacement", "replacement-ws")
+        every { replacement.storageIdentity } returns "/new/root"
+        val newKeeper = RecordingPowerKeeper()
+        viewModel.initialize(apiKeyStore, repository, replacement, chatRunPowerKeeper = newKeeper)
+        assertEquals(null, viewModel.pendingUserQuestion.value)
+        testScheduler.advanceUntilIdle()
+        assertTrue(obsolete.cancelled.isCompleted)
+        assertTrue(obsolete.answers.isEmpty())
+        assertEquals(1, oldKeeper.acquireCalls)
+        assertEquals(1, oldKeeper.releaseCalls)
+
+        val current = installQuestionRun()
+        viewModel.sendMessage("New root question")
+        testScheduler.runCurrent()
+        val currentId = viewModel.pendingUserQuestion.value!!.id
+        assertTrue(currentId > oldId)
+        viewModel.selectUserQuestionOption(oldId, "Work")
+        viewModel.submitUserQuestion(oldId)
+        viewModel.cancelUserQuestion(oldId)
+        assertEquals(currentId, viewModel.pendingUserQuestion.value!!.id)
+        assertTrue(current.answers.isEmpty())
+        viewModel.cancelUserQuestion(currentId)
+        testScheduler.runCurrent()
+        current.finish.complete(Unit)
+        testScheduler.advanceUntilIdle()
+        assertEquals(listOf(AskUserAnswer.Cancelled), current.answers)
+        assertEquals(2, newKeeper.acquireCalls)
+        assertEquals(2, newKeeper.releaseCalls)
+        coVerify(exactly = 0) { conversationStore.appendMessages(any(), any()) }
+        coVerify(exactly = 1) { replacement.appendMessages("replacement", any()) }
     }
 
     @Test
@@ -369,7 +616,7 @@ class HomeViewModelTest {
         testScheduler.advanceUntilIdle()
         viewModel.sendMessage("after selection")
         testScheduler.advanceUntilIdle()
-        verify { repository.streamMessage("after selection", emptyList(), any(), null, "selected") }
+        verify { repository.streamMessage("after selection", emptyList(), any(), null, "selected", any()) }
     }
 
     @Test
@@ -421,7 +668,7 @@ class HomeViewModelTest {
         assertEquals("third history", viewModel.messages.value.orEmpty().single().content)
         viewModel.sendMessage("next")
         testScheduler.advanceUntilIdle()
-        verify { repository.streamMessage("next", match { it.single().content == "third history" }, any(), null, "third") }
+        verify { repository.streamMessage("next", match { it.single().content == "third history" }, any(), null, "third", any()) }
     }
 
     @Test
@@ -453,7 +700,7 @@ class HomeViewModelTest {
         coVerify(exactly = 1) { conversationStore.loadMessages("old") }
         viewModel.sendMessage("still personal")
         testScheduler.advanceUntilIdle()
-        verify { repository.streamMessage("still personal", match { it.single().content == "history" }, any(), null, "old") }
+        verify { repository.streamMessage("still personal", match { it.single().content == "history" }, any(), null, "old", any()) }
     }
 
     @Test
@@ -488,7 +735,7 @@ class HomeViewModelTest {
         verify { repository.streamMessage("next", match {
             it.map { message -> message.content } == listOf("history", "thinking", "answer") &&
                 it[1].reasoningText == "private reasoning" && !it[1].includeInPrompt
-        }, any(), null, "old") }
+        }, any(), null, "old", any()) }
     }
 
     @Test
@@ -513,7 +760,7 @@ class HomeViewModelTest {
         assertTrue(viewModel.storageError.value.orEmpty().contains("new chat unavailable"))
         viewModel.sendMessage("recovered")
         testScheduler.advanceUntilIdle()
-        verify { repository.streamMessage("recovered", match { it.single().content == "history" }, any(), null, "old") }
+        verify { repository.streamMessage("recovered", match { it.single().content == "history" }, any(), null, "old", any()) }
     }
 
     @Test
@@ -540,7 +787,7 @@ class HomeViewModelTest {
         assertEquals(null, viewModel.storageError.value)
         viewModel.sendMessage("recovered")
         testScheduler.advanceUntilIdle()
-        verify { repository.streamMessage("recovered", any(), any(), null, "old") }
+        verify { repository.streamMessage("recovered", any(), any(), null, "old", any()) }
     }
 
     @Test
@@ -563,7 +810,7 @@ class HomeViewModelTest {
         every { replacement.storageIdentity } returns "/replacement/root"
         coEvery { replacement.loadMessages("replacement") } coAnswers { newMessages.await() }
         coEvery { replacement.observeConversations("replacement-ws") } returns newFlow
-        every { replacementRepository.streamMessage(any(), any(), any(), any(), any()) } returns flowOf()
+        every { replacementRepository.streamMessage(any(), any(), any(), any(), any(), any()) } returns flowOf()
         viewModel.initialize(apiKeyStore, replacementRepository, replacement)
         assertEquals(true, viewModel.isConversationLoading.value)
         viewModel.selectConversation("must-not-overtake")
@@ -586,8 +833,8 @@ class HomeViewModelTest {
         assertFalse(viewModel.isConversationLoading.value == true)
         viewModel.sendMessage("new root send")
         testScheduler.advanceUntilIdle()
-        verify { replacementRepository.streamMessage("new root send", match { it.single().content == "new root history" }, any(), null, "replacement") }
-        verify(exactly = 0) { repository.streamMessage(any(), any(), any(), any(), any()) }
+        verify { replacementRepository.streamMessage("new root send", match { it.single().content == "new root history" }, any(), null, "replacement", any()) }
+        verify(exactly = 0) { repository.streamMessage(any(), any(), any(), any(), any(), any()) }
     }
 
     @Test
@@ -621,7 +868,7 @@ class HomeViewModelTest {
         coVerify(exactly = 0) { sameRoot.getOrCreateActiveConversation() }
         viewModel.sendMessage("still committed")
         testScheduler.advanceUntilIdle()
-        verify { repository.streamMessage("still committed", match { it.single().content == "history" }, any(), null, "old") }
+        verify { repository.streamMessage("still committed", match { it.single().content == "history" }, any(), null, "old", any()) }
     }
 
     @Test
@@ -653,7 +900,7 @@ class HomeViewModelTest {
         val oldKeeper = RecordingPowerKeeper()
         val newKeeper = RecordingPowerKeeper()
         val streamStarted = CompletableDeferred<Unit>()
-        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns kotlinx.coroutines.flow.flow {
+        every { repository.streamMessage(any(), any(), any(), any(), any(), any()) } returns kotlinx.coroutines.flow.flow {
             streamStarted.complete(Unit)
             kotlinx.coroutines.awaitCancellation()
         }
@@ -701,7 +948,7 @@ class HomeViewModelTest {
         assertEquals(null, viewModel.storageError.value)
         viewModel.sendMessage("safe")
         testScheduler.advanceUntilIdle()
-        verify { repository.streamMessage("safe", match { it.single().content == "survivor history" }, any(), null, "survivor") }
+        verify { repository.streamMessage("safe", match { it.single().content == "survivor history" }, any(), null, "survivor", any()) }
     }
 
     @Test
@@ -790,7 +1037,7 @@ class HomeViewModelTest {
         assertFalse(viewModel.isConversationLoading.value == true)
         viewModel.sendMessage("ready")
         testScheduler.advanceUntilIdle()
-        verify { repository.streamMessage("ready", emptyList(), any(), null, "new") }
+        verify { repository.streamMessage("ready", emptyList(), any(), null, "new", any()) }
     }
 
     @Test
@@ -1019,7 +1266,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
         coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
-        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flow
+        every { repository.streamMessage(any(), any(), any(), any(), any(), any()) } returns flow
 
         viewModel.initialize(apiKeyStore, repository, conversationStore)
         testScheduler.advanceUntilIdle()
@@ -1285,7 +1532,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
         coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
-        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flowOf(
+        every { repository.streamMessage(any(), any(), any(), any(), any(), any()) } returns flowOf(
             ChatStreamEvent.PassStarted(0),
             ChatStreamEvent.TextDelta(0, "Hello"),
             ChatStreamEvent.Completed(
@@ -1320,7 +1567,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
         coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
-        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flowOf(
+        every { repository.streamMessage(any(), any(), any(), any(), any(), any()) } returns flowOf(
             ChatStreamEvent.PassStarted(0),
             ChatStreamEvent.ReasoningDelta(
                 passIndex = 0,
@@ -1417,7 +1664,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
         coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
-        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flowOf(
+        every { repository.streamMessage(any(), any(), any(), any(), any(), any()) } returns flowOf(
             ChatStreamEvent.PassStarted(0),
             ChatStreamEvent.TextDelta(0, "I should check first."),
             ChatStreamEvent.ToolCallRequested(
@@ -1473,7 +1720,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
         coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
-        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flowOf(
+        every { repository.streamMessage(any(), any(), any(), any(), any(), any()) } returns flowOf(
             ChatStreamEvent.PassStarted(0),
             ChatStreamEvent.ReasoningDelta(
                 passIndex = 0,
@@ -1524,7 +1771,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
         coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
-        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flowOf(
+        every { repository.streamMessage(any(), any(), any(), any(), any(), any()) } returns flowOf(
             ChatStreamEvent.PassStarted(0),
             ChatStreamEvent.ReasoningDelta(
                 passIndex = 0,
@@ -1583,7 +1830,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
         coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
-        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flowOf(
+        every { repository.streamMessage(any(), any(), any(), any(), any(), any()) } returns flowOf(
             ChatStreamEvent.PassStarted(0),
             ChatStreamEvent.ToolCallDelta(
                 passIndex = 0,
@@ -1640,7 +1887,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
         coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
-        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flow
+        every { repository.streamMessage(any(), any(), any(), any(), any(), any()) } returns flow
 
         viewModel.initialize(apiKeyStore, repository, conversationStore)
         testScheduler.advanceUntilIdle()
@@ -1765,7 +2012,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
         coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
-        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns kotlinx.coroutines.flow.flow {
+        every { repository.streamMessage(any(), any(), any(), any(), any(), any()) } returns kotlinx.coroutines.flow.flow {
             assertTrue(chatRunPowerKeeper.isHeld)
             emit(
                 ChatStreamEvent.Completed(
@@ -1815,7 +2062,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
         coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
-        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns kotlinx.coroutines.flow.flow {
+        every { repository.streamMessage(any(), any(), any(), any(), any(), any()) } returns kotlinx.coroutines.flow.flow {
             assertTrue(chatRunPowerKeeper.isHeld)
             throw IllegalStateException("Network interrupted")
         }
@@ -1845,7 +2092,7 @@ class HomeViewModelTest {
         coEvery { conversationStore.getOrCreateActiveConversation() } returns conversation
         coEvery { conversationStore.loadMessages("1") } returns emptyList()
         coEvery { conversationStore.listConversations() } returns listOf(conversation)
-        every { repository.streamMessage(any(), any(), any(), any(), any()) } returns flow
+        every { repository.streamMessage(any(), any(), any(), any(), any(), any()) } returns flow
 
         viewModel.initialize(apiKeyStore, repository, conversationStore)
         testScheduler.advanceUntilIdle()
