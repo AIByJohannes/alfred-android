@@ -122,6 +122,22 @@ class HomeFragmentAskUserTest {
     }
 
     @Test
+    fun `message viewport remains usable when clarification and loop panels are hidden`() {
+        val root = fragment.requireView()
+        root.measure(
+            View.MeasureSpec.makeMeasureSpec(1080, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(1800, View.MeasureSpec.EXACTLY)
+        )
+        root.layout(0, 0, 1080, 1800)
+        val messages = control<View>(R.id.messages_recycler_view)
+        val input = control<View>(R.id.input_layout)
+        assertEquals(View.GONE, control<View>(R.id.user_question_panel).visibility)
+        assertEquals(View.GONE, control<View>(R.id.loop_limit_continuation_layout).visibility)
+        assertTrue("Chat history must occupy the available viewport", messages.height > 900)
+        assertTrue("Chat history must not overlap input", messages.bottom <= input.top)
+    }
+
+    @Test
     fun `choice and text are exclusive and explicit Submit resumes the current run`() {
         startQuestion()
         assertBusy()

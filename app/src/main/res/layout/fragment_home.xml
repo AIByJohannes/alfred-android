@@ -138,8 +138,7 @@
         app:cardBackgroundColor="?attr/colorSurface"
         app:layout_constraintBottom_toTopOf="@id/input_layout"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/loop_limit_continuation_layout">
+        app:layout_constraintStart_toStartOf="parent">
 
         <LinearLayout
             android:layout_width="match_parent"
