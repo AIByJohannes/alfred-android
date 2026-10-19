@@ -1,5 +1,16 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.kotlin.jvm)
+}
+
+val localProperties = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.isFile }?.inputStream()?.use(::load)
+}
+val localOpenRouterApiKey = localProperties.getProperty("OPENROUTER_API_KEY")?.takeIf { it.isNotBlank() }
+
+fun JavaExec.configureOpenRouterApiKey() {
+    localOpenRouterApiKey?.let { systemProperty("openrouter.api.key", it) }
 }
 
 kotlin {
@@ -18,6 +29,7 @@ tasks.register<JavaExec>("smokeEval") {
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("com.aibyjohannes.alfred.evals.EvalRunnerKt")
     args("--suite", "smoke", "--dataset", "datasets/smoke.jsonl")
+    configureOpenRouterApiKey()
 }
 
 tasks.register<JavaExec>("fullEval") {
@@ -26,6 +38,7 @@ tasks.register<JavaExec>("fullEval") {
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("com.aibyjohannes.alfred.evals.EvalRunnerKt")
     args("--suite", "full", "--dataset", "datasets/full.jsonl")
+    configureOpenRouterApiKey()
 }
 
 tasks.register<JavaExec>("smokeEvalStrict") {
@@ -34,6 +47,7 @@ tasks.register<JavaExec>("smokeEvalStrict") {
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("com.aibyjohannes.alfred.evals.EvalRunnerKt")
     args("--suite", "smoke", "--dataset", "datasets/smoke.jsonl", "--strict")
+    configureOpenRouterApiKey()
 }
 
 tasks.register<JavaExec>("fullEvalStrict") {
@@ -42,4 +56,5 @@ tasks.register<JavaExec>("fullEvalStrict") {
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("com.aibyjohannes.alfred.evals.EvalRunnerKt")
     args("--suite", "full", "--dataset", "datasets/full.jsonl", "--strict")
+    configureOpenRouterApiKey()
 }
