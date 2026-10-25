@@ -7,6 +7,7 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.DiffUtil
+import androidx.recyclerview.widget.AsyncDifferConfig
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.aibyjohannes.alfred.R
@@ -14,10 +15,11 @@ import com.aibyjohannes.alfred.databinding.ItemDrawerProjectBinding
 
 class DrawerProjectsAdapter(
     private val onWorkspaceSelected: (UiWorkspace) -> Unit,
-    private val onWorkspaceLongPressed: (UiWorkspace, View) -> Unit
-) : ListAdapter<UiWorkspace, DrawerProjectsAdapter.ProjectViewHolder>(WorkspaceDiffCallback()) {
+    private val onWorkspaceLongPressed: (UiWorkspace, View) -> Unit,
+    differConfig: AsyncDifferConfig<ProjectRow> = AsyncDifferConfig.Builder(WorkspaceDiffCallback()).build()
+) : ListAdapter<DrawerProjectsAdapter.ProjectRow, DrawerProjectsAdapter.ProjectViewHolder>(differConfig) {
 
-    private var activeWorkspaceId: String? = null
+    data class ProjectRow(val workspace: UiWorkspace, val isActive: Boolean)
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ProjectViewHolder {
         val binding = ItemDrawerProjectBinding.inflate(
@@ -29,17 +31,14 @@ class DrawerProjectsAdapter(
     }
 
     override fun onBindViewHolder(holder: ProjectViewHolder, position: Int) {
-        holder.bind(getItem(position), activeWorkspaceId)
+        val row = getItem(position)
+        holder.bind(row.workspace, row.isActive)
     }
 
     fun submitData(list: List<UiWorkspace>, activeId: String?) {
-        val activeChanged = activeWorkspaceId != activeId
-        activeWorkspaceId = activeId
-        submitList(list.toList()) {
-            if (activeChanged) {
-                notifyDataSetChanged()
-            }
-        }
+        // A superseding diff can discard a commit callback. Keep selection in the
+        // immutable rows so the winning diff always updates both old and new selections.
+        submitList(list.map { ProjectRow(it, it.id == activeId) })
     }
 
     class ProjectViewHolder(
@@ -48,9 +47,9 @@ class DrawerProjectsAdapter(
         private val onWorkspaceLongPressed: (UiWorkspace, View) -> Unit
     ) : RecyclerView.ViewHolder(binding.root) {
 
-        fun bind(workspace: UiWorkspace, activeId: String?) {
+        fun bind(workspace: UiWorkspace, isActive: Boolean) {
             val context = binding.root.context
-            val isActive = workspace.id == activeId
+            binding.root.isSelected = isActive
 
             binding.projectName.text = workspace.name
 
@@ -97,12 +96,12 @@ class DrawerProjectsAdapter(
         )
     }
 
-    class WorkspaceDiffCallback : DiffUtil.ItemCallback<UiWorkspace>() {
-        override fun areItemsTheSame(oldItem: UiWorkspace, newItem: UiWorkspace): Boolean {
-            return oldItem.id == newItem.id
+    class WorkspaceDiffCallback : DiffUtil.ItemCallback<ProjectRow>() {
+        override fun areItemsTheSame(oldItem: ProjectRow, newItem: ProjectRow): Boolean {
+            return oldItem.workspace.id == newItem.workspace.id
         }
 
-        override fun areContentsTheSame(oldItem: UiWorkspace, newItem: UiWorkspace): Boolean {
+        override fun areContentsTheSame(oldItem: ProjectRow, newItem: ProjectRow): Boolean {
             return oldItem == newItem
         }
     }
