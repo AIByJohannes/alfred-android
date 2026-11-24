@@ -24,6 +24,7 @@ import com.aibyjohannes.alfred.data.ChatRepository
 import com.aibyjohannes.alfred.data.local.ConversationStore
 import com.aibyjohannes.alfred.data.local.ConversationSummary
 import com.aibyjohannes.alfred.data.local.WorkspaceSummary
+import com.google.android.material.textfield.TextInputLayout
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -135,6 +136,15 @@ class HomeFragmentAskUserTest {
         assertEquals(View.GONE, control<View>(R.id.loop_limit_continuation_layout).visibility)
         assertTrue("Chat history must occupy the available viewport", messages.height > 900)
         assertTrue("Chat history must not overlap input", messages.bottom <= input.top)
+    }
+
+    @Test
+    fun `clarification answer field owns its only hint`() {
+        startQuestion()
+
+        val answer = customAnswer()
+        assertEquals(activity.getString(R.string.user_question_text_answer_hint), answer.hint?.toString())
+        assertFalse(generateSequence(answer.parent) { it.parent }.any { it is TextInputLayout })
     }
 
     @Test

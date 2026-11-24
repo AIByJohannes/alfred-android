@@ -225,7 +225,6 @@
     <string name="retry">Retry</string>
     <string name="user_question_submit">Submit answer</string>
     <string name="user_question_cancel">Cancel question</string>
-    <string name="user_question_custom_answer_hint">Or type your own answer</string>
     <string name="user_question_waiting">Waiting for your answer</string>
     <string name="user_question_text_answer_hint">Type your answer</string>
 </resources>

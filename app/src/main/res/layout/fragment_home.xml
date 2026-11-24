@@ -181,21 +181,15 @@
                         android:layout_height="wrap_content"
                         android:orientation="vertical" />
 
-                    <com.google.android.material.textfield.TextInputLayout
+                    <androidx.appcompat.widget.AppCompatEditText
+                        android:id="@+id/user_question_custom_answer"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:hint="@string/user_question_custom_answer_hint">
-
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/user_question_custom_answer"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:gravity="top"
-                            android:hint="@string/user_question_text_answer_hint"
-                            android:inputType="textCapSentences|textMultiLine"
-                            android:maxLines="4"
-                            android:minLines="2" />
-                    </com.google.android.material.textfield.TextInputLayout>
+                        android:gravity="top"
+                        android:hint="@string/user_question_text_answer_hint"
+                        android:inputType="textCapSentences|textMultiLine"
+                        android:maxLines="4"
+                        android:minLines="2" />
                 </LinearLayout>
             </androidx.core.widget.NestedScrollView>
 
