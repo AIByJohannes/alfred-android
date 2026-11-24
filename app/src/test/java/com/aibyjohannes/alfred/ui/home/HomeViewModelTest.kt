@@ -11,11 +11,16 @@ import com.aibyjohannes.alfred.core.model.CoreChatMessageKind
 import com.aibyjohannes.alfred.data.ApiKeyStore
 import com.aibyjohannes.alfred.data.ChatRepository
 import com.aibyjohannes.alfred.data.api.ChatMessage
+import com.aibyjohannes.alfred.data.local.ChatHistoryStorage
 import com.aibyjohannes.alfred.data.local.ConversationStore
 import com.aibyjohannes.alfred.data.local.ConversationSummary
+import com.aibyjohannes.alfred.data.local.FileChatHistoryStorage
+import com.aibyjohannes.alfred.data.local.FileConversationStore
+import com.aibyjohannes.alfred.data.local.MemoryConversationIndex
 import com.aibyjohannes.alfred.data.local.StoredChatMessage
 import com.aibyjohannes.alfred.data.local.LocalGemmaModelStore
 import com.aibyjohannes.alfred.data.local.WorkspaceSummary
+import com.fasterxml.jackson.databind.ObjectMapper
 import io.mockk.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -33,11 +38,15 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Assert.assertFalse
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HomeViewModelTest {
     @get:Rule
     val instantTaskExecutorRule = InstantTaskExecutorRule()
+
+    @get:Rule
+    val temporaryFolder = TemporaryFolder()
 
     private val testDispatcher = StandardTestDispatcher()
 
@@ -669,6 +678,78 @@ class HomeViewModelTest {
         viewModel.sendMessage("next")
         testScheduler.advanceUntilIdle()
         verify { repository.streamMessage("next", match { it.single().content == "third history" }, any(), null, "third", any()) }
+    }
+
+    @Test
+    fun `idle workspace switch skips a removed chat before reconciliation finishes`() = runTest {
+        val files = FileChatHistoryStorage(temporaryFolder.newFolder())
+        var blockedFile: String? = null
+        val storage = object : ChatHistoryStorage by files {
+            override fun readText(path: List<String>) = if (path.last() == blockedFile) {
+                error("History provider unavailable")
+            } else {
+                files.readText(path)
+            }
+        }
+        val index = MemoryConversationIndex()
+        val store = FileConversationStore(storage, ObjectMapper(), index, testDispatcher)
+        val personal = store.getOrCreateActiveWorkspace()
+        val personalChat = store.createConversation()
+        store.appendMessage(personalChat.id, ChatMessage.ROLE_USER, "Personal history")
+        val work = store.createWorkspace("Work")
+        val survivor = store.createConversation()
+        store.appendMessage(survivor.id, ChatMessage.ROLE_USER, "Work history")
+        val removed = store.createConversation()
+        store.appendMessage(removed.id, ChatMessage.ROLE_USER, "Stale history")
+        store.switchActiveWorkspace(personal.id)
+
+        val reconciliationStarted = CompletableDeferred<Unit>()
+        val finishReconciliation = CompletableDeferred<Unit>()
+        val gatedStore = object : ConversationStore by store {
+            override suspend fun reconcileHistory() {
+                reconciliationStarted.complete(Unit)
+                finishReconciliation.await()
+                store.reconcileHistory()
+            }
+        }
+        viewModel.initialize(apiKeyStore, repository, gatedStore)
+        reconciliationStarted.await()
+        val removedPath = index.readSnapshot().conversations.single { it.id == removed.id }.filePath
+        files.delete(removedPath)
+
+        try {
+            blockedFile = "conversation-${survivor.id}.jsonl"
+            viewModel.switchWorkspace(work.id)
+            testScheduler.advanceUntilIdle()
+            assertEquals(personal.id, viewModel.activeWorkspaceId.value)
+            assertEquals(personalChat.id, viewModel.activeConversationId.value)
+            assertEquals("Personal history", viewModel.messages.value!!.single().content)
+            assertEquals("History provider unavailable", viewModel.storageError.value)
+            assertEquals(personal.id, index.activeWorkspaceId())
+
+            blockedFile = null
+            viewModel.switchWorkspace(work.id)
+            testScheduler.advanceUntilIdle()
+            assertEquals(work.id, viewModel.activeWorkspaceId.value)
+            assertEquals(survivor.id, viewModel.activeConversationId.value)
+            assertEquals("Work history", viewModel.messages.value!!.single().content)
+            assertEquals(listOf(survivor.id), viewModel.conversations.value!!.map { it.id })
+            assertEquals(survivor.id, index.activeConversationId(work.id))
+            assertEquals(null, viewModel.storageError.value)
+
+            finishReconciliation.complete(Unit)
+            testScheduler.advanceUntilIdle()
+            assertEquals(listOf(survivor.id), viewModel.conversations.value!!.map { it.id })
+
+            viewModel.switchWorkspace(personal.id)
+            testScheduler.advanceUntilIdle()
+            assertEquals(personal.id, viewModel.activeWorkspaceId.value)
+            assertEquals(personalChat.id, viewModel.activeConversationId.value)
+            assertEquals("Personal history", viewModel.messages.value!!.single().content)
+            assertEquals(listOf(personalChat.id), viewModel.conversations.value!!.map { it.id })
+        } finally {
+            finishReconciliation.cancel()
+        }
     }
 
     @Test

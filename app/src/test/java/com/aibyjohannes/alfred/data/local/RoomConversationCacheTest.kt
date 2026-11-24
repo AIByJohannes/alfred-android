@@ -60,6 +60,54 @@ class RoomConversationCacheTest {
     }
 
     @Test
+    fun `reopened Room cache restores a workspace chat after its migrated selection is deleted`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val database = Room.inMemoryDatabaseBuilder(context, ConversationIndexDatabase::class.java).build()
+        try {
+            val root = temporaryFolder.newFolder()
+            val legacy = root.resolve("workspace-legacy-work").apply { mkdir() }
+            legacy.resolve("workspace.jsonl").writeText(
+                """{"eventType":"workspaceCreated","workspaceId":"legacy","name":"Work"}""" + "\n"
+            )
+            val survivingLog = """{"eventType":"conversationCreated","conversationId":"survivor","workspaceId":"legacy","title":"Old work","createdAtEpochMs":1}""" + "\n" +
+                """{"eventType":"messageAppended","eventId":"work-1","conversationId":"survivor","id":1,"role":"user","content":"Migrated history"}""" + "\n"
+            legacy.resolve("conversation-survivor.jsonl").writeText(survivingLog)
+
+            val index = RoomConversationIndex(database)
+            val storage = FileChatHistoryStorage(root)
+            val original = FileConversationStore(storage, ObjectMapper(), index)
+            original.switchActiveWorkspace("legacy")
+            val newer = original.createConversation()
+            original.appendMessage(newer.id, ChatMessage.ROLE_USER, "Deleted history")
+            val workFolder = root.resolve("workspaces/legacy-work")
+            val removedLog = workFolder.resolve("conversation-${newer.id}.jsonl")
+            removedLog.appendText("""{"eventType":"conversationDeleted","conversationId":"${newer.id}"}""" + "\n")
+            val tombstonedLog = removedLog.readText()
+            val personal = original.createWorkspace("Personal")
+            val personalChat = original.createConversation()
+
+            val reopened = FileConversationStore(storage, ObjectMapper(), index)
+            assertEquals(personal.id, reopened.getOrCreateActiveWorkspace().id)
+            reopened.switchActiveWorkspace("legacy")
+            assertEquals("survivor", reopened.getOrCreateActiveConversation().id)
+            assertEquals(listOf("survivor"), reopened.observeConversations("legacy").first().map { it.id })
+            assertEquals("Migrated history", reopened.loadMessages("survivor").single().content)
+            assertEquals("survivor", index.activeConversationId("legacy"))
+            assertEquals(tombstonedLog, removedLog.readText())
+            assertEquals(survivingLog, workFolder.resolve("conversation-survivor.jsonl").readText())
+
+            storage.delete(listOf("workspaces", "legacy-work", "conversation-survivor.jsonl"))
+            reopened.switchActiveWorkspace(personal.id)
+            assertEquals(personalChat.id, reopened.getOrCreateActiveConversation().id)
+            reopened.switchActiveWorkspace("legacy")
+            val fresh = reopened.getOrCreateActiveConversation()
+            assertEquals(listOf(fresh.id), reopened.observeConversations("legacy").first().map { it.id })
+            assertTrue(reopened.loadMessages(fresh.id).isEmpty())
+            assertEquals(fresh.id, index.activeConversationId("legacy"))
+        } finally { database.close() }
+    }
+
+    @Test
     fun `targeted Room updates retain other conversations and publish delete restore changes`() = runTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val database = Room.inMemoryDatabaseBuilder(context, ConversationIndexDatabase::class.java).build()

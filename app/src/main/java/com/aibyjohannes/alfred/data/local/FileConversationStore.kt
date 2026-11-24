@@ -96,15 +96,32 @@ class FileConversationStore internal constructor(
     }
 
     override suspend fun getOrCreateActiveConversation(): ConversationSummary = withStoreLock {
-        val snapshot = ensureWorkspace(loadSnapshot())
+        var snapshot = ensureWorkspace(loadSnapshot())
         val workspace = resolveActiveWorkspace(snapshot)
-        val candidates = snapshot.activeConversations(workspace.id)
         val activeId = index.activeConversationId(workspace.id)
-        val active = candidates.firstOrNull { it.id == activeId }
-            ?: candidates.maxByOrNull { it.updatedAtEpochMs }
-        if (active != null) {
-            index.setActiveConversationId(workspace.id, active.id)
-            return@withStoreLock active.toSummary()
+        val candidates = snapshot.activeConversations(workspace.id).sortedWith(
+            compareByDescending<IndexedConversation> { it.id == activeId }
+                .thenByDescending { it.updatedAtEpochMs }
+        )
+        // Reconciliation can lag behind a history folder change, even with warm messages.
+        for (candidate in candidates) {
+            val path = candidate.filePath
+            val refreshed = when (val result = storage.readText(path)) {
+                is StorageReadResult.Found -> parseConversation(path, result.text)
+                StorageReadResult.Missing -> candidate.copy(deleted = true, messages = emptyList(), messagesLoaded = false)
+            }
+            check(refreshed.id == candidate.id && refreshed.workspaceId == workspace.id) {
+                "Conversation file identity changed: ${path.last()}"
+            }
+            if (refreshed != candidate) {
+                beginFileChange(path)
+                snapshot = cacheConversation(refreshed, snapshot, retainMessages = true)
+                publishSnapshot(snapshot)
+            }
+            if (!refreshed.deleted) {
+                index.setActiveConversationId(workspace.id, refreshed.id)
+                return@withStoreLock refreshed.toSummary()
+            }
         }
         createConversationInternal(workspace)
     }
@@ -388,9 +405,12 @@ class FileConversationStore internal constructor(
     private fun readConversation(path: List<String>): IndexedConversation {
         val raw = (storage.readText(path) as? StorageReadResult.Found)?.text
             ?: throw IllegalStateException("Conversation file is unavailable: ${path.last()}")
-        return foldConversation(raw, path)
-            ?: throw IllegalStateException("Conversation file is invalid: ${path.last()}")
+        return parseConversation(path, raw)
     }
+
+    private fun parseConversation(path: List<String>, raw: String): IndexedConversation =
+        foldConversation(raw, path)
+            ?: throw IllegalStateException("Conversation file is invalid: ${path.last()}")
 
     private suspend fun refreshConversation(
         previousSnapshot: ConversationIndexSnapshot,
